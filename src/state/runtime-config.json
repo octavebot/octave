@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mode": "local",
+  "mode": "cloud",
   "strategies": {
     "USLS": false,
     "ICT-SMC": false,
@@ -10,5 +10,5 @@
     "SMT": true,
     "TRINITY": true
   },
-  "lastUpdated": 1779261163896
+  "lastUpdated": 1779283168170
 }
