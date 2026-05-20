@@ -19,6 +19,7 @@
  */
 
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
+import { beat as heartbeat } from './heartbeat.js';
 
 // 60s is a compromise: fresh enough for 5m+ strategies, well under Yahoo's
 // unofficial ~2000/hour rate limit (8 panes × 60/hr = 480 req/hr).
@@ -68,6 +69,13 @@ export async function fetchAllPanes() {
       // Update both caches
       fullCache = { panes, fetchedAt: Date.now() };
       for (const [k, p] of panes) perKeyCache.set(k, { pane: p, fetchedAt: Date.now() });
+      // Heartbeat — the dashboard's "market-data" tile reads this so the
+      // user knows live data is flowing (even if no alerts fire).
+      heartbeat('market-data', {
+        pane_count: panes.size,
+        source: 'yahoo',
+        last_fetch_ms: Date.now(),
+      });
       return panes;
     } finally {
       inflightFull = null;
