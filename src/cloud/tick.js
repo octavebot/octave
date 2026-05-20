@@ -34,7 +34,7 @@ import { evaluateAdaptive } from '../strategies/adaptive.js';
 import { evaluateICTM15 } from '../strategies/ict_m15.js';
 import { evaluateSMTM15 } from '../strategies/smt_m15.js';
 import { evaluateTrinity } from '../strategies/trinity.js';
-import { refresh as refreshConfig, isStrategyEnabled, cloudShouldFire } from '../lib/runtime_config.js';
+import { refresh as refreshConfig, isStrategyEnabled, cloudShouldFire, isMuted, muteRemainingSec } from '../lib/runtime_config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -173,23 +173,24 @@ async function main() {
   console.log(`[cloud-tick] panes: ${panesSummary.join(', ')}`);
   console.log(`[cloud-tick] anchor: ${ctx.anchorSymbol} ${ctx.anchorResolution}m lastClose=${ctx.lastClose}`);
 
-  // Refresh runtime config and respect mode/strategy toggles
+  // Refresh runtime config and respect mode/strategy/mute toggles
   refreshConfig();
 
-  // Mode 'local' means cloud should not fire alerts (user wants Mac-only mode).
-  // We still write the heartbeat (with status='skipped-mode-local') so local knows
-  // cloud is online but intentionally silent.
-  if (!cloudShouldFire()) {
-    console.log('[cloud-tick] mode=local — skipping alert dispatch (still writing heartbeat)');
+  // Mode 'local' or active mute means cloud should not fire alerts.
+  // Still write the heartbeat so local knows cloud is online but intentionally silent.
+  if (!cloudShouldFire() || isMuted()) {
+    const reason = isMuted() ? `muted (${muteRemainingSec()}s left)` : 'mode=local';
+    console.log(`[cloud-tick] ${reason} — skipping alert dispatch (still writing heartbeat)`);
     writeAtomic(HEARTBEAT_FILE, {
       lastTick: Date.now(),
-      status: 'skipped-mode-local',
+      status: isMuted() ? 'skipped-muted' : 'skipped-mode-local',
+      reason,
       fired: 0,
       pane_count: ctx.panesByTf.size,
       anchor: { symbol: ctx.anchorSymbol, tf: ctx.anchorResolution, close: ctx.lastClose, time: ctx.barTime },
       panes_summary: panesSummary,
     });
-    console.log('[cloud-tick] done (mode=local).');
+    console.log(`[cloud-tick] done (${reason}).`);
     return;
   }
 

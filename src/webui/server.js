@@ -265,3 +265,8 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[webui] listening on http://127.0.0.1:${PORT}`);
 });
+
+// Start the Telegram bot poller in the same process (cheap, just one long poll)
+import('./bot.js').then((m) => m.start()).catch((err) => {
+  console.error('[webui] bot failed to start:', err.message);
+});

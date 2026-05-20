@@ -41,6 +41,7 @@ const DEFAULTS = Object.freeze({
     SMT: true,
     TRINITY: true,
   },
+  mute: { untilMs: 0, reason: null },
   lastUpdated: 0,
 });
 
@@ -66,6 +67,7 @@ export function load() {
       version: raw.version ?? DEFAULTS.version,
       mode: ['auto', 'cloud', 'local'].includes(raw.mode) ? raw.mode : DEFAULTS.mode,
       strategies: { ...DEFAULTS.strategies, ...(raw.strategies || {}) },
+      mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
       lastUpdated: raw.lastUpdated || 0,
     };
   } catch {
@@ -104,6 +106,19 @@ export function save(next) {
 export function isStrategyEnabled(key) {
   const cfg = get();
   return cfg.strategies[key] === true;
+}
+
+/** Convenience: are alerts currently muted? */
+export function isMuted() {
+  const cfg = get();
+  return (cfg.mute?.untilMs || 0) > Date.now();
+}
+
+/** How many seconds remain in the current mute, or 0 if not muted. */
+export function muteRemainingSec() {
+  const cfg = get();
+  const until = cfg.mute?.untilMs || 0;
+  return until > Date.now() ? Math.round((until - Date.now()) / 1000) : 0;
 }
 
 /** Convenience: effective Telegram-sending behavior for the local service. */

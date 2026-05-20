@@ -6,7 +6,7 @@ import * as dedup from './dedup.js';
 import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
 import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
-import { localTelegramBehavior, refresh as refreshConfig, get as getConfig } from './lib/runtime_config.js';
+import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 
 let stopping = false;
 export function stop() { stopping = true; }
@@ -54,19 +54,21 @@ async function tick() {
     return (b.confidence || 0) - (a.confidence || 0);
   });
 
-  // Refresh config so mode/strategy toggles take effect immediately
+  // Refresh config so mode/strategy/mute toggles take effect immediately
   refreshConfig();
   const cfg = getConfig();
+  // Mute first — if user told the bot /mute, no telegram at all
+  const muted = isMuted();
   // Compute effective Telegram behavior:
   //   mode=auto  → cloud-active suppresses; cloud-stale sends (current behavior)
   //   mode=cloud → always suppress (cloud is forced primary)
   //   mode=local → always send (cloud is forced silent)
   const cloud = cloudStatus();
   const behavior = localTelegramBehavior({ cloudAlive: cloud.alive });
-  const suppressTelegram = behavior === 'suppress';
+  const suppressTelegram = muted || behavior === 'suppress';
   if (suppressTelegram) {
     log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
-      log.info('telegram suppressed', { mode: cfg.mode, cloudAlive: cloud.alive, cloudAgeMs: cloud.ageMs })
+      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec(), cloudAlive: cloud.alive, cloudAgeMs: cloud.ageMs })
     );
   }
 
