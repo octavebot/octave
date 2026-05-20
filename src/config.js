@@ -22,12 +22,19 @@ function parseEnv(text) {
 }
 
 function loadEnv() {
-  if (!existsSync(ENV_PATH)) {
-    console.error(`[config] missing credentials file: ${ENV_PATH}`);
-    console.error('[config] create it from .env.example and chmod 600');
+  // Merge process.env first (systemd EnvironmentFile delivers vars here on
+  // Linux), then layer the file on top so file vals win if both are set.
+  // If neither has the required keys, exit with a clear error.
+  let fileEnv = {};
+  if (existsSync(ENV_PATH)) {
+    try { fileEnv = parseEnv(readFileSync(ENV_PATH, 'utf8')); } catch {}
+  } else if (!process.env.TELEGRAM_BOT_TOKEN) {
+    // No file AND no process env → genuinely missing
+    console.error(`[config] missing credentials: no ${ENV_PATH} and no TELEGRAM_BOT_TOKEN in environment`);
+    console.error('[config] create the .env file or pass env vars via systemd EnvironmentFile');
     process.exit(2);
   }
-  return parseEnv(readFileSync(ENV_PATH, 'utf8'));
+  return { ...process.env, ...fileEnv };
 }
 
 const env = loadEnv();

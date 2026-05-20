@@ -9,10 +9,12 @@ const verifyMode = process.argv.includes('--verify');
 
 async function bestEffortSnapshot() {
   try {
-    return await snapshot();
+    const s = await snapshot();
+    if (!s) return { symbol: 'GOLD (cloud)', timeframe: '5' }; // tradingview-mcp missing (VPS)
+    return s;
   } catch (err) {
     log.warn('initial snapshot failed (TV may not be up yet)', { err: err.message });
-    return { symbol: '', timeframe: '' };
+    return { symbol: 'GOLD', timeframe: '5' };
   }
 }
 

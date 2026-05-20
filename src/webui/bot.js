@@ -26,7 +26,15 @@ const HEARTBEAT_FILE = join(REPO_DIR, 'src', 'state', 'cloud-heartbeat.json');
 const DRAWINGS_FILE = join(REPO_DIR, 'src', 'state', 'drawings.json');
 const SESSION_FILE = join(REPO_DIR, 'src', 'state', 'session.json');
 const STDOUT_LOG = '/Users/jqvier/Library/Logs/trading-alerts/stdout.log';
-const ENV_FILE = '/Users/jqvier/.config/trading-alerts/.env';
+// Multiple candidate locations — first found wins. Mac uses ~/.config,
+// VPS uses /home/octave/.config. Also we honor env vars set by systemd's
+// EnvironmentFile, which is the primary delivery mechanism on Linux.
+const ENV_FILE_CANDIDATES = [
+  process.env.OCTAVE_ENV_FILE,
+  '/Users/jqvier/.config/trading-alerts/.env',
+  '/home/octave/.config/trading-alerts/.env',
+  process.env.HOME ? `${process.env.HOME}/.config/trading-alerts/.env` : null,
+].filter(Boolean);
 
 const STRATEGY_KEYS = ['USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY', 'AMN', 'TORI', 'WARRIOR'];
 const STRATEGY_NUM = { USLS: 1, 'ICT-SMC': 2, 'ALGO-SMC': 3, ADAPTIVE: 4, ICT: 5, SMT: 6, TRINITY: 7, AMN: 8, TORI: 9, WARRIOR: 10 };
@@ -34,13 +42,25 @@ const NUM_TO_KEY = Object.fromEntries(Object.entries(STRATEGY_NUM).map(([k, v]) 
 
 let TOKEN = '', CHAT_ID = '';
 function loadCreds() {
-  if (!existsSync(ENV_FILE)) return false;
-  const env = Object.fromEntries(
-    readFileSync(ENV_FILE, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
-  );
-  TOKEN = env.TELEGRAM_BOT_TOKEN || '';
-  CHAT_ID = env.TELEGRAM_CHAT_ID || '';
-  return !!(TOKEN && CHAT_ID);
+  // 1. Prefer env vars (systemd EnvironmentFile delivers them this way)
+  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+    TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+    CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+    return true;
+  }
+  // 2. Try each candidate .env file
+  for (const p of ENV_FILE_CANDIDATES) {
+    if (!existsSync(p)) continue;
+    try {
+      const env = Object.fromEntries(
+        readFileSync(p, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
+      );
+      const t = env.TELEGRAM_BOT_TOKEN || '';
+      const c = env.TELEGRAM_CHAT_ID || '';
+      if (t && c) { TOKEN = t; CHAT_ID = c; return true; }
+    } catch {}
+  }
+  return false;
 }
 
 function readJson(path, fallback) {
