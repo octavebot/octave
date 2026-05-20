@@ -2,7 +2,7 @@
   "version": 1,
   "mode": "cloud",
   "strategies": {
-    "USLS": true,
+    "USLS": false,
     "ICT-SMC": false,
     "ALGO-SMC": false,
     "ADAPTIVE": true,
@@ -10,5 +10,5 @@
     "SMT": false,
     "TRINITY": false
   },
-  "lastUpdated": 1779293794124
+  "lastUpdated": 1779293795061
 }
