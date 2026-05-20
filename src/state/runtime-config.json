@@ -7,11 +7,11 @@
     "ALGO-SMC": false,
     "ADAPTIVE": true,
     "ICT": true,
-    "SMT": false,
+    "SMT": true,
     "TRINITY": true,
     "AMN": true,
     "TORI": true,
     "WARRIOR": true
   },
-  "lastUpdated": 1779309440529
+  "lastUpdated": 1779309441447
 }
