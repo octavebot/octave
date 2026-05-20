@@ -23,7 +23,7 @@
 
 // TV CDP-based panes module is no longer required for data path — kept
 // imported only because the drawings module depends on it.
-// All 7 strategies imported. Each is gated by runtime-config.strategies[key]
+// All 10 strategies imported. Each is gated by runtime-config.strategies[key]
 // at invocation time, so the user can toggle any on/off via Octave.app.
 import { evaluateUSLS } from './strategies/usls.js';
 import { evaluateICTSMC } from './strategies/ict_smc.js';
@@ -32,6 +32,9 @@ import { evaluateAdaptive } from './strategies/adaptive.js';
 import { evaluateICTM15 } from './strategies/ict_m15.js';
 import { evaluateSMTM15 } from './strategies/smt_m15.js';
 import { evaluateTrinity } from './strategies/trinity.js';
+import { evaluateAMN } from './strategies/amn.js';
+import { evaluateTORI } from './strategies/tori.js';
+import { evaluateWARRIOR } from './strategies/warrior.js';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
@@ -119,6 +122,9 @@ export async function detect() {
     ['ICT',       evaluateICTM15],
     ['SMT',       evaluateSMTM15],
     ['TRINITY',   evaluateTrinity],
+    ['AMN',       evaluateAMN],
+    ['TORI',      evaluateTORI],
+    ['WARRIOR',   evaluateWARRIOR],
   ];
   for (const [name, fn] of STRATEGY_TABLE) {
     if (!isStrategyEnabled(name)) continue;

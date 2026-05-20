@@ -28,17 +28,23 @@ import { evaluateAdaptive } from './strategies/adaptive.js';
 import { evaluateICTM15 } from './strategies/ict_m15.js';
 import { evaluateSMTM15 } from './strategies/smt_m15.js';
 import { evaluateTrinity } from './strategies/trinity.js';
+import { evaluateAMN } from './strategies/amn.js';
+import { evaluateTORI } from './strategies/tori.js';
+import { evaluateWARRIOR } from './strategies/warrior.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 
 export const STRATEGIES = [
-  { name: 'USLS',     num: 1, fn: evaluateUSLS,    label: 'USLS' },
-  { name: 'ICT-SMC',  num: 2, fn: evaluateICTSMC,  label: 'ICT/SMC' },
-  { name: 'ALGO-SMC', num: 3, fn: evaluateAlgoSMC, label: 'ALGO/SMC' },
-  { name: 'ADAPTIVE', num: 4, fn: evaluateAdaptive,label: 'Adaptive Matrix' },
-  { name: 'ICT',      num: 5, fn: evaluateICTM15,  label: 'ICT M15' },
-  { name: 'SMT',      num: 6, fn: evaluateSMTM15,  label: 'SMT M15' },
-  { name: 'TRINITY',  num: 7, fn: evaluateTrinity, label: 'Trinity' },
+  { name: 'USLS',     num: 1,  fn: evaluateUSLS,     label: 'USLS' },
+  { name: 'ICT-SMC',  num: 2,  fn: evaluateICTSMC,   label: 'ICT/SMC' },
+  { name: 'ALGO-SMC', num: 3,  fn: evaluateAlgoSMC,  label: 'ALGO/SMC' },
+  { name: 'ADAPTIVE', num: 4,  fn: evaluateAdaptive, label: 'Adaptive Matrix' },
+  { name: 'ICT',      num: 5,  fn: evaluateICTM15,   label: 'ICT M15' },
+  { name: 'SMT',      num: 6,  fn: evaluateSMTM15,   label: 'SMT M15' },
+  { name: 'TRINITY',  num: 7,  fn: evaluateTrinity,  label: 'Trinity' },
+  { name: 'AMN',      num: 8,  fn: evaluateAMN,      label: 'AMN Dual-Model' },
+  { name: 'TORI',     num: 9,  fn: evaluateTORI,     label: 'TORI Trendline' },
+  { name: 'WARRIOR',  num: 10, fn: evaluateWARRIOR,  label: 'Warrior Momentum' },
 ];
 
 const PANE_REQUESTS = [

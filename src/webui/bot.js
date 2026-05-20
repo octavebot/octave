@@ -27,8 +27,8 @@ const SESSION_FILE = join(REPO_DIR, 'src', 'state', 'session.json');
 const STDOUT_LOG = '/Users/jqvier/Library/Logs/trading-alerts/stdout.log';
 const ENV_FILE = '/Users/jqvier/.config/trading-alerts/.env';
 
-const STRATEGY_KEYS = ['USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY'];
-const STRATEGY_NUM = { USLS: 1, 'ICT-SMC': 2, 'ALGO-SMC': 3, ADAPTIVE: 4, ICT: 5, SMT: 6, TRINITY: 7 };
+const STRATEGY_KEYS = ['USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY', 'AMN', 'TORI', 'WARRIOR'];
+const STRATEGY_NUM = { USLS: 1, 'ICT-SMC': 2, 'ALGO-SMC': 3, ADAPTIVE: 4, ICT: 5, SMT: 6, TRINITY: 7, AMN: 8, TORI: 9, WARRIOR: 10 };
 const NUM_TO_KEY = Object.fromEntries(Object.entries(STRATEGY_NUM).map(([k, v]) => [v, k]));
 
 let TOKEN = '', CHAT_ID = '';

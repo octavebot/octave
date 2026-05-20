@@ -40,6 +40,9 @@ const DEFAULTS = Object.freeze({
     ICT: true,
     SMT: true,
     TRINITY: true,
+    AMN: true,
+    TORI: true,
+    WARRIOR: true,
   },
   mute: { untilMs: 0, reason: null },
   lastUpdated: 0,
@@ -54,6 +57,9 @@ export const ALL_STRATEGIES = [
   { key: 'ICT', num: '#5', label: 'Strategy #5 (ICT)' },
   { key: 'SMT', num: '#6', label: 'Strategy #6 (SMT)' },
   { key: 'TRINITY', num: '#7', label: 'Strategy #7 (Trinity)' },
+  { key: 'AMN', num: '#8', label: 'Strategy #8 (AMN — Dual-Model)' },
+  { key: 'TORI', num: '#9', label: 'Strategy #9 (TORI — 4H Trendline)' },
+  { key: 'WARRIOR', num: '#10', label: 'Strategy #10 (Warrior Momentum)' },
 ];
 
 let cache = null;

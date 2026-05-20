@@ -34,6 +34,9 @@ import { evaluateAdaptive } from '../strategies/adaptive.js';
 import { evaluateICTM15 } from '../strategies/ict_m15.js';
 import { evaluateSMTM15 } from '../strategies/smt_m15.js';
 import { evaluateTrinity } from '../strategies/trinity.js';
+import { evaluateAMN } from '../strategies/amn.js';
+import { evaluateTORI } from '../strategies/tori.js';
+import { evaluateWARRIOR } from '../strategies/warrior.js';
 import { refresh as refreshConfig, isStrategyEnabled, cloudShouldFire, isMuted, muteRemainingSec } from '../lib/runtime_config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +83,7 @@ const STATUS_LABEL = {
 const STRATEGY_NUM = {
   USLS: '#1', 'ICT-SMC': '#2', 'ALGO-SMC': '#3', ADAPTIVE: '#4',
   ICT: '#5', SMT: '#6', TRINITY: '#7',
+  AMN: '#8', TORI: '#9', WARRIOR: '#10',
 };
 function biasBanner(dir) {
   if (dir === 'LONG') return '🟢 *BUY BIAS — LONG*';
@@ -227,6 +231,9 @@ async function main() {
     ['ICT', evaluateICTM15],
     ['SMT', evaluateSMTM15],
     ['TRINITY', evaluateTrinity],
+    ['AMN', evaluateAMN],
+    ['TORI', evaluateTORI],
+    ['WARRIOR', evaluateWARRIOR],
   ];
   for (const [name, fn] of STRATEGY_TABLE) {
     if (!isStrategyEnabled(name)) continue;
