@@ -8,10 +8,10 @@
     "ADAPTIVE": true,
     "ICT": true,
     "SMT": false,
-    "TRINITY": false,
+    "TRINITY": true,
     "AMN": true,
     "TORI": true,
     "WARRIOR": true
   },
-  "lastUpdated": 1779308851464
+  "lastUpdated": 1779309440529
 }
