@@ -61,19 +61,53 @@ function tgEscape(s) {
 }
 
 async function send(text, opts = {}) {
+  const body = {
+    chat_id: CHAT_ID, text,
+    parse_mode: opts.html ? 'HTML' : 'Markdown',
+    disable_web_page_preview: true,
+  };
+  if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
   const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: CHAT_ID, text,
-      parse_mode: opts.html ? 'HTML' : 'Markdown',
-      disable_web_page_preview: true,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    console.error('[bot] sendMessage non-2xx:', res.status, body.slice(0, 200));
+    const bodyT = await res.text().catch(() => '');
+    console.error('[bot] sendMessage non-2xx:', res.status, bodyT.slice(0, 200));
   }
+  return res.json().catch(() => null);
+}
+
+/** Edit an existing message in place (used for tap-to-toggle). */
+async function editMessage(chatId, messageId, text, opts = {}) {
+  const body = {
+    chat_id: chatId, message_id: messageId, text,
+    parse_mode: opts.html ? 'HTML' : 'Markdown',
+    disable_web_page_preview: true,
+  };
+  if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
+  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const bodyT = await res.text().catch(() => '');
+    // 400 "message is not modified" is fine when toggling re-renders identical content
+    if (!bodyT.includes('not modified')) {
+      console.error('[bot] editMessageText non-2xx:', res.status, bodyT.slice(0, 200));
+    }
+  }
+}
+
+/** Acknowledge a button-tap callback. Required by Telegram or buttons keep spinning. */
+async function answerCallback(callbackId, text = '') {
+  await fetch(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackId, text, show_alert: false }),
+  }).catch(() => {});
 }
 
 // ---------- runtime config helpers ----------
@@ -174,6 +208,10 @@ async function servicePid() {
 // ---------- COMMAND HANDLERS ----------
 
 const HELP_TEXT = `🎵 *Octave Bot — Commands*
+
+🎛 *Tap-to-use interface*
+\`/menu\` — open the Control Panel with buttons
+\`/app\` or \`/panel\` — same thing
 
 📊 *Status*
 \`/status\` — overall health
@@ -471,11 +509,260 @@ async function cmdShutdown(arg) {
   spawn('/Users/jqvier/Desktop/Octave.app/Contents/MacOS/octave', ['shutdown'], { detached: true, stdio: 'ignore' }).unref();
 }
 
+// ---------- INLINE KEYBOARD VIEWS ----------
+
+function buildMainMenuView() {
+  const cfg = loadConfig() || {};
+  const hb = readJson(HEARTBEAT_FILE, null);
+  const session = readJson(SESSION_FILE, { lastSession: null });
+  const onCount = cfg.strategies ? Object.values(cfg.strategies).filter(Boolean).length : 0;
+  const onNums = cfg.strategies
+    ? Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => `#${STRATEGY_NUM[k]}`).sort().join(' ')
+    : '(none)';
+  let cloudLine = '🔴 no heartbeat';
+  if (hb?.lastTick) {
+    const ageMin = Math.round((Date.now() - hb.lastTick) / 60000);
+    if (ageMin < 8 && hb.status === 'ok') cloudLine = `🟢 ${ageMin}m ago`;
+    else if (hb.status === 'skipped-mode-local') cloudLine = `⚪ idle (mode=local)`;
+    else if (hb.status === 'skipped-muted') cloudLine = `🔕 muted`;
+    else cloudLine = `🟠 ${ageMin}m stale`;
+  }
+  const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
+    ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
+  const muteLine = muteSec > 0 ? `🔕 ${Math.round(muteSec / 60)}m left` : `🔔 live`;
+
+  const text = [
+    '🎵 *Octave Control Panel*',
+    '',
+    `🎚 Mode: \`${cfg.mode || 'auto'}\``,
+    `🟢 Enabled: ${onNums} (${onCount}/7)`,
+    `🔔 Alerts: ${muteLine}`,
+    `☁️ Cloud: ${cloudLine}`,
+    `🌍 Session: \`${(session.lastSession || '—').toUpperCase()}\``,
+  ].join('\n');
+
+  const keyboard = [
+    [
+      { text: '🎚 Mode', callback_data: 'view:mode' },
+      { text: '🎛 Strategies', callback_data: 'view:strategies' },
+    ],
+    [
+      { text: '🔕 Mute', callback_data: 'view:mute' },
+      { text: '📊 Status', callback_data: 'act:status' },
+    ],
+    [
+      { text: '📜 Today', callback_data: 'act:today' },
+      { text: '🔔 Last alert', callback_data: 'act:last' },
+    ],
+    [
+      { text: '☁️ Cloud', callback_data: 'act:cloud' },
+      { text: '💻 Local', callback_data: 'act:local' },
+    ],
+    [
+      { text: '🔄 Refresh', callback_data: 'view:main' },
+      { text: '🚨 System', callback_data: 'view:system' },
+    ],
+  ];
+  return { text, keyboard };
+}
+
+function buildModeView() {
+  const cfg = loadConfig() || {};
+  const cur = cfg.mode || 'auto';
+  const mark = (m) => m === cur ? '✅ ' : '   ';
+  const text = [
+    '🎚 *Mode*',
+    '',
+    `Current: \`${cur}\``,
+    '',
+    '_auto_  — cloud-primary, local-fallback',
+    '_cloud_ — only cloud sends Telegram',
+    '_local_ — only local sends Telegram',
+  ].join('\n');
+  const keyboard = [
+    [
+      { text: `${mark('auto')}Auto`, callback_data: 'mode:auto' },
+      { text: `${mark('cloud')}Cloud`, callback_data: 'mode:cloud' },
+      { text: `${mark('local')}Local`, callback_data: 'mode:local' },
+    ],
+    [{ text: '« Back', callback_data: 'view:main' }],
+  ];
+  return { text, keyboard };
+}
+
+function buildStrategiesView() {
+  const cfg = loadConfig() || { strategies: {} };
+  const text = [
+    '🎛 *Strategies*',
+    '',
+    'Tap any strategy to toggle on/off.',
+    'State syncs to GitHub for the cloud tick.',
+  ].join('\n');
+  const keyboard = STRATEGY_KEYS.map((k) => {
+    const on = !!cfg.strategies[k];
+    return [{
+      text: `${on ? '🟢' : '⚫'} #${STRATEGY_NUM[k]} ${k}`,
+      callback_data: `strat:${k}`,
+    }];
+  });
+  keyboard.push([{ text: '« Back', callback_data: 'view:main' }]);
+  return { text, keyboard };
+}
+
+function buildMuteView() {
+  const cfg = loadConfig() || {};
+  const sec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
+    ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
+  const text = sec > 0
+    ? `🔕 *Muted* — ${Math.round(sec / 60)}m remaining\n\nUntil: \`${nyHourMinute(cfg.mute.untilMs)}\` NY`
+    : '🔔 *Alerts are live*\n\nMute pauses ALL alerts (local + cloud).';
+  const keyboard = [
+    [
+      { text: '🔕 30 min', callback_data: 'mute:30' },
+      { text: '🔕 60 min', callback_data: 'mute:60' },
+      { text: '🔕 3 hours', callback_data: 'mute:180' },
+    ],
+    [
+      { text: '🔕 12 hours', callback_data: 'mute:720' },
+      { text: '🔕 24 hours', callback_data: 'mute:1440' },
+    ],
+    [{ text: '🔔 Unmute', callback_data: 'mute:0' }],
+    [{ text: '« Back', callback_data: 'view:main' }],
+  ];
+  return { text, keyboard };
+}
+
+function buildSystemView() {
+  const text = [
+    '🚨 *System Actions*',
+    '',
+    'Restart kickstarts the local LaunchAgent.',
+    'Shutdown stops EVERYTHING (alerts, TV, caffeinate, bot itself).',
+  ].join('\n');
+  const keyboard = [
+    [{ text: '🔄 Restart local service', callback_data: 'act:restart' }],
+    [{ text: '⏸ Shutdown ALL', callback_data: 'act:shutdown-confirm' }],
+    [{ text: '« Back', callback_data: 'view:main' }],
+  ];
+  return { text, keyboard };
+}
+
+async function cmdMenu() {
+  const v = buildMainMenuView();
+  await send(v.text, { keyboard: v.keyboard });
+}
+
+// ---------- CALLBACK (button tap) DISPATCHER ----------
+
+async function handleCallback(cq) {
+  // Security check (same as messages)
+  if (String(cq.from?.id) !== String(CHAT_ID) && String(cq.message?.chat?.id) !== String(CHAT_ID)) {
+    return answerCallback(cq.id, 'unauthorized');
+  }
+  const data = cq.data || '';
+  const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
+  const [kind, ...rest] = data.split(':');
+  const arg = rest.join(':');
+
+  try {
+    if (kind === 'view') {
+      let v;
+      if (arg === 'main') v = buildMainMenuView();
+      else if (arg === 'mode') v = buildModeView();
+      else if (arg === 'strategies') v = buildStrategiesView();
+      else if (arg === 'mute') v = buildMuteView();
+      else if (arg === 'system') v = buildSystemView();
+      if (v) {
+        await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+        await answerCallback(cq.id);
+      } else {
+        await answerCallback(cq.id, 'unknown view');
+      }
+      return;
+    }
+
+    if (kind === 'mode') {
+      if (!['auto', 'cloud', 'local'].includes(arg)) return answerCallback(cq.id, 'invalid');
+      await saveConfigAndPush((c) => { c.mode = arg; return c; });
+      const v = buildModeView();
+      await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+      await answerCallback(cq.id, `Mode → ${arg}`);
+      return;
+    }
+
+    if (kind === 'strat') {
+      const k = arg;
+      if (!STRATEGY_KEYS.includes(k)) return answerCallback(cq.id, 'unknown strategy');
+      const cur = loadConfig() || { strategies: {} };
+      const next = !cur.strategies?.[k];
+      await saveConfigAndPush((c) => { c.strategies = c.strategies || {}; c.strategies[k] = next; return c; });
+      const v = buildStrategiesView();
+      await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+      await answerCallback(cq.id, `${k} → ${next ? 'ON' : 'OFF'}`);
+      return;
+    }
+
+    if (kind === 'mute') {
+      const minutes = parseInt(arg, 10);
+      if (minutes === 0) {
+        await saveConfigAndPush((c) => { c.mute = { untilMs: 0, reason: null }; return c; });
+        const v = buildMuteView();
+        await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+        await answerCallback(cq.id, '🔔 Unmuted');
+        return;
+      }
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+        return answerCallback(cq.id, 'invalid');
+      }
+      const untilMs = Date.now() + minutes * 60 * 1000;
+      await saveConfigAndPush((c) => { c.mute = { untilMs, reason: 'telegram menu' }; return c; });
+      const v = buildMuteView();
+      await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+      await answerCallback(cq.id, `🔕 ${minutes}m`);
+      return;
+    }
+
+    if (kind === 'act') {
+      if (arg === 'status') { await cmdStatus(); return answerCallback(cq.id); }
+      if (arg === 'today')  { await cmdToday();  return answerCallback(cq.id); }
+      if (arg === 'last')   { await cmdLast();   return answerCallback(cq.id); }
+      if (arg === 'cloud')  { await cmdCloud();  return answerCallback(cq.id); }
+      if (arg === 'local')  { await cmdLocal();  return answerCallback(cq.id); }
+      if (arg === 'restart') { await cmdRestart(); return answerCallback(cq.id, 'Restarting…'); }
+      if (arg === 'shutdown-confirm') {
+        // Two-tap confirm: turn into a confirm button row
+        const text = '⚠️ *Confirm Shutdown*\n\nThis will stop EVERYTHING:\n• Alerts service\n• Caffeinate\n• TradingView\n• Claude Code\n• Web UI + Bot\n\nClick the Octave icon to restart.';
+        await editMessage(chatId, messageId, text, {
+          keyboard: [
+            [{ text: '✅ Yes, shut down', callback_data: 'act:shutdown-do' }],
+            [{ text: '« Cancel', callback_data: 'view:system' }],
+          ],
+        });
+        return answerCallback(cq.id);
+      }
+      if (arg === 'shutdown-do') {
+        await editMessage(chatId, messageId, '⏸ Shutting down…', { keyboard: [] });
+        await cmdShutdown('confirm');
+        return answerCallback(cq.id, 'Bye.');
+      }
+    }
+
+    await answerCallback(cq.id, 'Unknown action');
+  } catch (err) {
+    console.error('[bot] callback handler threw:', err.message);
+    await answerCallback(cq.id, 'Error: ' + err.message);
+  }
+}
+
 // ---------- dispatch ----------
 
 const COMMANDS = {
-  '/start': cmdHelp,
+  '/start': cmdMenu,
   '/help': cmdHelp,
+  '/menu': cmdMenu,
+  '/panel': cmdMenu,
+  '/app': cmdMenu,
   '/status': cmdStatus,
   '/cloud': cmdCloud,
   '/local': cmdLocal,
@@ -549,7 +836,13 @@ async function pollLoop() {
       const updates = data?.result || [];
       for (const u of updates) {
         if (u.update_id >= offset) offset = u.update_id + 1;
-        handleUpdate(u).catch((e) => console.error('[bot] handleUpdate threw:', e.message));
+        if (u.callback_query) {
+          handleCallback(u.callback_query).catch((e) =>
+            console.error('[bot] handleCallback threw:', e.message)
+          );
+        } else {
+          handleUpdate(u).catch((e) => console.error('[bot] handleUpdate threw:', e.message));
+        }
       }
     } catch (err) {
       pollErrors++;
