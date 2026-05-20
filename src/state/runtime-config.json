@@ -5,10 +5,10 @@
     "USLS": false,
     "ICT-SMC": false,
     "ALGO-SMC": false,
-    "ADAPTIVE": false,
+    "ADAPTIVE": true,
     "ICT": true,
     "SMT": true,
     "TRINITY": true
   },
-  "lastUpdated": 1779283168170
+  "lastUpdated": 1779283184210
 }
