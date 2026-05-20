@@ -7,6 +7,7 @@ import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
 import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
+import { beat as heartbeat } from './lib/heartbeat.js';
 
 let stopping = false;
 export function stop() { stopping = true; }
@@ -21,6 +22,9 @@ function dedupKey(result) {
 }
 
 async function tick() {
+  // Heartbeat FIRST so even if everything else throws, we're recorded as alive
+  heartbeat('signal-engine', { phase: 'tick-start' });
+
   // Session boundary check (cheap, runs every tick)
   try {
     await sessionTracker.checkSessionChange();
@@ -114,6 +118,8 @@ async function tick() {
     }
   }
 
+  // End-of-tick heartbeat with a count of results so dashboards see activity
+  heartbeat('signal-engine', { phase: 'tick-end', last_result_count: results?.length || 0 });
   await sleep(config.pollIntervalMs);
 }
 

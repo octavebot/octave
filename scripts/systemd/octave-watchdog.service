@@ -1,0 +1,16 @@
+[Unit]
+Description=Octave Watchdog (auto-restarts stale services)
+After=network-online.target
+
+[Service]
+Type=simple
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+ExecStart=/usr/bin/node --max-old-space-size=128 /home/octave/trading-alerts/scripts/watchdog.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/octave/.octave-logs/watchdog.log
+StandardError=append:/home/octave/.octave-logs/watchdog.log
+
+[Install]
+WantedBy=multi-user.target

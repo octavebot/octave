@@ -289,6 +289,16 @@
     </div>
   </div>
 
+  <!-- SERVICES -->
+  <div class="card">
+    <h2>Services <span style="font-weight:400;font-size:11px;color:var(--text-faint);text-transform:none;">(per-service health · restart any independently)</span></h2>
+    <div id="services"></div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="btn" onclick="restartService('all')">🔄 Restart ALL services</button>
+      <button class="btn" onclick="launchTV()">📡 Launch TradingView</button>
+    </div>
+  </div>
+
   <!-- STRATEGIES -->
   <div class="card">
     <h2>Strategies</h2>
@@ -493,8 +503,85 @@ function confirmShutdown() {
   toast('Shutdown requested…');
 }
 
+// --- Services panel ---
+const SERVICE_DISPLAY = {
+  'signal-engine': { name: 'Signal Engine', sub: 'Strategy evaluator · 3s loop' },
+  'bot':           { name: 'Telegram Bot',   sub: 'Long-polls Telegram, runs commands' },
+  'webui':         { name: 'Dashboard',     sub: 'This page · HTTP server on :7345' },
+  'watchdog':      { name: 'Watchdog',      sub: 'Restarts any service that goes stale' },
+  'market-data':   { name: 'Market Data',   sub: 'Yahoo / OANDA fetch cache' },
+};
+
+async function fetchServices() {
+  try {
+    const r = await fetch('/api/services', { cache: 'no-store' });
+    const data = await r.json();
+    renderServices(data.services || {});
+  } catch (e) {
+    console.error('fetchServices', e);
+  }
+}
+
+function renderServices(services) {
+  const container = document.getElementById('services');
+  if (!container) return;
+  const rows = [];
+  for (const key of ['signal-engine', 'bot', 'webui', 'watchdog', 'market-data']) {
+    const s = services[key];
+    const meta = SERVICE_DISPLAY[key] || { name: key, sub: '' };
+    let icon, statusText, ageText;
+    if (!s || !s.beat) {
+      icon = '🔴'; statusText = 'No heartbeat'; ageText = '—';
+    } else if (s.alive) {
+      icon = '🟢'; statusText = 'LIVE';
+      ageText = `${s.age_s}s ago`;
+    } else {
+      icon = '🟠'; statusText = 'STALE';
+      ageText = `${s.age_s}s ago (tolerance ${s.tolerance_s}s)`;
+    }
+    const pid = s?.beat?.pid ? `pid ${s.beat.pid}` : '';
+    const mem = s?.beat?.mem_mb ? `${s.beat.mem_mb} MB` : '';
+    const showRestart = key !== 'market-data'; // market-data isn't a process
+    rows.push(`
+      <div class="strategy" style="border-bottom:1px solid var(--border);">
+        <div class="info">
+          <div><span class="num">${icon}</span><span class="name">${meta.name}</span> <span style="color:var(--text-faint);font-size:12px;">${statusText}</span></div>
+          <div class="desc">${meta.sub}</div>
+          <div class="desc" style="color:var(--text-faint);">${ageText}${pid ? ` · ${pid}` : ''}${mem ? ` · ${mem}` : ''}</div>
+        </div>
+        ${showRestart ? `<button class="btn" style="flex:0 0 auto;padding:8px 14px;font-size:12px;" onclick="restartService('${key}')">🔄 Restart</button>` : ''}
+      </div>
+    `);
+  }
+  container.innerHTML = rows.join('');
+}
+
+async function restartService(key) {
+  if (key === 'all' && !confirm('Restart all services? Local alerts will pause for ~5 seconds.')) return;
+  toast(key === 'all' ? '🔄 Restarting all…' : `🔄 Restarting ${key}…`);
+  try {
+    const r = await fetch('/api/restart', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ service: key }),
+    });
+    const data = await r.json();
+    if (data.error) toast(`✗ ${data.error}`);
+    else toast(`✓ Restart kicked: ${data.restarted}`);
+    setTimeout(fetchServices, 3000);
+  } catch (e) { toast(`✗ ${e.message}`); }
+}
+
+async function launchTV() {
+  toast('Launching TradingView…');
+  try {
+    await fetch('/api/launch-tv', { method: 'POST' });
+  } catch (e) { toast('✗ Could not launch TV'); }
+}
+
 fetchState();
+fetchServices();
 setInterval(fetchState, 5000);
+setInterval(fetchServices, 5000);
 </script>
 </body>
 </html>

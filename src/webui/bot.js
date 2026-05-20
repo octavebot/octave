@@ -16,6 +16,7 @@ import { readFileSync, existsSync, statSync, writeFileSync, renameSync, mkdirSyn
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { beat as heartbeat, startHeartbeat, readAllBeats, isStale, STALE_TOLERANCE_MS } from '../lib/heartbeat.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -244,9 +245,14 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 \`/backtest <num> <days>\` — custom window (e.g. \`/backtest 5 60\`)
 Auto-runs every Sunday 8pm EST → posted here.
 
+🩺 *Health & Diagnostics*
+\`/health\` — per-service status (signal/bot/webui/watchdog/cloud)
+\`/diagnose\` — cloud (GitHub Actions) diagnostic
+\`/restart all\` — restart everything safely
+\`/restart bot\` / \`/restart signals\` / \`/restart webui\` — single service
+
 🚨 *System*
 \`/version\` — current git commit
-\`/restart\` — restart local service
 \`/shutdown confirm\` — stop everything
 
 Tip: send \`/help\` anytime to see this menu again.`;
@@ -507,7 +513,7 @@ async function cmdRestart() {
 }
 
 async function cmdBacktest(arg) {
-  // Parse optional strategy + days arg: /backtest, /backtest 5, /backtest TRINITY, /backtest 7 60
+  // Parse optional strategy + days arg
   const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
   let strategyArg = null;
   let days = 30;
@@ -525,23 +531,181 @@ async function cmdBacktest(arg) {
     return;
   }
 
-  await send(`⏳ Running ${days}-day backtest${strategy ? ` for *${strategy}*` : ' for all enabled strategies'}…\n_This usually takes ~30-90 seconds._`);
-  try {
-    // Lazy import to avoid loading the strategy modules until needed
-    const bt = await import('../backtest.js');
-    const opts = { days };
-    if (strategy) opts.strategies = [strategy];
-    const result = await bt.runBacktest(opts);
-    if (result.error) {
-      await send(`⚠️ Backtest failed: \`${result.error}\``);
+  // CRITICAL CRASH ISOLATION: spawn the backtest as a CHILD process.
+  // If the backtest OOMs, throws, or loops infinitely, the bot stays alive.
+  // The previous in-process import() approach is what caused the USLS crash:
+  // the event loop blocked, the bot couldn't poll Telegram, the webui couldn't
+  // serve HTTP — every visible service appeared frozen.
+  await send(`⏳ Running ${days}-day backtest${strategy ? ` for *${strategy}*` : ' for all enabled strategies'}…\n_Runs in an isolated process; bot stays responsive even if it fails._`);
+
+  const args = ['scripts/run-backtest-child.js', '--days', String(days)];
+  if (strategy) args.push('--strategy', strategy);
+  const REPO_DIR = '/Users/jqvier/trading-alerts';
+
+  const child = spawn('/usr/local/bin/node', args, {
+    cwd: REPO_DIR,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Detached: false so parent can wait, but the child has its own event loop —
+    // crucially, an OOM in the child kills the child only.
+  });
+
+  let stdoutBuf = '';
+  let stderrBuf = '';
+  let tgMessage = null;
+  let resultRow = null;
+
+  child.stdout.on('data', (d) => {
+    stdoutBuf += d.toString();
+    // Parse RESULT: and TG: lines as they arrive
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) !== -1) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (line.startsWith('RESULT:')) {
+        try { resultRow = JSON.parse(line.slice(7)); } catch {}
+      } else if (line.startsWith('TG:')) {
+        try { tgMessage = Buffer.from(line.slice(3), 'base64').toString('utf8'); } catch {}
+      } else {
+        console.log('[backtest-child]', line);
+      }
+    }
+  });
+  child.stderr.on('data', (d) => {
+    stderrBuf += d.toString();
+    console.error('[backtest-child stderr]', d.toString().trim());
+  });
+
+  // Hard timeout: kill the child if it runs too long (e.g., 8 minutes)
+  const killTimer = setTimeout(() => {
+    console.error('[bot] backtest child exceeded 8min — killing');
+    try { child.kill('SIGKILL'); } catch {}
+  }, 8 * 60 * 1000);
+
+  child.on('exit', async (code, signal) => {
+    clearTimeout(killTimer);
+    if (signal === 'SIGKILL' && !resultRow) {
+      await send(`⚠️ Backtest timed out (>8min) and was killed. The bot itself is fine — try a smaller window or single strategy.`);
       return;
     }
-    const suggestions = bt.suggestionsFor(result.stats);
-    const text = bt.formatTelegramSummary(result, suggestions);
-    await send(text);
+    if (resultRow?.error) {
+      await send(`⚠️ Backtest failed: \`${resultRow.error}\``);
+      return;
+    }
+    if (tgMessage) {
+      await send(tgMessage);
+    } else if (resultRow?.ok) {
+      await send(`✅ Backtest completed (${Math.round((resultRow.durationMs || 0) / 1000)}s) but no Telegram summary was produced.`);
+    } else {
+      await send(`⚠️ Backtest exited with code ${code}${signal ? ` (signal ${signal})` : ''}.\nStderr tail:\n\`\`\`\n${(stderrBuf || '').slice(-500)}\n\`\`\``);
+    }
+  });
+
+  child.on('error', async (err) => {
+    clearTimeout(killTimer);
+    await send(`⚠️ Could not spawn backtest process: ${err.message}`);
+  });
+}
+
+async function cmdHealth() {
+  const beats = readAllBeats();
+  const services = ['signal-engine', 'bot', 'webui', 'watchdog', 'market-data'];
+  const lines = ['🩺 *Octave Health*', ''];
+  for (const s of services) {
+    const b = beats[s];
+    if (!b) {
+      lines.push(`🔴 ${s}: no heartbeat`);
+      continue;
+    }
+    const ageS = Math.round((Date.now() - b.at) / 1000);
+    const stale = isStale(s, b);
+    const icon = stale ? '🟠' : '🟢';
+    lines.push(`${icon} ${s}: ${ageS}s ago · pid ${b.pid} · ${b.mem_mb || '?'}MB · up ${Math.round((b.uptime_s || 0) / 60)}m`);
+  }
+
+  // Also fetch local + cloud snapshot
+  const cfg = loadConfig();
+  const hb = readJson(HEARTBEAT_FILE, null);
+  lines.push('');
+  if (hb?.lastTick) {
+    const age = Math.round((Date.now() - hb.lastTick) / 1000);
+    lines.push(`☁️ Cloud tick: ${age}s ago · status \`${hb.status}\``);
+  } else {
+    lines.push(`☁️ Cloud: no heartbeat — run \`/cloud diagnose\``);
+  }
+  lines.push(`🎚 Mode: \`${cfg?.mode || '?'}\``);
+  await send(lines.join('\n'));
+}
+
+const SERVICE_LABELS = {
+  all: 'all services',
+  signal: 'com.jqvier.trading-alerts',
+  signals: 'com.jqvier.trading-alerts',
+  bot: 'com.jqvier.octave-telegram',
+  telegram: 'com.jqvier.octave-telegram',
+  webui: 'com.jqvier.octave-webui',
+  dashboard: 'com.jqvier.octave-webui',
+  watchdog: 'com.jqvier.octave-watchdog',
+};
+
+async function cmdRestartSvc(arg) {
+  const key = (arg || 'all').trim().toLowerCase();
+  if (key === 'all') {
+    await send('🔄 Restarting all services…');
+    for (const label of ['com.jqvier.trading-alerts', 'com.jqvier.octave-telegram', 'com.jqvier.octave-webui', 'com.jqvier.octave-watchdog']) {
+      spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+    }
+    setTimeout(() => cmdHealth(), 5000);
+    return;
+  }
+  const label = SERVICE_LABELS[key];
+  if (!label) {
+    await send(`Unknown service. Try: \`/restart all\`, \`/restart bot\`, \`/restart signals\`, \`/restart webui\`, \`/restart watchdog\``);
+    return;
+  }
+  await send(`🔄 Restarting \`${label}\`…`);
+  spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+  setTimeout(() => cmdHealth(), 4000);
+}
+
+async function cmdCloudDiagnose() {
+  // Hit GitHub Actions API to check recent workflow runs
+  await send('🔍 Diagnosing cloud (this takes ~3s)…');
+  try {
+    const repo = 'octavebot/octave';
+    const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/octave-tick.yml/runs?per_page=5`, {
+      headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'octave-bot' },
+    });
+    if (!res.ok) {
+      await send(`⚠️ GitHub API returned ${res.status}. The repo may be private and need a token, or Actions may not be enabled.\n\nFix: visit https://github.com/${repo}/settings/actions and ensure "Allow all actions" is selected.`);
+      return;
+    }
+    const data = await res.json();
+    const runs = data.workflow_runs || [];
+    if (runs.length === 0) {
+      await send(`📭 No workflow runs found.\n\nLikely cause: GitHub Actions not enabled.\n\n*Fix:*\n1. Go to https://github.com/${repo}/settings/actions\n2. Select "Allow all actions"\n3. Then go to the Actions tab and click "Run workflow" once to bootstrap`);
+      return;
+    }
+    const lines = ['☁️ *Cloud Diagnostic*', '', `Repo: \`${repo}\``, `Workflow: \`octave-tick.yml\``, ''];
+    lines.push('*Last 5 runs:*');
+    for (const r of runs.slice(0, 5)) {
+      const age = Math.round((Date.now() - new Date(r.updated_at).getTime()) / 60000);
+      const icon = r.conclusion === 'success' ? '✅' : r.conclusion === 'failure' ? '❌' : (r.status === 'in_progress' ? '🔄' : '⏸');
+      lines.push(`${icon} \`${r.status}/${r.conclusion || '...'}\` — ${age}m ago — ${r.event}`);
+    }
+    lines.push('');
+    const lastFail = runs.find((r) => r.conclusion === 'failure');
+    if (lastFail) {
+      lines.push(`⚠️ Last failure: ${lastFail.html_url}`);
+      lines.push('Open it in the browser to see which step failed (usually missing secrets).');
+    }
+    lines.push('');
+    lines.push('Common fixes if cloud is stale:');
+    lines.push('• Actions disabled → enable at settings/actions');
+    lines.push('• Missing secret → add TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID at settings/secrets/actions');
+    lines.push('• Cron not firing → workflow_dispatch a test run from the Actions page');
+    await send(lines.join('\n'));
   } catch (err) {
-    console.error('[bot] /backtest threw:', err.message, err.stack);
-    await send(`⚠️ Backtest error: ${err.message}`);
+    await send(`⚠️ Diagnose failed: ${err.message}`);
   }
 }
 
@@ -825,9 +989,11 @@ const COMMANDS = {
   '/mute': cmdMute,
   '/unmute': cmdUnmute,
   '/version': cmdVersion,
-  '/restart': cmdRestart,
+  '/restart': cmdRestartSvc,
   '/shutdown': cmdShutdown,
   '/backtest': cmdBacktest,
+  '/health': cmdHealth,
+  '/diagnose': cmdCloudDiagnose,
 };
 
 async function handleUpdate(update) {
@@ -867,8 +1033,11 @@ let pollErrors = 0;
 
 async function pollLoop() {
   console.log('[bot] poll loop started');
+  // Heartbeat every 10s independent of Telegram traffic
+  const hbTimer = startHeartbeat('bot', 10_000, () => ({ offset, pollErrors }));
   while (!stopped) {
     try {
+      heartbeat('bot', { offset, phase: 'polling' });
       const url = `https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}&timeout=25`;
       const res = await fetch(url);
       if (!res.ok) {
@@ -909,3 +1078,19 @@ export function start() {
 }
 
 export function stop() { stopped = true; }
+
+// Crash-safety: a bug in a command handler must not bring the bot down.
+process.on('uncaughtException', (err) => {
+  console.error('[bot] UNCAUGHT:', err.message, err.stack);
+  // Don't exit — let the LaunchAgent / watchdog decide
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[bot] UNHANDLED:', err?.message || err);
+});
+
+// Standalone-entry: when invoked directly (LaunchAgent), bootstrap and run.
+// When imported from webui/server.js (legacy in-process mode), do nothing —
+// the caller is responsible for invoking start().
+if (import.meta.url === `file://${process.argv[1]}`) {
+  start();
+}

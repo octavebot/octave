@@ -244,10 +244,58 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/shutdown') {
-      // Delegates to the Octave.app launcher's shutdown subcommand.
-      // Detach so the server doesn't get caught up in the shutdown chain.
       const { spawn } = await import('node:child_process');
       spawn('/Users/jqvier/Desktop/Octave.app/Contents/MacOS/octave', ['shutdown'], {
+        detached: true, stdio: 'ignore',
+      }).unref();
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/services') {
+      const hb = await import('../lib/heartbeat.js');
+      const beats = hb.readAllBeats();
+      const services = ['signal-engine', 'bot', 'webui', 'watchdog', 'market-data'];
+      const out = {};
+      for (const s of services) {
+        const b = beats[s];
+        out[s] = {
+          name: s,
+          alive: !!b && !hb.isStale(s, b),
+          beat: b,
+          age_s: b ? Math.round((Date.now() - b.at) / 1000) : null,
+          tolerance_s: Math.round((hb.STALE_TOLERANCE_MS[s] || 60000) / 1000),
+        };
+      }
+      return sendJson(res, 200, { services: out, now_ms: Date.now() });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/restart') {
+      const body = await readBody(req).catch(() => ({}));
+      const VALID = {
+        'signal-engine': 'com.jqvier.trading-alerts',
+        'signals':       'com.jqvier.trading-alerts',
+        'bot':           'com.jqvier.octave-telegram',
+        'telegram':      'com.jqvier.octave-telegram',
+        'webui':         'com.jqvier.octave-webui',
+        'watchdog':      'com.jqvier.octave-watchdog',
+      };
+      const service = String(body?.service || '');
+      const { spawn } = await import('node:child_process');
+      if (service === 'all') {
+        for (const label of Object.values(VALID)) {
+          spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+        }
+        return sendJson(res, 200, { ok: true, restarted: Object.keys(VALID) });
+      }
+      const label = VALID[service];
+      if (!label) return sendJson(res, 400, { error: `unknown service: ${service}` });
+      spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+      return sendJson(res, 200, { ok: true, restarted: label });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/launch-tv') {
+      const { spawn } = await import('node:child_process');
+      spawn('/Applications/TradingView.app/Contents/MacOS/TradingView', ['--remote-debugging-port=9222'], {
         detached: true, stdio: 'ignore',
       }).unref();
       return sendJson(res, 200, { ok: true });
@@ -266,7 +314,17 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[webui] listening on http://127.0.0.1:${PORT}`);
 });
 
-// Start the Telegram bot poller in the same process (cheap, just one long poll)
-import('./bot.js').then((m) => m.start()).catch((err) => {
-  console.error('[webui] bot failed to start:', err.message);
+// Webui no longer runs the Telegram bot in-process. The bot runs as its own
+// LaunchAgent (com.jqvier.octave-telegram) so a bug in command handlers can't
+// take down the dashboard. Heartbeat ourselves so the watchdog sees us alive.
+import('../lib/heartbeat.js').then(({ startHeartbeat }) => {
+  startHeartbeat('webui', 15_000, () => ({ port: PORT }));
+}).catch((err) => console.error('[webui] heartbeat start failed:', err.message));
+
+// Hardening: never let a request handler bug exit the process.
+process.on('uncaughtException', (err) => {
+  console.error('[webui] UNCAUGHT:', err.message, err.stack);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[webui] UNHANDLED:', err?.message || err);
 });

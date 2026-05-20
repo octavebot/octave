@@ -33,6 +33,7 @@ import { evaluateTORI } from './strategies/tori.js';
 import { evaluateWARRIOR } from './strategies/warrior.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
+import { appendTrade, sessionLabel } from './lib/trade_log.js';
 
 export const STRATEGIES = [
   { name: 'USLS',     num: 1,  fn: evaluateUSLS,     label: 'USLS' },
@@ -275,7 +276,7 @@ export async function runBacktest(opts = {}) {
     }
   }
 
-  // Compute summary metrics per strategy
+  // Compute summary metrics per strategy + log every trade to the JSONL
   for (const name of Object.keys(stats)) {
     const s = stats[name];
     const trades = s.trades;
@@ -287,13 +288,115 @@ export async function runBacktest(opts = {}) {
     s.avgR = trades.length ? s.sumR / trades.length : 0;
     s.bestR = trades.length ? Math.max(...trades.map((t) => t.R)) : 0;
     s.worstR = trades.length ? Math.min(...trades.map((t) => t.R)) : 0;
-    // Average confidence and any A+ rate
+
+    // Profit Factor: gross R won / gross |R lost|
+    const grossWin = trades.filter((t) => t.R > 0).reduce((a, b) => a + b.R, 0);
+    const grossLoss = Math.abs(trades.filter((t) => t.R < 0).reduce((a, b) => a + b.R, 0));
+    s.profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
+
+    // Expectancy per trade (already = avgR, but compute formal version for clarity)
+    const avgWin = s.wins > 0 ? grossWin / s.wins : 0;
+    const avgLoss = s.losses > 0 ? -grossLoss / s.losses : 0; // negative
+    s.avgWin = avgWin;
+    s.avgLoss = avgLoss;
+    s.expectancy = s.winRate * avgWin + (1 - s.winRate) * avgLoss;
+
+    // Max drawdown on an equity curve (cumulative R, starting at 0)
+    let equity = 0, peak = 0, maxDD = 0;
+    for (const t of trades) {
+      equity += t.R;
+      if (equity > peak) peak = equity;
+      const dd = peak - equity;
+      if (dd > maxDD) maxDD = dd;
+    }
+    s.maxDrawdownR = maxDD;
+
+    // Sharpe-ish ratio: mean(R) / stddev(R). Annualization would need
+    // trades-per-year context, which we don't have, so report the raw ratio.
+    if (trades.length >= 2) {
+      const mean = s.avgR;
+      const variance = trades.reduce((a, t) => a + Math.pow(t.R - mean, 2), 0) / (trades.length - 1);
+      const sd = Math.sqrt(variance);
+      s.sharpe = sd > 0 ? mean / sd : 0;
+    } else {
+      s.sharpe = 0;
+    }
+
+    // Max consecutive losses
+    let curStreak = 0, maxStreak = 0;
+    for (const t of trades) {
+      if (t.R < 0) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
+      else curStreak = 0;
+    }
+    s.maxConsecutiveLosses = maxStreak;
+
+    // Long vs Short split
+    const longs = trades.filter((t) => t.direction === 'LONG');
+    const shorts = trades.filter((t) => t.direction === 'SHORT');
+    s.longCount = longs.length;
+    s.shortCount = shorts.length;
+    s.longWinRate = longs.length ? longs.filter((t) => t.win).length / longs.length : 0;
+    s.shortWinRate = shorts.length ? shorts.filter((t) => t.win).length / shorts.length : 0;
+    s.longSumR = longs.reduce((a, b) => a + b.R, 0);
+    s.shortSumR = shorts.reduce((a, b) => a + b.R, 0);
+
+    // Session performance — group by NY-local session of the open time
+    s.sessionPerf = {};
+    for (const t of trades) {
+      const sess = sessionLabel(t.openTime || 0);
+      const bucket = s.sessionPerf[sess] || { count: 0, wins: 0, sumR: 0 };
+      bucket.count++;
+      if (t.win) bucket.wins++;
+      bucket.sumR += t.R;
+      s.sessionPerf[sess] = bucket;
+    }
+
+    // Average duration (in minutes — bars × anchor TF minutes)
+    // anchor TF is 5m, so each bar between entry & exit is 5 minutes
+    const ANCHOR_MIN = 5;
+    const durations = trades.map((t) => (t.exitIdx - t.openIdx) * ANCHOR_MIN);
+    s.avgDurationMin = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+
+    // Average / median RR achieved on winners
+    const winRRs = trades.filter((t) => t.win).map((t) => t.R);
+    s.avgWinR = winRRs.length ? winRRs.reduce((a, b) => a + b, 0) / winRRs.length : 0;
+
+    // Net "pips" — gold tick is $0.01, so $1 = 100 pips. Convert R to dollars
+    // using each trade's risk distance, then to pips.
+    const netDollars = trades.reduce((a, t) => a + t.R * (t.risk || 0), 0);
+    s.netDollars = netDollars;
+    s.netPips = Math.round(netDollars * 100); // gold pips ≈ cents
+
+    // Average confidence and A+ subset
     const confs = trades.map((t) => t.confidence || 0);
     s.avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
     s.aPlusCount = trades.filter((t) => (t.confidence || 0) >= 0.85).length;
     s.aPlusWinRate = s.aPlusCount > 0
       ? trades.filter((t) => (t.confidence || 0) >= 0.85 && t.win).length / s.aPlusCount
       : 0;
+
+    // Append each trade to the JSONL log in the requested format
+    for (const t of trades) {
+      appendTrade({
+        strategy: name,
+        pair: 'XAUUSD',
+        direction: t.direction,
+        entry: t.entry,
+        sl: t.stop,
+        tp: t.t1,
+        risk_reward: t.risk > 0 ? Math.abs(t.t1 - t.entry) / t.risk : null,
+        result_R: t.R,
+        result_dollars: t.R * (t.risk || 0),
+        result_pips: Math.round(t.R * (t.risk || 0) * 100),
+        duration_minutes: (t.exitIdx - t.openIdx) * ANCHOR_MIN,
+        session: sessionLabel(t.openTime || 0),
+        outcome: t.win ? 'WIN' : (t.R === 0 ? 'BREAKEVEN' : 'LOSS'),
+        exit_reason: t.exitReason || 'unknown',
+        confidence: t.confidence,
+        opened_at: new Date((t.openTime || 0) * 1000).toISOString(),
+        closed_at: new Date((t.placedTime || t.openTime || 0) * 1000).toISOString(),
+      }, 'backtest');
+    }
   }
 
   return { stats, panesSummary, window };
@@ -400,11 +503,26 @@ export function formatTelegramSummary({ stats, panesSummary, window }, suggestio
     lines.push('');
     lines.push(`#${s.num} *${s.label}*`);
     lines.push('```');
-    lines.push(`Trades  : ${s.tradeCount}   Wins ${s.wins}/${s.tradeCount} (${(s.winRate*100).toFixed(0)}%)`);
-    lines.push(`Sum R   : ${fmtR(s.sumR)}      Avg ${fmtR(s.avgR)}/trade`);
-    lines.push(`Best    : ${fmtR(s.bestR)}     Worst ${fmtR(s.worstR)}`);
+    lines.push(`Trades        ${s.tradeCount}    Wins ${s.wins}/${s.tradeCount} (${(s.winRate*100).toFixed(0)}%)`);
+    lines.push(`Sum R         ${fmtR(s.sumR).padEnd(8)}  Avg ${fmtR(s.avgR)}/trade`);
+    lines.push(`Net dollars   $${s.netDollars.toFixed(2)} (${s.netPips} pips)`);
+    lines.push(`Profit factor ${Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : '∞'}`);
+    lines.push(`Expectancy    ${fmtR(s.expectancy)}/trade`);
+    lines.push(`Avg win       ${fmtR(s.avgWin)}    Avg loss ${fmtR(s.avgLoss)}`);
+    lines.push(`Max DD        ${fmtR(-s.maxDrawdownR)}     Sharpe ${s.sharpe.toFixed(2)}`);
+    lines.push(`Best          ${fmtR(s.bestR).padEnd(8)}  Worst ${fmtR(s.worstR)}`);
+    lines.push(`Max consec L  ${s.maxConsecutiveLosses}`);
+    lines.push(`Avg duration  ${Math.round(s.avgDurationMin)}m`);
+    lines.push(`Long          ${s.longCount} (${(s.longWinRate*100).toFixed(0)}%) ${fmtR(s.longSumR)}`);
+    lines.push(`Short         ${s.shortCount} (${(s.shortWinRate*100).toFixed(0)}%) ${fmtR(s.shortSumR)}`);
+    if (Object.keys(s.sessionPerf || {}).length > 0) {
+      const sessions = Object.entries(s.sessionPerf).map(([sess, b]) =>
+        `${sess} ${b.count}(${Math.round(b.wins/b.count*100)}%)`
+      ).join(' · ');
+      lines.push(`By session    ${sessions}`);
+    }
     if (s.aPlusCount > 0) {
-      lines.push(`A+ subset: ${s.aPlusCount} trades, ${(s.aPlusWinRate*100).toFixed(0)}% wins`);
+      lines.push(`A+ subset     ${s.aPlusCount} trades, ${(s.aPlusWinRate*100).toFixed(0)}% wins`);
     }
     lines.push('```');
   }

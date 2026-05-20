@@ -1,0 +1,18 @@
+[Unit]
+Description=Octave Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+ExecStart=/usr/bin/node --max-old-space-size=512 /home/octave/trading-alerts/src/webui/bot.js
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/octave/.config/trading-alerts/.env
+StandardOutput=append:/home/octave/.octave-logs/telegram.log
+StandardError=append:/home/octave/.octave-logs/telegram.log
+
+[Install]
+WantedBy=multi-user.target

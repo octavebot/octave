@@ -1,0 +1,18 @@
+[Unit]
+Description=Octave Dashboard / HTTP API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+ExecStart=/usr/bin/node --max-old-space-size=256 /home/octave/trading-alerts/src/webui/server.js
+Restart=always
+RestartSec=5
+Environment=OCTAVE_WEBUI_BIND=0.0.0.0
+StandardOutput=append:/home/octave/.octave-logs/webui.log
+StandardError=append:/home/octave/.octave-logs/webui.log
+
+[Install]
+WantedBy=multi-user.target
