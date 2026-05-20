@@ -4,7 +4,7 @@
   "strategies": {
     "USLS": false,
     "ICT-SMC": false,
-    "ALGO-SMC": false,
+    "ALGO-SMC": true,
     "ADAPTIVE": true,
     "ICT": true,
     "SMT": true,
@@ -13,5 +13,5 @@
     "TORI": true,
     "WARRIOR": true
   },
-  "lastUpdated": 1779309441447
+  "lastUpdated": 1779309442194
 }
