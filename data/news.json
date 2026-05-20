@@ -1,0 +1,13 @@
+{
+  "_schema": "Each event: { date: 'YYYY-MM-DD', time: 'HH:MM', tz: 'America/New_York', impact: 'high'|'medium', name: 'string' }. Strategies skip ±30min around 'high' impact items.",
+  "_upgrade_path": "V2 could fetch from forexfactory.com or tradingeconomics.com. For now maintain this file manually with the week's high-impact USD/Gold events: NFP, CPI, PPI, FOMC, Retail Sales, Fed speakers.",
+  "events": [
+    {
+      "date": "2026-05-20",
+      "time": "08:30",
+      "tz": "America/New_York",
+      "impact": "high",
+      "name": "Example: US Retail Sales (remove or update this stub)"
+    }
+  ]
+}

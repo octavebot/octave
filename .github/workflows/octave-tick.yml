@@ -1,0 +1,68 @@
+name: Octave Cloud Tick
+
+# Runs every 5 minutes. GitHub schedules cron triggers with best-effort timing
+# (sometimes delayed during peak load — typical drift is < 30s).
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # allow manual runs from the GitHub UI
+
+# Only one tick can run at a time. If a previous run is still going when
+# the next is due, cancel the new one (better than concurrent state writes).
+concurrency:
+  group: octave-tick
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # needed to commit state/heartbeat back to the repo
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need write access for the bot to push state changes
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Shallow clone is fine
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        # The cloud tick uses only built-in fetch + the in-repo strategy files.
+        # No npm install needed — package.json is local-only dependency on tradingview-mcp.
+        # We install with --omit=optional --ignore-scripts to be fast.
+        run: |
+          if [ -f package.json ]; then
+            npm install --omit=optional --ignore-scripts --no-audit --no-fund || true
+          fi
+
+      - name: Run cloud tick
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
+        run: node src/cloud/tick.js
+
+      - name: Commit state changes (dedup + heartbeat)
+        if: always()
+        run: |
+          git config user.name "octave-bot"
+          git config user.email "octave-bot@users.noreply.github.com"
+          # Only commit our cloud state files; ignore other state
+          git add src/state/cloud-dedup.json src/state/cloud-heartbeat.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no state changes"
+          else
+            git commit -m "octave: cloud tick $(date -u +%FT%TZ)"
+            # Pull-rebase in case another run committed since we started
+            git pull --rebase origin "${GITHUB_REF_NAME}" 2>/dev/null || true
+            git push origin "HEAD:${GITHUB_REF_NAME}" || echo "push failed (will retry next tick)"
+          fi

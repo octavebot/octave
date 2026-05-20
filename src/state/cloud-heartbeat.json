@@ -1,0 +1,22 @@
+{
+  "lastTick": 1779257936629,
+  "status": "ok",
+  "fired": 0,
+  "pane_count": 8,
+  "anchor": {
+    "symbol": "GC=F",
+    "tf": "5",
+    "close": 4476.2998046875,
+    "time": 1779257331
+  },
+  "panes_summary": [
+    "gold|1=130b(yahoo)",
+    "gold|5=847b(yahoo)",
+    "gold|15=284b(yahoo)",
+    "gold|60=505b(yahoo)",
+    "gold|1D=253b(yahoo)",
+    "silver|5=847b(yahoo)",
+    "silver|15=284b(yahoo)",
+    "dxy|1D=253b(yahoo)"
+  ]
+}

@@ -1,0 +1,19 @@
+# Local-only state — these stay on the Mac, not in the repo
+node_modules/
+src/state/dedup.json
+src/state/drawings.json
+src/state/session.json
+*.log
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Cloud state files (cloud-dedup.json, cloud-heartbeat.json) ARE committed
+# by the GitHub Actions workflow — those are the shared dedup source.

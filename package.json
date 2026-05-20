@@ -1,0 +1,17 @@
+{
+  "name": "trading-alerts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "verify": "node src/index.js --verify"
+  },
+  "dependencies": {
+    "tradingview-mcp": "file:../tradingview-mcp"
+  }
+}
