@@ -30,15 +30,20 @@ const INTERVAL = {
   'W': '1wk',
 };
 
-// Sensible default lookback ranges per interval
+// Yahoo intraday lookback caps:
+//   1m: 7 days max
+//   5m / 15m / 30m: 60 days max
+//   60m: 730 days max
+// We pull as much history as Yahoo allows so backtests have meaningful samples.
+// For live alerting the bar set is updated each tick; only the tail matters.
 const RANGE = {
-  '1m': '1d',
-  '5m': '5d',
-  '15m': '5d',
-  '30m': '5d',
-  '60m': '1mo',
-  '4h': '3mo',
-  '1d': '1y',
+  '1m':  '7d',
+  '5m':  '60d',
+  '15m': '60d',
+  '30m': '60d',
+  '60m': '2y',
+  '4h':  '2y',
+  '1d':  '2y',
   '1wk': '5y',
 };
 

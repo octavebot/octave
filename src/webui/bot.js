@@ -238,6 +238,12 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 \`/mute <minutes>\` — pause all alerts (max 1440 = 24h)
 \`/unmute\` — resume alerts
 
+📈 *Backtest*
+\`/backtest\` — 30-day backtest of all enabled strategies
+\`/backtest <num>\` — single strategy (e.g. \`/backtest 7\`)
+\`/backtest <num> <days>\` — custom window (e.g. \`/backtest 5 60\`)
+Auto-runs every Sunday 8pm EST → posted here.
+
 🚨 *System*
 \`/version\` — current git commit
 \`/restart\` — restart local service
@@ -498,6 +504,45 @@ async function cmdRestart() {
     const pid = await servicePid();
     await send(pid ? `✅ Restarted (PID ${pid})` : '⚠️ Restart triggered but new PID not found yet');
   }, 4000);
+}
+
+async function cmdBacktest(arg) {
+  // Parse optional strategy + days arg: /backtest, /backtest 5, /backtest TRINITY, /backtest 7 60
+  const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
+  let strategyArg = null;
+  let days = 30;
+  for (const p of parts) {
+    const asInt = parseInt(p, 10);
+    if (Number.isFinite(asInt) && asInt > 0 && asInt <= 365) {
+      days = asInt;
+    } else {
+      strategyArg = p;
+    }
+  }
+  const strategy = strategyArg ? resolveStrategy(strategyArg) : null;
+  if (strategyArg && !strategy) {
+    await send(`Unknown strategy: \`${strategyArg}\`\n\nUse \`/strategies\` to see names. Examples: \`/backtest 5\`, \`/backtest TRINITY\`, \`/backtest 60\` (days).`);
+    return;
+  }
+
+  await send(`⏳ Running ${days}-day backtest${strategy ? ` for *${strategy}*` : ' for all enabled strategies'}…\n_This usually takes ~30-90 seconds._`);
+  try {
+    // Lazy import to avoid loading the strategy modules until needed
+    const bt = await import('../backtest.js');
+    const opts = { days };
+    if (strategy) opts.strategies = [strategy];
+    const result = await bt.runBacktest(opts);
+    if (result.error) {
+      await send(`⚠️ Backtest failed: \`${result.error}\``);
+      return;
+    }
+    const suggestions = bt.suggestionsFor(result.stats);
+    const text = bt.formatTelegramSummary(result, suggestions);
+    await send(text);
+  } catch (err) {
+    console.error('[bot] /backtest threw:', err.message, err.stack);
+    await send(`⚠️ Backtest error: ${err.message}`);
+  }
 }
 
 async function cmdShutdown(arg) {
@@ -782,6 +827,7 @@ const COMMANDS = {
   '/version': cmdVersion,
   '/restart': cmdRestart,
   '/shutdown': cmdShutdown,
+  '/backtest': cmdBacktest,
 };
 
 async function handleUpdate(update) {
