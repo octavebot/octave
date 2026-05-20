@@ -21,7 +21,8 @@
  * @property {Object} [entryPlan]           on 'triggered' setups
  */
 
-import { snapshotAllPanes, indexPanesBySymTf } from './lib/panes.js';
+// TV CDP-based panes module is no longer required for data path — kept
+// imported only because the drawings module depends on it.
 // All 7 strategies imported. Each is gated by runtime-config.strategies[key]
 // at invocation time, so the user can toggle any on/off via Octave.app.
 import { evaluateUSLS } from './strategies/usls.js';
@@ -34,39 +35,32 @@ import { evaluateTrinity } from './strategies/trinity.js';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
-import { supplement as supplementWithCloudData } from './lib/cloud_data_supplement.js';
+import { fetchAllPanes, supplement as supplementWithCloudData } from './lib/cloud_data_supplement.js';
 
 /** Build the unified context object all strategies consume. */
 async function buildCtx() {
-  const panes = await snapshotAllPanes(300);
-  // Build symbolic lookup: "gold|<res>" -> pane and "dxy|<res>" -> pane.
-  // Both micro (MGC1!) and standard (GC1!) gold are accepted.
-  const panesByTf = new Map();
-  for (const p of panes) {
-    if (p.error || !p.bars) continue;
-    const sym = String(p.symbol || '').toUpperCase();
-    const res = String(p.resolution);
-    if (/GC1|MGC1|XAU|GOLD|GCJ|GCM|GCN|GCQ|GCV|GCZ|GCG/i.test(sym)) {
-      panesByTf.set(`gold|${res}`, p);
-    }
-    if (/DXY|US Dollar Index|TVC:DXY|USDOLLAR/i.test(sym)) {
-      panesByTf.set(`dxy|${res}`, p);
-    }
-    if (/XAG|SI1!|^SI$|SILVER|SIL_|MSI1/i.test(sym)) {
-      panesByTf.set(`silver|${res}`, p);
-    }
+  // CLOUD-ONLY DATA PATH (per user directive: bot must always use cloud data).
+  // Pulls full pane set from Yahoo Finance (with OANDA fallback). This means
+  // the bot sees the FULL multi-TF picture (1m/5m/15m/60m/1D gold, 5m/15m
+  // silver, 1D DXY) regardless of what — if anything — is loaded on the
+  // user's TradingView chart. Cached 60s so the 3s detector loop is cheap.
+  let panesByTf;
+  try {
+    panesByTf = await fetchAllPanes();
+  } catch (err) {
+    log.throttled('cloud-data-fail', 30000, () =>
+      log.warn('cloud data fetch failed', { err: err.message })
+    );
+    panesByTf = new Map();
   }
 
-  // Supplement missing panes with Yahoo-fetched data (cached 5min).
-  // This lets strategies like SMT and Trinity work even if the user only has
-  // a single pane open in TradingView.
-  try {
-    await supplementWithCloudData(panesByTf);
-  } catch (err) {
-    log.throttled('supplement-fail', 5 * 60 * 1000, () =>
-      log.warn('cloud data supplement failed', { err: err.message })
-    );
+  if (panesByTf.size === 0) {
+    throw new Error('No cloud data available (Yahoo + OANDA both empty)');
   }
+
+  // Note: TradingView Desktop is NOT consulted for bar data — Yahoo is the
+  // authoritative source. TV is still used by the drawings module to render
+  // levels on the user's active chart, but that path is independent of ctx.
 
   // Pick anchor: prefer execution TFs (5m / 1m / 15m), fall back to ANY gold pane.
   let anchor =
@@ -84,7 +78,7 @@ async function buildCtx() {
     }
   }
   if (!anchor) {
-    throw new Error('No gold pane found in TradingView layout');
+    throw new Error('No gold pane found in cloud data response');
   }
 
   const lastBar = anchor.bars[anchor.bars.length - 1];
@@ -95,11 +89,12 @@ async function buildCtx() {
     ts,
     barTime: lastBar.time,
     lastClose: lastBar.close,
-    panes,
+    panes: [...panesByTf.values()],
     panesByTf,
     anchorSymbol: anchor.symbol,
     anchorResolution: anchor.resolution,
     dateKey: np.dateKey,
+    dataSource: 'cloud',
   };
 }
 
