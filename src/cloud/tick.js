@@ -155,7 +155,35 @@ function formatAlert(r, ctx) {
   return lines.join('\n');
 }
 
-async function sendTelegram(text, token, chatId) {
+async function sendTelegram(text, token, chatId, photoUrl = null) {
+  // If we have a chart image URL, send as photo with text as caption; else
+  // plain message. Same caption-length protection as the local alerter.
+  if (photoUrl) {
+    const fits = text.length <= 1024;
+    const caption = fits ? text : (text.slice(0, 980) + '…\n_(full detail below)_');
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId, photo: photoUrl, caption, parse_mode: 'Markdown',
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.error(`telegram sendPhoto non-2xx: ${r.status} ${body} — falling back to text`);
+      // Fall through to plain sendMessage below
+    } else {
+      if (!fits) {
+        // Follow-up with full text
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', disable_web_page_preview: true }),
+        });
+      }
+      return true;
+    }
+  }
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -277,7 +305,18 @@ async function main() {
     }
 
     const text = formatAlert(r, ctx);
-    const ok = await sendTelegram(text, token, chatId);
+    // Try to build a chart image — cloud tick is offline-tolerant; on failure
+    // (which is normal in GitHub Actions if quickchart is slow) we fall back
+    // to text-only via the sendTelegram helper's photoUrl=null path.
+    let photoUrl = null;
+    try {
+      const cfg = (await import('../lib/runtime_config.js')).get();
+      if (cfg?.alertChartImages !== false) {
+        const { buildAlertChartUrl } = await import('../lib/chart_image.js');
+        photoUrl = await buildAlertChartUrl(r);
+      }
+    } catch (err) { console.error('[cloud-tick] chart image failed:', err.message); }
+    const ok = await sendTelegram(text, token, chatId, photoUrl);
     if (ok) {
       fired++;
       dedup.entries[key].telegram = 'sent';

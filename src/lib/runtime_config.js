@@ -45,6 +45,7 @@ const DEFAULTS = Object.freeze({
     WARRIOR: true,
   },
   mute: { untilMs: 0, reason: null },
+  alertChartImages: true,
   lastUpdated: 0,
 });
 
@@ -74,6 +75,7 @@ export function load() {
       mode: ['auto', 'cloud', 'local'].includes(raw.mode) ? raw.mode : DEFAULTS.mode,
       strategies: { ...DEFAULTS.strategies, ...(raw.strategies || {}) },
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
+      alertChartImages: raw.alertChartImages !== false, // default true
       lastUpdated: raw.lastUpdated || 0,
     };
   } catch {

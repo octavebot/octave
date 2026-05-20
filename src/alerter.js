@@ -1,9 +1,13 @@
 import { config } from './config.js';
 import { log } from './logger.js';
+import { buildAlertChartUrl } from './lib/chart_image.js';
+import { get as getRuntimeConfig } from './lib/runtime_config.js';
 
 const API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+const API_PHOTO = `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`;
 const MIN_GAP_MS = 1000;
 const BAR = '══════════════════';
+const TG_CAPTION_MAX = 1024; // Telegram's caption limit
 let lastSendAt = 0;
 
 const STATUS_GLYPH = {
@@ -21,6 +25,9 @@ const STRATEGY_NUM = {
   ICT: '#5',
   SMT: '#6',
   TRINITY: '#7',
+  AMN: '#8',
+  TORI: '#9',
+  WARRIOR: '#10',
 };
 
 function strategyNum(name) {
@@ -59,6 +66,42 @@ async function postRaw(text) {
     const body = await res.text().catch(() => '');
     log.warn('telegram non-2xx', { status: res.status, body });
     return false;
+  }
+  return true;
+}
+
+/**
+ * Post a photo with a caption. If the caption exceeds Telegram's 1024-char
+ * cap we send the photo with a short caption and then post the full text
+ * as a follow-up message.
+ */
+async function postPhoto(photoUrl, caption) {
+  const gap = Date.now() - lastSendAt;
+  if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
+  lastSendAt = Date.now();
+
+  const fullText = caption || '';
+  const fitsInCaption = fullText.length <= TG_CAPTION_MAX;
+  const shortCaption = fitsInCaption ? fullText : (fullText.slice(0, TG_CAPTION_MAX - 40) + '…\n_(full detail below)_');
+
+  const res = await fetch(API_PHOTO, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: config.telegramChatId,
+      photo: photoUrl,
+      caption: shortCaption,
+      parse_mode: 'Markdown',
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    log.warn('telegram sendPhoto non-2xx', { status: res.status, body });
+    return false;
+  }
+  if (!fitsInCaption) {
+    // Follow up with the full text as a separate message
+    await postRaw(fullText);
   }
   return true;
 }
@@ -214,5 +257,21 @@ export async function send(r, ctx) {
   lines.push('');
   lines.push(BAR);
 
-  return postRaw(lines.join('\n'));
+  const text = lines.join('\n');
+
+  // Chart image path: if alertChartImages is enabled in runtime config (default
+  // ON), generate a QuickChart URL with entry/SL/TP overlaid on recent bars
+  // and send via sendPhoto. Falls back to text-only sendMessage on any failure.
+  const cfg = getRuntimeConfig();
+  if (cfg?.alertChartImages !== false) {
+    const photoUrl = await buildAlertChartUrl(r);
+    if (photoUrl) {
+      const ok = await postPhoto(photoUrl, text);
+      if (ok) return true;
+      // sendPhoto failed (network glitch or Telegram couldn't fetch the image)
+      // — fall through to text-only send so the user still gets the alert
+      log.warn('sendPhoto failed, falling back to text', {});
+    }
+  }
+  return postRaw(text);
 }
