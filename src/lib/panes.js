@@ -6,7 +6,25 @@
  * Bars are { time, open, high, low, close, volume }, ascending.
  */
 
-import { evaluate } from 'tradingview-mcp/connection';
+// Lazy-load tradingview-mcp so this module imports cleanly on the VPS where
+// the package isn't installed. The exported functions return empty/null when
+// the dependency is missing — callers must already tolerate empty pane sets.
+let _evaluate = null;
+let _loadAttempted = false;
+async function evaluate(...args) {
+  if (!_loadAttempted) {
+    _loadAttempted = true;
+    try {
+      const m = await import('tradingview-mcp/connection');
+      _evaluate = m.evaluate;
+    } catch (err) {
+      console.warn('[panes] tradingview-mcp not installed — TV CDP reads disabled');
+      _evaluate = null;
+    }
+  }
+  if (!_evaluate) return null;
+  return _evaluate(...args);
+}
 
 const SCRIPT = (limit) => `
   (function() {
@@ -62,8 +80,9 @@ const SCRIPT = (limit) => `
 export async function snapshotAllPanes(barLimit = 300) {
   const limit = Math.max(50, Math.min(800, barLimit));
   const out = await evaluate(SCRIPT(limit));
-  if (!out || out.error) {
-    throw new Error(`pane snapshot failed: ${out?.error || 'no result'}`);
+  if (!out) return []; // tradingview-mcp not installed (e.g., VPS) → no panes
+  if (out.error) {
+    throw new Error(`pane snapshot failed: ${out.error}`);
   }
   return out.panes;
 }

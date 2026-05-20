@@ -16,8 +16,28 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { drawing } from 'tradingview-mcp/core';
 import { log } from '../logger.js';
+
+// Lazy-load tradingview-mcp so this module imports cleanly on the VPS where
+// the package isn't installed. Drawings are a no-op on VPS (no TradingView
+// Desktop to draw on). Alerts still fire via Telegram + dashboard.
+let _drawing = null;
+let _loadAttempted = false;
+async function getDrawing() {
+  if (_loadAttempted) return _drawing;
+  _loadAttempted = true;
+  try {
+    const m = await import('tradingview-mcp/core');
+    _drawing = m.drawing;
+  } catch {
+    _drawing = null;
+  }
+  return _drawing;
+}
+const drawing = {
+  async drawShape(spec) { const d = await getDrawing(); if (!d) return null; return d.drawShape(spec); },
+  async removeOne(args) { const d = await getDrawing(); if (!d) return null; return d.removeOne(args); },
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
