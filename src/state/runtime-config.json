@@ -4,11 +4,11 @@
   "strategies": {
     "USLS": false,
     "ICT-SMC": false,
-    "ALGO-SMC": false,
+    "ALGO-SMC": true,
     "ADAPTIVE": true,
     "ICT": true,
     "SMT": true,
     "TRINITY": true
   },
-  "lastUpdated": 1779283184210
+  "lastUpdated": 1779283184876
 }
