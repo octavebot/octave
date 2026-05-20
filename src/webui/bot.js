@@ -606,6 +606,45 @@ async function cmdBacktest(arg) {
   });
 }
 
+async function cmdDashboard() {
+  // Reads the Cloudflare Tunnel URL stashed by scripts/setup-cloudflare-tunnel.sh
+  // If running locally without a tunnel, falls back to localhost.
+  const TUNNEL_PATHS = [
+    '/home/octave/.octave-tunnel-url',
+    process.env.HOME + '/.octave-tunnel-url',
+  ];
+  let url = null;
+  for (const p of TUNNEL_PATHS) {
+    try {
+      if (existsSync(p)) {
+        const u = readFileSync(p, 'utf8').trim();
+        if (u.startsWith('https://')) { url = u; break; }
+      }
+    } catch {}
+  }
+  if (!url) {
+    await send([
+      '🌐 *Dashboard*',
+      '',
+      'No public HTTPS URL configured yet.',
+      '',
+      'For local Mac only: open `http://127.0.0.1:7345/`',
+      '',
+      'To enable public access:',
+      '1. Deploy to a VPS (see `docs/VPS-DEPLOY.md`)',
+      '2. Run `sudo bash scripts/setup-cloudflare-tunnel.sh`',
+      '3. The URL appears here automatically',
+    ].join('\n'));
+    return;
+  }
+  // Build inline keyboard with a web_app button — opens inside Telegram
+  const keyboard = [
+    [{ text: '🎵 Open Octave Dashboard', web_app: { url } }],
+    [{ text: 'Open in browser', url }],
+  ];
+  await send(`🌐 *Octave Dashboard*\n\n\`${url}\`\n\nTap below to open. The "Open Octave Dashboard" button opens inside Telegram (mobile-friendly).`, { keyboard });
+}
+
 async function cmdHealth() {
   const beats = readAllBeats();
   const services = ['signal-engine', 'bot', 'webui', 'watchdog', 'market-data'];
@@ -994,6 +1033,8 @@ const COMMANDS = {
   '/backtest': cmdBacktest,
   '/health': cmdHealth,
   '/diagnose': cmdCloudDiagnose,
+  '/dashboard': cmdDashboard,
+  '/web': cmdDashboard,
 };
 
 async function handleUpdate(update) {
