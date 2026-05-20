@@ -7,12 +7,8 @@
     "ALGO-SMC": true,
     "ADAPTIVE": true,
     "ICT": true,
-    "SMT": true,
+    "SMT": false,
     "TRINITY": true
   },
-  "lastUpdated": 1779287966707,
-  "mute": {
-    "untilMs": 0,
-    "reason": null
-  }
+  "lastUpdated": 1779293778711
 }
