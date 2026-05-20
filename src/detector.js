@@ -22,17 +22,19 @@
  */
 
 import { snapshotAllPanes, indexPanesBySymTf } from './lib/panes.js';
-// Strategies #1-#4 are deactivated per user request (replaced by #5/#6).
-// Re-enable by uncommenting the import + the corresponding push() below.
-// import { evaluateUSLS } from './strategies/usls.js';
-// import { evaluateICTSMC } from './strategies/ict_smc.js';
-// import { evaluateAlgoSMC } from './strategies/algo_smc.js';
-// import { evaluateAdaptive } from './strategies/adaptive.js';
+// All 7 strategies imported. Each is gated by runtime-config.strategies[key]
+// at invocation time, so the user can toggle any on/off via Octave.app.
+import { evaluateUSLS } from './strategies/usls.js';
+import { evaluateICTSMC } from './strategies/ict_smc.js';
+import { evaluateAlgoSMC } from './strategies/algo_smc.js';
+import { evaluateAdaptive } from './strategies/adaptive.js';
 import { evaluateICTM15 } from './strategies/ict_m15.js';
 import { evaluateSMTM15 } from './strategies/smt_m15.js';
 import { evaluateTrinity } from './strategies/trinity.js';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
+import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
+import { supplement as supplementWithCloudData } from './lib/cloud_data_supplement.js';
 
 /** Build the unified context object all strategies consume. */
 async function buildCtx() {
@@ -53,6 +55,17 @@ async function buildCtx() {
     if (/XAG|SI1!|^SI$|SILVER|SIL_|MSI1/i.test(sym)) {
       panesByTf.set(`silver|${res}`, p);
     }
+  }
+
+  // Supplement missing panes with Yahoo-fetched data (cached 5min).
+  // This lets strategies like SMT and Trinity work even if the user only has
+  // a single pane open in TradingView.
+  try {
+    await supplementWithCloudData(panesByTf);
+  } catch (err) {
+    log.throttled('supplement-fail', 5 * 60 * 1000, () =>
+      log.warn('cloud data supplement failed', { err: err.message })
+    );
   }
 
   // Pick anchor: prefer execution TFs (5m / 1m / 15m), fall back to ANY gold pane.
@@ -99,27 +112,26 @@ export async function detect() {
     return [];
   }
 
-  const results = [];
-  // Strategies #1-#4 deactivated per user request. Uncomment the import + push to re-enable.
-  // try { results.push(...evaluateUSLS(ctx)); } catch (err) { log.error('USLS threw', { err: err.message, stack: err.stack }); }
-  // try { results.push(...evaluateICTSMC(ctx)); } catch (err) { log.error('ICT-SMC threw', { err: err.message, stack: err.stack }); }
-  // try { results.push(...evaluateAlgoSMC(ctx)); } catch (err) { log.error('ALGO-SMC threw', { err: err.message, stack: err.stack }); }
-  // try { results.push(...evaluateAdaptive(ctx)); } catch (err) { log.error('ADAPTIVE threw', { err: err.message, stack: err.stack }); }
+  // Refresh runtime config each tick so Octave-toggled changes take effect immediately
+  refreshConfig();
 
-  try {
-    results.push(...evaluateICTM15(ctx));
-  } catch (err) {
-    log.error('ICT-M15 evaluator threw', { err: err.message, stack: err.stack });
-  }
-  try {
-    results.push(...evaluateSMTM15(ctx));
-  } catch (err) {
-    log.error('SMT-M15 evaluator threw', { err: err.message, stack: err.stack });
-  }
-  try {
-    results.push(...evaluateTrinity(ctx));
-  } catch (err) {
-    log.error('TRINITY evaluator threw', { err: err.message, stack: err.stack });
+  const results = [];
+  const STRATEGY_TABLE = [
+    ['USLS',      evaluateUSLS],
+    ['ICT-SMC',   evaluateICTSMC],
+    ['ALGO-SMC',  evaluateAlgoSMC],
+    ['ADAPTIVE',  evaluateAdaptive],
+    ['ICT',       evaluateICTM15],
+    ['SMT',       evaluateSMTM15],
+    ['TRINITY',   evaluateTrinity],
+  ];
+  for (const [name, fn] of STRATEGY_TABLE) {
+    if (!isStrategyEnabled(name)) continue;
+    try {
+      results.push(...fn(ctx));
+    } catch (err) {
+      log.error(`${name} evaluator threw`, { err: err.message, stack: err.stack });
+    }
   }
 
   // Attach context for the alerter

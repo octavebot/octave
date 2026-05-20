@@ -6,6 +6,7 @@ import * as dedup from './dedup.js';
 import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
 import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
+import { localTelegramBehavior, refresh as refreshConfig, get as getConfig } from './lib/runtime_config.js';
 
 let stopping = false;
 export function stop() { stopping = true; }
@@ -53,14 +54,19 @@ async function tick() {
     return (b.confidence || 0) - (a.confidence || 0);
   });
 
-  // If the cloud tick is alive (recent heartbeat in the repo), cloud is the
-  // source of truth for Telegram. Local stays silent on telegram but still
-  // draws on TradingView so the user sees setups visually.
+  // Refresh config so mode/strategy toggles take effect immediately
+  refreshConfig();
+  const cfg = getConfig();
+  // Compute effective Telegram behavior:
+  //   mode=auto  → cloud-active suppresses; cloud-stale sends (current behavior)
+  //   mode=cloud → always suppress (cloud is forced primary)
+  //   mode=local → always send (cloud is forced silent)
   const cloud = cloudStatus();
-  const suppressTelegram = cloud.alive;
+  const behavior = localTelegramBehavior({ cloudAlive: cloud.alive });
+  const suppressTelegram = behavior === 'suppress';
   if (suppressTelegram) {
-    log.throttled('cloud-active', 5 * 60 * 1000, () =>
-      log.info('cloud active — local suppressing telegram, drawings only', { cloudAgeMs: cloud.ageMs })
+    log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
+      log.info('telegram suppressed', { mode: cfg.mode, cloudAlive: cloud.alive, cloudAgeMs: cloud.ageMs })
     );
   }
 

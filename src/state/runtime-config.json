@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mode": "auto",
+  "strategies": {
+    "USLS": false,
+    "ICT-SMC": false,
+    "ALGO-SMC": false,
+    "ADAPTIVE": false,
+    "ICT": true,
+    "SMT": true,
+    "TRINITY": true
+  },
+  "lastUpdated": 0
+}

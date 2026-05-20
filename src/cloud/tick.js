@@ -27,9 +27,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildCloudCtx } from './data_source.js';
+import { evaluateUSLS } from '../strategies/usls.js';
+import { evaluateICTSMC } from '../strategies/ict_smc.js';
+import { evaluateAlgoSMC } from '../strategies/algo_smc.js';
+import { evaluateAdaptive } from '../strategies/adaptive.js';
 import { evaluateICTM15 } from '../strategies/ict_m15.js';
 import { evaluateSMTM15 } from '../strategies/smt_m15.js';
 import { evaluateTrinity } from '../strategies/trinity.js';
+import { refresh as refreshConfig, isStrategyEnabled, cloudShouldFire } from '../lib/runtime_config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -168,16 +173,41 @@ async function main() {
   console.log(`[cloud-tick] panes: ${panesSummary.join(', ')}`);
   console.log(`[cloud-tick] anchor: ${ctx.anchorSymbol} ${ctx.anchorResolution}m lastClose=${ctx.lastClose}`);
 
-  // Run active strategies. Wrapped so one strategy throwing doesn't kill the others.
+  // Refresh runtime config and respect mode/strategy toggles
+  refreshConfig();
+
+  // Mode 'local' means cloud should not fire alerts (user wants Mac-only mode).
+  // We still write the heartbeat (with status='skipped-mode-local') so local knows
+  // cloud is online but intentionally silent.
+  if (!cloudShouldFire()) {
+    console.log('[cloud-tick] mode=local — skipping alert dispatch (still writing heartbeat)');
+    writeAtomic(HEARTBEAT_FILE, {
+      lastTick: Date.now(),
+      status: 'skipped-mode-local',
+      fired: 0,
+      pane_count: ctx.panesByTf.size,
+      anchor: { symbol: ctx.anchorSymbol, tf: ctx.anchorResolution, close: ctx.lastClose, time: ctx.barTime },
+      panes_summary: panesSummary,
+    });
+    console.log('[cloud-tick] done (mode=local).');
+    return;
+  }
+
+  // Run enabled strategies. Each call wrapped so one strategy throwing doesn't kill others.
   const results = [];
-  for (const [name, fn] of [
+  const STRATEGY_TABLE = [
+    ['USLS', evaluateUSLS],
+    ['ICT-SMC', evaluateICTSMC],
+    ['ALGO-SMC', evaluateAlgoSMC],
+    ['ADAPTIVE', evaluateAdaptive],
     ['ICT', evaluateICTM15],
     ['SMT', evaluateSMTM15],
     ['TRINITY', evaluateTrinity],
-  ]) {
+  ];
+  for (const [name, fn] of STRATEGY_TABLE) {
+    if (!isStrategyEnabled(name)) continue;
     try {
-      const r = fn(ctx) || [];
-      results.push(...r);
+      results.push(...(fn(ctx) || []));
     } catch (err) {
       console.error(`[cloud-tick] ${name} threw:`, err.message);
     }
