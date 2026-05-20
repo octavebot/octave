@@ -6,9 +6,9 @@
     "ICT-SMC": true,
     "ALGO-SMC": true,
     "ADAPTIVE": true,
-    "ICT": false,
+    "ICT": true,
     "SMT": false,
     "TRINITY": false
   },
-  "lastUpdated": 1779293786074
+  "lastUpdated": 1779293791036
 }
