@@ -2,7 +2,7 @@
   "version": 1,
   "mode": "local",
   "strategies": {
-    "USLS": false,
+    "USLS": true,
     "ICT-SMC": true,
     "ALGO-SMC": true,
     "ADAPTIVE": true,
@@ -13,5 +13,5 @@
     "TORI": true,
     "WARRIOR": true
   },
-  "lastUpdated": 1779309442578
+  "lastUpdated": 1779309442966
 }
