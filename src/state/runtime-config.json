@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mode": "cloud",
+  "mode": "local",
   "strategies": {
     "USLS": false,
     "ICT-SMC": false,
@@ -13,5 +13,5 @@
     "TORI": true,
     "WARRIOR": true
   },
-  "lastUpdated": 1779302050693
+  "lastUpdated": 1779308851464
 }
