@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Octave Control Panel</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-elev: #131720;
+    --bg-card: #1a1f2c;
+    --border: #232a3a;
+    --text: #e7eaf3;
+    --text-dim: #8b94aa;
+    --text-faint: #5b667d;
+    --accent: #ffd23f;
+    --accent-soft: #4a3e10;
+    --green: #2ecc71;
+    --red: #ff5c6c;
+    --orange: #ffa726;
+    --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  body {
+    background-image: radial-gradient(circle at 20% 0%, #1c2438 0%, var(--bg) 50%);
+    padding: 24px;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 28px;
+  }
+  .logo {
+    width: 56px; height: 56px;
+    background: radial-gradient(circle, var(--accent) 0%, #cf9e2e 100%);
+    border-radius: 50%;
+    display: grid; place-items: center;
+    color: #1a1a1a;
+    font-weight: 700; font-size: 28px;
+    box-shadow: 0 0 20px rgba(255,210,63,0.4);
+  }
+  h1 {
+    font-size: 28px; margin: 0; letter-spacing: -0.02em;
+  }
+  .subtitle {
+    color: var(--text-dim); font-size: 13px; margin-top: 4px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 0 0 16px;
+    font-weight: 600;
+  }
+  /* Mode segmented control */
+  .segmented {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: var(--bg-elev);
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid var(--border);
+  }
+  .segmented button {
+    background: transparent;
+    border: 0;
+    color: var(--text-dim);
+    padding: 12px 8px;
+    border-radius: 7px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .segmented button:hover { color: var(--text); }
+  .segmented button.active {
+    background: var(--accent);
+    color: #1a1a1a;
+    font-weight: 700;
+  }
+  .seg-desc {
+    color: var(--text-faint); font-size: 12px;
+    margin-top: 8px; padding: 0 4px;
+  }
+  /* Status grid */
+  .status-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .label {
+    color: var(--text-faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+  .stat .value {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .dot.green  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.orange { background: var(--orange); }
+  .dot.red    { background: var(--red); }
+  .dot.gray   { background: var(--text-faint); }
+
+  /* Strategy toggles */
+  .strategy {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .strategy:last-child { border-bottom: 0; }
+  .strategy .info { flex: 1; }
+  .strategy .name {
+    font-size: 15px; font-weight: 600;
+  }
+  .strategy .desc {
+    font-size: 12px; color: var(--text-faint); margin-top: 2px;
+  }
+  .strategy .num {
+    display: inline-block;
+    background: var(--bg-elev);
+    color: var(--accent);
+    font-size: 11px; font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 5px;
+    margin-right: 10px;
+    border: 1px solid var(--border);
+  }
+  /* Toggle switch */
+  .toggle {
+    position: relative;
+    width: 50px; height: 28px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: background 180ms;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 22px; height: 22px;
+    background: var(--text-faint);
+    border-radius: 50%;
+    transition: transform 180ms, background 180ms;
+  }
+  .toggle.on {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .toggle.on::after {
+    transform: translateX(22px);
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(255,210,63,0.6);
+  }
+  .toggle.saving { opacity: 0.5; pointer-events: none; }
+
+  /* Action buttons row */
+  .actions {
+    display: flex; gap: 10px; margin-top: 8px;
+  }
+  .btn {
+    flex: 1;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+  }
+  .btn:hover { background: var(--bg-card); border-color: var(--text-faint); }
+  .btn.danger { color: var(--red); border-color: rgba(255,92,108,0.3); }
+  .btn.danger:hover { background: rgba(255,92,108,0.1); }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 200ms, transform 200ms;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, -8px); }
+
+  footer {
+    text-align: center; color: var(--text-faint); font-size: 11px;
+    margin-top: 24px;
+  }
+  a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🎵</div>
+    <div>
+      <h1>Octave</h1>
+      <div class="subtitle">Gold trading alerts · local + cloud autonomous</div>
+    </div>
+  </header>
+
+  <!-- MODE -->
+  <div class="card">
+    <h2>Alert Source Mode</h2>
+    <div class="segmented" id="mode-seg">
+      <button data-mode="auto">Auto</button>
+      <button data-mode="cloud">Cloud only</button>
+      <button data-mode="local">Local only</button>
+    </div>
+    <div class="seg-desc" id="mode-desc">—</div>
+  </div>
+
+  <!-- STATUS -->
+  <div class="card">
+    <h2>System Status</h2>
+    <div class="status-grid">
+      <div class="stat">
+        <div class="label">Cloud (GitHub Actions)</div>
+        <div class="value" id="cloud-status"><span class="dot gray"></span>Loading…</div>
+      </div>
+      <div class="stat">
+        <div class="label">Local Service</div>
+        <div class="value" id="local-status"><span class="dot gray"></span>Loading…</div>
+      </div>
+      <div class="stat">
+        <div class="label">TradingView (CDP)</div>
+        <div class="value" id="tv-status"><span class="dot gray"></span>Loading…</div>
+      </div>
+      <div class="stat">
+        <div class="label">Caffeinate (no-sleep)</div>
+        <div class="value" id="caff-status"><span class="dot gray"></span>Loading…</div>
+      </div>
+      <div class="stat">
+        <div class="label">Current Session</div>
+        <div class="value" id="session-status">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">Last Alert</div>
+        <div class="value" id="last-alert">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STRATEGIES -->
+  <div class="card">
+    <h2>Strategies</h2>
+    <div id="strategies"></div>
+  </div>
+
+  <!-- ACTIONS -->
+  <div class="card">
+    <h2>Actions</h2>
+    <div class="actions">
+      <button class="btn" onclick="window.open('https://github.com/octavebot/octave/actions','_blank')">📜 GitHub Actions</button>
+      <button class="btn" onclick="openLogs()">📂 Logs</button>
+      <button class="btn danger" onclick="confirmShutdown()">⏸ Shut Down All</button>
+    </div>
+  </div>
+
+  <footer>
+    Auto-refresh every 5s · Config syncs to <a href="https://github.com/octavebot/octave" target="_blank">octavebot/octave</a> · Loopback only (127.0.0.1)
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const STRATEGY_META = [
+  { key: 'USLS',      num: '#1', name: 'USLS',            desc: 'Universal Session Liquidity Sweep' },
+  { key: 'ICT-SMC',   num: '#2', name: 'ICT/SMC',         desc: 'NY-AM killzone, judas + MSS + PD array' },
+  { key: 'ALGO-SMC',  num: '#3', name: 'ALGO/SMC',        desc: '5-state HTF sweep + Silver SMT + 71% Fib' },
+  { key: 'ADAPTIVE',  num: '#4', name: 'Adaptive Matrix', desc: 'Regime-aware (ADX) trend/range/breakout' },
+  { key: 'ICT',       num: '#5', name: 'ICT',             desc: 'M15 killzone sweep + MSS + FVG' },
+  { key: 'SMT',       num: '#6', name: 'SMT',             desc: 'M15 Gold/Silver cross-asset divergence' },
+  { key: 'TRINITY',   num: '#7', name: 'Trinity',         desc: 'HTF gap → SMT → LTF inverse FVG (9:30-11 EST)' },
+];
+
+const MODE_DESC = {
+  auto:  'Cloud is primary when alive; local takes over on Mac when cloud is stale (recommended).',
+  cloud: 'Only cloud sends Telegram. Local stays silent (still draws on TradingView).',
+  local: 'Only local sends Telegram. Cloud tick exits early. Mac must stay on.',
+};
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function fetchState() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    const s = await r.json();
+    renderState(s);
+  } catch (e) {
+    console.error('fetch state failed', e);
+  }
+}
+
+async function postConfig(payload) {
+  const r = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('save failed');
+  return r.json();
+}
+
+function fmtAge(ms) {
+  if (!ms || ms < 0) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm ago';
+  return Math.round(m / 60) + 'h ago';
+}
+
+function renderState(s) {
+  // Mode
+  for (const btn of document.querySelectorAll('#mode-seg button')) {
+    btn.classList.toggle('active', btn.dataset.mode === s.config.mode);
+  }
+  document.getElementById('mode-desc').textContent = MODE_DESC[s.config.mode] || '';
+
+  // Cloud
+  const cloudEl = document.getElementById('cloud-status');
+  if (s.cloud.alive) {
+    cloudEl.innerHTML = `<span class="dot green"></span>Online · ${fmtAge(s.cloud.ageMs)}`;
+  } else if (s.cloud.raw) {
+    cloudEl.innerHTML = `<span class="dot orange"></span>Stale · ${fmtAge(s.cloud.ageMs)}`;
+  } else {
+    cloudEl.innerHTML = `<span class="dot red"></span>No heartbeat`;
+  }
+
+  // Local service
+  const localEl = document.getElementById('local-status');
+  if (s.service.pid) {
+    localEl.innerHTML = `<span class="dot green"></span>PID ${s.service.pid} · ${s.service.uptime || '?'}`;
+  } else {
+    localEl.innerHTML = `<span class="dot red"></span>Stopped`;
+  }
+
+  // TV
+  const tvEl = document.getElementById('tv-status');
+  if (s.trading_view.cdp_open) {
+    tvEl.innerHTML = `<span class="dot green"></span>Open (PID ${s.trading_view.pid || '?'})`;
+  } else if (s.trading_view.pid) {
+    tvEl.innerHTML = `<span class="dot orange"></span>Running, no CDP`;
+  } else {
+    tvEl.innerHTML = `<span class="dot gray"></span>Closed`;
+  }
+
+  // Caffeinate
+  const caffEl = document.getElementById('caff-status');
+  caffEl.innerHTML = s.caffeinate.active
+    ? `<span class="dot green"></span>Active`
+    : `<span class="dot gray"></span>Off`;
+
+  // Session
+  document.getElementById('session-status').textContent =
+    (s.activity.current_session || '—').toUpperCase().replace('_', ' ');
+
+  // Last alert
+  const la = s.activity.last_alert;
+  if (la) {
+    const lat = new Date(la.ts).getTime();
+    document.getElementById('last-alert').innerHTML =
+      `${la.strategy} <span style="color:var(--text-dim)">${la.status}</span> · ${fmtAge(s.now_ms - lat)}`;
+  } else {
+    document.getElementById('last-alert').textContent = 'None yet';
+  }
+
+  // Strategies
+  const container = document.getElementById('strategies');
+  if (!container.dataset.rendered) {
+    container.innerHTML = STRATEGY_META.map(m => `
+      <div class="strategy">
+        <div class="info">
+          <div><span class="num">${m.num}</span><span class="name">${m.name}</span></div>
+          <div class="desc">${m.desc}</div>
+        </div>
+        <div class="toggle" data-strategy="${m.key}" role="switch"></div>
+      </div>
+    `).join('');
+    container.dataset.rendered = '1';
+  }
+  for (const t of container.querySelectorAll('.toggle')) {
+    const enabled = !!s.config.strategies[t.dataset.strategy];
+    t.classList.toggle('on', enabled);
+  }
+}
+
+document.addEventListener('click', async (e) => {
+  // Mode segments
+  if (e.target.closest('#mode-seg button')) {
+    const btn = e.target.closest('button');
+    const mode = btn.dataset.mode;
+    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('mode-desc').textContent = MODE_DESC[mode] || '';
+    try {
+      await postConfig({ mode });
+      toast(`✓ Mode → ${mode}`);
+    } catch (e) { toast('✗ Save failed'); }
+    return;
+  }
+  // Strategy toggles
+  const t = e.target.closest('.toggle[data-strategy]');
+  if (t) {
+    if (t.classList.contains('saving')) return;
+    const key = t.dataset.strategy;
+    const next = !t.classList.contains('on');
+    t.classList.add('saving');
+    t.classList.toggle('on', next);
+    try {
+      await postConfig({ strategies: { [key]: next } });
+      toast(`✓ ${key} → ${next ? 'ON' : 'OFF'}`);
+    } catch (e) {
+      t.classList.toggle('on', !next); // revert
+      toast('✗ Save failed');
+    } finally {
+      t.classList.remove('saving');
+    }
+  }
+});
+
+async function openLogs() {
+  try {
+    await fetch('/api/open-logs', { method: 'POST' });
+    toast('📂 Opening logs in Finder');
+  } catch (e) {
+    toast('✗ Could not open logs');
+  }
+}
+
+function confirmShutdown() {
+  if (!confirm('Shut down Octave completely?\n\n• Trading alerts service (LaunchAgent)\n• Caffeinate (Mac can sleep again)\n• TradingView Desktop\n• Claude Code processes\n\nClick the Octave icon again to restart.')) return;
+  // Trigger the same shutdown path the Octave.app launcher uses
+  fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+  toast('Shutdown requested…');
+}
+
+fetchState();
+setInterval(fetchState, 5000);
+</script>
+</body>
+</html>
