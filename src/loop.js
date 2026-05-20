@@ -75,10 +75,17 @@ async function tick() {
   for (const r of results) {
     const key = dedupKey(r);
     if (dedup.has(key)) continue;
+
+    // Telegram filter: per user directive, only TRIGGERED setups are alerted.
+    // Forming / near_trigger / invalidated are still logged + drawn on the
+    // chart (visible via /history), they just don't ring the phone.
+    const isTelegramWorthy = r.status === 'triggered';
+    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram;
+
     // Mark BEFORE sending, then roll back on failure (avoids dup spam if send is slow)
     dedup.add(key, { strategy: r.strategy, status: r.status });
     let ok = true;
-    if (!suppressTelegram) {
+    if (shouldSendTelegram) {
       try {
         ok = await alerter.send(r, { symbol: r.symbol, timeframe: r.timeframe, lastClose: r.lastClose });
       } catch (err) {
@@ -90,11 +97,15 @@ async function tick() {
       dedup.remove(key);
       log.warn('telegram send failed — dedup rolled back', { key });
     } else {
+      const tgState = !isTelegramWorthy
+        ? 'skipped (not triggered)'
+        : suppressTelegram ? 'suppressed (cloud active / muted)' : 'sent';
       log.info('alert fired', {
         strategy: r.strategy, status: r.status, setupId: r.setupId, confidence: r.confidence,
-        telegram: suppressTelegram ? 'suppressed (cloud active)' : 'sent',
+        telegram: tgState,
       });
-      // Sync TradingView drawings regardless of whether Telegram was sent.
+      // Sync TradingView drawings regardless of whether Telegram was sent —
+      // user still sees the setup forming on the chart in real time.
       try {
         await drawings.syncDrawings(r);
       } catch (err) {

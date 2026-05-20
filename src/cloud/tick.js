@@ -90,38 +90,61 @@ function tgEscape(s) { return String(s).replace(/([_*`\[])/g, '\\$1'); }
 function fmtPrice(p) { return p == null || !Number.isFinite(+p) ? '—' : Number(p).toFixed(2); }
 function fmtPct(c) { return c == null ? '—' : `${Math.round(c * 100)}%`; }
 
-function formatAlert(r, ctx) {
-  const head = biasBanner(r.direction);
-  const sub = `${STATUS_GLYPH[r.status] || '🔔'} *${STATUS_LABEL[r.status] || r.status}*`;
-  const num = STRATEGY_NUM[r.strategy] || r.strategy;
-  const title = `*${tgEscape(r.setupName)}*`;
-  const meta = `\`${tgEscape(ctx.anchorSymbol)}\` · \`${tgEscape(ctx.anchorResolution)}m\` · *${fmtPct(r.confidence)}*`;
-  const price = ctx.lastClose != null ? `Price: *${fmtPrice(ctx.lastClose)}*` : '';
-  const source = `☁️ via cloud (${ctx.source || 'cloud'})`;
-  const ep = r.entryPlan || r.geometry?.entryPlan;
-  const lines = [BAR, head, sub, title, meta, price, source];
-  lines.push('');
-  if (r.status === 'triggered' && ep) {
-    lines.push(`🟢 Buy:  *${fmtPrice(ep.entry)}*`);
-    lines.push(`🛑 SL:   *${fmtPrice(ep.stop)}*`);
-    lines.push(`🎯 TP1:  *${fmtPrice(ep.t1)}*  _(1R)_`);
-    lines.push(`🎯 TP2:  *${fmtPrice(ep.t2)}*  _(2R)_`);
-    if (ep.runner != null) lines.push(`🏃 Runner: *${fmtPrice(ep.runner)}*`);
-  } else if (r.status === 'invalidated') {
-    if (r.invalidationLevel != null) lines.push(`🛑 Invalidation: *${fmtPrice(r.invalidationLevel)}*`);
-    if (ctx.lastClose != null) lines.push(`📍 Price now: *${fmtPrice(ctx.lastClose)}*`);
-  } else {
-    if (r.geometry?.target?.level != null) {
-      lines.push(`🎯 Target: *${fmtPrice(r.geometry.target.level)}* (${tgEscape(r.geometry.target.name || '')})`);
-    }
-    if (r.geometry?.sweep?.wickPrice != null) lines.push(`⚔️ Sweep wick: *${fmtPrice(r.geometry.sweep.wickPrice)}*`);
-    if (r.geometry?.mss?.brokenPrice != null) lines.push(`📈 MSS @ *${fmtPrice(r.geometry.mss.brokenPrice)}*`);
-    if (ctx.lastClose != null) lines.push(`📍 Price now: *${fmtPrice(ctx.lastClose)}*`);
-    if (r.invalidationLevel != null) lines.push(`🛡 Invalidates if: *${fmtPrice(r.invalidationLevel)}*`);
+function entryIntent(direction, entry, currentPrice, risk) {
+  if (entry == null || currentPrice == null) return null;
+  const diff = currentPrice - entry;
+  const tolerance = risk ? Math.max(0.5, 0.15 * risk) : 1;
+  if (Math.abs(diff) <= tolerance) return { label: '🚀 MARKET — fill NOW', hint: 'price is at entry level' };
+  if (direction === 'LONG') {
+    if (diff > 0) return { label: `⏳ LIMIT BUY @ $${entry.toFixed(2)}`, hint: `price is $${diff.toFixed(2)} above entry, wait for pullback` };
+    return { label: '🚀 MARKET BUY — price already at entry', hint: `price is $${Math.abs(diff).toFixed(2)} below entry` };
   }
+  if (diff < 0) return { label: `⏳ LIMIT SELL @ $${entry.toFixed(2)}`, hint: `price is $${(-diff).toFixed(2)} below entry, wait for pullback` };
+  return { label: '🚀 MARKET SELL — price already at entry', hint: `price is $${diff.toFixed(2)} above entry` };
+}
+
+function formatAlert(r, ctx) {
+  // This formatter is only called for status === 'triggered' (cloud tick
+  // filters non-triggered upstream). Still defend against unexpected shapes.
+  const ep = r.entryPlan || r.geometry?.entryPlan;
+  if (!ep) {
+    return [BAR, `🔔 *${STATUS_LABEL[r.status] || r.status}*`, tgEscape(r.setupName || ''), BAR].join('\n');
+  }
+  const num = STRATEGY_NUM[r.strategy] || r.strategy;
+  const dirWord = r.direction === 'LONG' ? 'LONG' : 'SHORT';
+  const conf = Math.round((r.confidence || 0) * 100);
+  const risk = ep.risk ?? Math.abs(ep.entry - ep.stop);
+  const intent = entryIntent(r.direction, ep.entry, ctx.lastClose, risk);
+  const fmt = (v) => v != null && Number.isFinite(+v) ? Number(v).toFixed(2) : '—';
+  const t1r = ep.t1 != null ? Math.abs(ep.t1 - ep.entry) / risk : null;
+  const t2r = ep.t2 != null ? Math.abs(ep.t2 - ep.entry) / risk : null;
+
+  const lines = [];
+  lines.push(BAR);
+  lines.push(`🚀 *GOLD ${dirWord}*  ·  ${num}  ·  ☁️ cloud`);
+  if (intent) lines.push(`*${intent.label}*`);
+  lines.push(BAR);
   lines.push('');
-  lines.push(`⏰ Timeframe: \`${ctx.anchorResolution}m\``);
-  lines.push(`⚡ Confidence: *${fmtPct(r.confidence)}*`);
+
+  lines.push('```');
+  lines.push(`Entry  $${fmt(ep.entry)}`);
+  lines.push(`SL     $${fmt(ep.stop)}     -$${fmt(risk)} risk`);
+  if (ep.t1 != null) lines.push(`TP1    $${fmt(ep.t1)}     +${t1r != null ? t1r.toFixed(1) : '?'}R`);
+  if (ep.t2 != null) lines.push(`TP2    $${fmt(ep.t2)}     +${t2r != null ? t2r.toFixed(1) : '?'}R`);
+  if (ep.runner != null && ep.runner !== ep.t2) {
+    const rr = Math.abs(ep.runner - ep.entry) / risk;
+    lines.push(`Runner $${fmt(ep.runner)}     +${rr.toFixed(1)}R`);
+  }
+  lines.push('```');
+  lines.push('');
+
+  if (ctx.lastClose != null && ep.entry != null) {
+    const diff = ctx.lastClose - ep.entry;
+    lines.push(`📍 Current: *$${fmt(ctx.lastClose)}*  (${diff >= 0 ? '+' : ''}${diff.toFixed(2)} from entry)`);
+  }
+  if (intent?.hint) lines.push(`_${tgEscape(intent.hint)}_`);
+  lines.push('');
+  lines.push(`⚡ Confidence: *${conf}%*   ⏰ TF: \`${ctx.anchorResolution}m\``);
   if (r.summary) { lines.push(''); lines.push(`ℹ️ ${tgEscape(r.summary)}`); }
   lines.push('');
   lines.push(BAR);
@@ -227,18 +250,31 @@ async function main() {
   for (const r of results) {
     const key = `${r.setupId}:${r.status}`;
     if (dedup.entries[key]) continue;
+
+    // Telegram filter: per user directive, only TRIGGERED setups are alerted.
+    // Other statuses are still recorded in dedup (so we don't accumulate stale
+    // entries) but don't ring the phone.
+    const isTelegramWorthy = r.status === 'triggered';
+
     dedup.entries[key] = {
       firedAt: Date.now(),
       strategy: r.strategy,
       status: r.status,
       direction: r.direction,
+      telegram: isTelegramWorthy ? 'pending' : 'skipped-not-triggered',
     };
+
+    if (!isTelegramWorthy) {
+      console.log(`[cloud-tick] ${r.strategy} ${r.status} ${r.setupId} — dedup recorded, telegram skipped`);
+      continue;
+    }
+
     const text = formatAlert(r, ctx);
     const ok = await sendTelegram(text, token, chatId);
     if (ok) {
       fired++;
+      dedup.entries[key].telegram = 'sent';
       console.log(`[cloud-tick] alert fired: ${r.strategy} ${r.status} ${r.setupId}`);
-      // small spacing between sends to be polite to Telegram
       await new Promise((s) => setTimeout(s, 1200));
     } else {
       delete dedup.entries[key];
