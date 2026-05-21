@@ -11,7 +11,7 @@
  * rounds so a runaway loop can't burn through tokens.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { chatWithTools, pickProvider, providerLabel } from './llm.js';
 import * as journal from './trade_journal.js';
 import * as us from './user_strategies.js';
 import * as fu from './follow_up.js';
@@ -26,7 +26,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_DIR = join(__dirname, '..', '..');
 
-const MODEL = process.env.OCTAVE_CHAT_MODEL || 'claude-haiku-4-5-20251001';
 const MAX_TOOL_ROUNDS = 6;
 
 const SYSTEM_PROMPT = `You are Octave's in-bot assistant. The user runs a Telegram trading bot that
@@ -387,51 +386,29 @@ export function clearSession(chatId) { sessions.delete(chatId); }
  * @param {string} userText
  */
 export async function chat(chatId, userText) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return `🤖 AI chat is offline — \`ANTHROPIC_API_KEY\` not set on the server.\n\nAdd it to ~/.config/trading-alerts/.env on the VPS then \`/fix bot\`.`;
+  const provider = pickProvider();
+  if (!provider) {
+    return [
+      '🤖 *AI chat is offline*',
+      'Set ONE of these env vars on the VPS:',
+      '  • `GEMINI_API_KEY=...` (free, 1500 req/day) — get one at https://aistudio.google.com/apikey',
+      '  • `ANTHROPIC_API_KEY=sk-ant-...` (paid)',
+      '',
+      'Then `/fix bot`.',
+    ].join('\n');
   }
-  const client = new Anthropic({ apiKey });
   const session = getSession(chatId);
   session.push({ role: 'user', content: userText });
-  // Trim history — keep last 24 messages (12 round-trips)
   while (session.length > 24) session.shift();
-
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
+  try {
+    return await chatWithTools({
       system: SYSTEM_PROMPT,
-      tools: TOOLS,
       messages: session,
+      tools: TOOLS,
+      toolHandlers,
+      maxRounds: MAX_TOOL_ROUNDS,
     });
-    // Collect assistant content into the session
-    session.push({ role: 'assistant', content: resp.content });
-
-    if (resp.stop_reason !== 'tool_use') {
-      // Plain text reply — extract and return
-      const text = resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-      return text || '(no reply)';
-    }
-
-    // Execute every tool_use block in this response, append tool_results
-    const toolResults = [];
-    for (const block of resp.content) {
-      if (block.type !== 'tool_use') continue;
-      const handler = toolHandlers[block.name];
-      let result;
-      try {
-        result = handler ? await handler(block.input || {}) : { error: `unknown tool: ${block.name}` };
-      } catch (err) {
-        result = { error: err.message };
-      }
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: block.id,
-        content: JSON.stringify(result).slice(0, 4000),
-      });
-    }
-    session.push({ role: 'user', content: toolResults });
+  } catch (err) {
+    return `⚠️ ${providerLabel()} error: ${err.message}`;
   }
-  return '_(stopped after 6 tool rounds — try a more specific question)_';
 }

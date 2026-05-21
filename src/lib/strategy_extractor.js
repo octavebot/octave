@@ -15,10 +15,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { extname, basename } from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
-
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
-const MODEL = process.env.OCTAVE_EXTRACTOR_MODEL || 'claude-haiku-4-5-20251001';
+import { oneShot, pickProvider, providerLabel } from './llm.js';
 
 const SCHEMA_PROMPT = `You are converting a trading strategy description into a strict JSON spec.
 
@@ -65,30 +62,24 @@ export async function extractStrategy(file) {
   // Image path covers .png/.jpg → Claude vision.
   // Video path: best-effort frame snapshot via ffmpeg if available; else heuristic.
 
-  if (!ANTHROPIC_KEY) {
+  const provider = pickProvider();
+  if (!provider) {
     const text = await fileToText(file, mime);
     return { spec: heuristicParse(text, file.filename), source: 'heuristic',
-             notes: 'No ANTHROPIC_API_KEY set — used regex fallback. Add the key for higher accuracy.' };
+             notes: 'No LLM key set — used regex fallback. Add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY for AI extraction.' };
   }
 
   try {
-    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
-    const content = await buildClaudeContent(file, mime);
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: SCHEMA_PROMPT,
-      messages: [{ role: 'user', content }],
-    });
-    const text = resp.content?.[0]?.type === 'text' ? resp.content[0].text : '';
-    const json = parseFirstJson(text);
-    if (!json) throw new Error('Claude returned no JSON');
-    return { spec: json, source: 'claude' };
+    const userParts = await buildLlmParts(file, mime);
+    const reply = await oneShot({ system: SCHEMA_PROMPT, userParts, maxTokens: 1024 });
+    const json = parseFirstJson(reply);
+    if (!json) throw new Error(`${providerLabel()} returned no JSON`);
+    return { spec: json, source: provider };
   } catch (err) {
     // Fall back so the user still gets something
     const text = await fileToText(file, mime);
     return { spec: heuristicParse(text, file.filename), source: 'heuristic',
-             notes: `Claude extraction failed (${err.message}); used regex fallback.` };
+             notes: `${providerLabel()} extraction failed (${err.message}); used regex fallback.` };
   }
 }
 
@@ -103,45 +94,34 @@ function guessMime(ext) {
 }
 
 /**
- * Build the Anthropic `content` array for one file. Different mime types take
- * different shapes — text vs document vs image vs (video → frame snapshot).
+ * Build the provider-agnostic parts array for one file. The LLM wrapper
+ * (llm.js) translates `kind` to the provider's native shape.
  */
-async function buildClaudeContent(file, mime) {
+async function buildLlmParts(file, mime) {
   const out = [];
   if (mime === 'application/pdf') {
-    out.push({
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: file.buffer.toString('base64') },
-    });
-    out.push({ type: 'text', text: `Extract a strategy spec from "${file.filename}".` });
+    out.push({ kind: 'document', mediaType: 'application/pdf', base64: file.buffer.toString('base64') });
+    out.push({ kind: 'text', text: `Extract a strategy spec from "${file.filename}".` });
     return out;
   }
   if (mime.startsWith('image/')) {
-    out.push({
-      type: 'image',
-      source: { type: 'base64', media_type: mime, data: file.buffer.toString('base64') },
-    });
-    out.push({ type: 'text', text: `Extract a strategy spec from this image ("${file.filename}").` });
+    out.push({ kind: 'image', mediaType: mime, base64: file.buffer.toString('base64') });
+    out.push({ kind: 'text', text: `Extract a strategy spec from this image ("${file.filename}").` });
     return out;
   }
   if (mime.startsWith('video/')) {
-    // Best-effort: snap one frame via ffmpeg if installed, otherwise tell Claude
-    // we only have the filename + a hint about duration.
     const frame = await tryFfmpegFrame(file);
     if (frame) {
-      out.push({
-        type: 'image',
-        source: { type: 'base64', media_type: 'image/jpeg', data: frame.toString('base64') },
-      });
-      out.push({ type: 'text', text: `Single frame extracted from "${file.filename}" (video). If the frame doesn't contain a complete strategy, make best inference from any visible text.` });
+      out.push({ kind: 'image', mediaType: 'image/jpeg', base64: frame.toString('base64') });
+      out.push({ kind: 'text', text: `Single frame from "${file.filename}". If the frame doesn't contain a complete strategy, infer from any visible text.` });
       return out;
     }
-    out.push({ type: 'text', text: `Filename: ${file.filename}\n(Video could not be parsed — ffmpeg not available. Producing safe defaults from filename hints.)` });
+    out.push({ kind: 'text', text: `Filename: ${file.filename}\n(Video could not be parsed — ffmpeg not available. Producing safe defaults from filename hints.)` });
     return out;
   }
   // Text-ish: include up to 24KB of decoded content
   const text = file.buffer.toString('utf8').slice(0, 24 * 1024);
-  out.push({ type: 'text', text: `Filename: ${file.filename}\n\n---\n${text}` });
+  out.push({ kind: 'text', text: `Filename: ${file.filename}\n\n---\n${text}` });
   return out;
 }
 
