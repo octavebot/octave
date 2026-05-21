@@ -418,6 +418,9 @@ function evalBreakoutPlaybook(ctx, m15Pane, regime, macro) {
 // ---------- Top-level evaluator ----------
 
 export function evaluateAdaptive(ctx) {
+  // Gold-only: macro bias is built from DXY's inverse correlation to gold.
+  // Equity indexes have different macro drivers; needs a separate model.
+  if (ctx.instrument !== 'gold') return [];
   const now = ctx.ts / 1000;
   if (!isMarketOpen(now)) return [];
 

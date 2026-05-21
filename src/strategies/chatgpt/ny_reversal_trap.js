@@ -22,8 +22,8 @@ const TF = '15';
 const NAME = 'NY Reversal Trap';
 
 export function evaluate(ctx) {
-  const pane = ctx.panesByTf.get(`gold|${TF}`);
-  const daily = ctx.panesByTf.get('gold|1D') || ctx.panesByTf.get('gold|D');
+  const pane = ctx.pane(TF);
+  const daily = ctx.pane('1D') || ctx.pane('D');
   if (!pane || pane.bars.length < 60) return [];
   if (!daily) return [];
   const bars = pane.bars;

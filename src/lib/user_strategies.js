@@ -164,7 +164,10 @@ export function evaluateUserStrategies(ctx, isStrategyEnabledFn) {
 }
 
 function evaluateOne(spec, ctx) {
-  const pane = ctx.panesByTf.get(`gold|${spec.timeframe}`);
+  // Use the instrument-aware accessor — user strategies run on every primary
+  // instrument by default. (If you want gold-only, add an instrument field
+  // and gate here; not in the schema yet.)
+  const pane = ctx.pane ? ctx.pane(spec.timeframe) : ctx.panesByTf.get(`gold|${spec.timeframe}`);
   if (!pane || pane.bars.length < Math.max(spec.slow + 5, 60)) return null;
   const bars = pane.bars;
   const last = bars[bars.length - 1];

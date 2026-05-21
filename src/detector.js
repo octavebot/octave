@@ -1,30 +1,25 @@
 /**
- * Strategy orchestrator.
+ * Strategy orchestrator — multi-instrument.
  *
- * Runs BOTH strategies each tick:
- *   - USLS (Universal Session Liquidity Sweep) — all sessions
- *   - ICT-NY-AM (Killzone strategy) — only 8:30-11:00 EST
- *
- * Each call returns an array of DetectorResult — the loop fires one alert
- * per result, deduped by setupId+status.
+ * Runs every enabled strategy across each of [gold, nasdaq, sp] on each tick.
+ * Strategies that depend on cross-asset data (Gold/Silver SMT, DXY-driven gold
+ * bias) declare themselves gold-only and short-circuit when ctx.instrument !==
+ * 'gold'.
  *
  * @typedef {Object} DetectorResult
- * @property {string} strategy              'USLS' | 'ICT-NY-AM'
+ * @property {string} strategy
+ * @property {string} instrument            'gold' | 'nasdaq' | 'sp'
  * @property {string} setupId               stable identifier across lifecycle
  * @property {'forming'|'near_trigger'|'triggered'|'invalidated'} status
  * @property {string} direction             'LONG' | 'SHORT' | 'NONE'
- * @property {string} setupName             one-line title for Telegram
- * @property {string} summary               one-line body summary
+ * @property {string} setupName
+ * @property {string} summary
  * @property {number} confidence            0..1
- * @property {Object} details               key-value pairs rendered in body
+ * @property {Object} details
  * @property {number|null} invalidationLevel
  * @property {Object} [entryPlan]           on 'triggered' setups
  */
 
-// TV CDP-based panes module is no longer required for data path — kept
-// imported only because the drawings module depends on it.
-// All 10 strategies imported. Each is gated by runtime-config.strategies[key]
-// at invocation time, so the user can toggle any on/off via Octave.app.
 import { evaluateUSLS } from './strategies/usls.js';
 import { evaluateICTSMC } from './strategies/ict_smc.js';
 import { evaluateAlgoSMC } from './strategies/algo_smc.js';
@@ -38,95 +33,79 @@ import { evaluateWARRIOR } from './strategies/warrior.js';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
-import { fetchAllPanes, supplement as supplementWithCloudData } from './lib/cloud_data_supplement.js';
+import { fetchAllPanes } from './lib/cloud_data_supplement.js';
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateChatgptPack } from './strategies/chatgpt/index.js';
 import { evaluateGeminiPack } from './strategies/gemini/index.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
 
-/** Build the unified context object all strategies consume. */
-async function buildCtx() {
-  // CLOUD-ONLY DATA PATH (per user directive: bot must always use cloud data).
-  // Pulls full pane set from Yahoo Finance (with OANDA fallback). This means
-  // the bot sees the FULL multi-TF picture (1m/5m/15m/60m/1D gold, 5m/15m
-  // silver, 1D DXY) regardless of what — if anything — is loaded on the
-  // user's TradingView chart. Cached 60s so the 3s detector loop is cheap.
+// Three primary instruments. Each runs the full strategy gauntlet; gold-only
+// strategies skip themselves via ctx.instrument check.
+export const INSTRUMENTS = ['gold', 'nasdaq', 'sp'];
+
+// Pretty labels used in alerts + dashboards. Symbol matches TV ticker for
+// micro-futures (what the user actually trades on prop accounts).
+export const INSTRUMENT_META = {
+  gold:   { label: 'Gold',   symbol: 'MGC1!', tvFullSymbol: 'COMEX:MGC1!' },
+  nasdaq: { label: 'Nasdaq', symbol: 'MNQ1!', tvFullSymbol: 'CME_MINI:MNQ1!' },
+  sp:     { label: 'S&P',    symbol: 'MES1!', tvFullSymbol: 'CME_MINI:MES1!' },
+};
+
+/**
+ * Build a per-instrument context. panesByTf retains the instrument-prefixed
+ * keys ('gold|15', 'silver|15', 'dxy|1D') so cross-asset strategies can still
+ * reach for their referenced asset; the `ctx.pane(tf)` helper returns this
+ * instrument's pane at the requested TF — that's the path universal strategies
+ * use to stay instrument-agnostic.
+ */
+function buildInstrumentCtx(instrument, panesByTf) {
+  // Anchor on 15m of this instrument; fall back through 60/5/1/D.
+  const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
+  let anchor = null;
+  for (const tf of candidates) {
+    const p = panesByTf.get(`${instrument}|${tf}`);
+    if (p?.bars?.length) { anchor = p; break; }
+  }
+  if (!anchor) return null;
+
+  const lastBar = anchor.bars[anchor.bars.length - 1];
+  const np = nyParts(lastBar.time);
+
+  const ctx = {
+    instrument,
+    ts: Date.now(),
+    barTime: lastBar.time,
+    lastClose: lastBar.close,
+    panes: [...panesByTf.values()],
+    panesByTf,
+    anchorSymbol: INSTRUMENT_META[instrument].symbol,
+    anchorResolution: anchor.resolution,
+    dateKey: np.dateKey,
+    dataSource: 'cloud',
+  };
+  // `ctx.pane(tf)` — the canonical accessor for THIS instrument's pane at TF.
+  // Universal strategies call this; cross-asset strategies still reach into
+  // ctx.panesByTf.get('silver|15') etc. directly.
+  ctx.pane = (tf) => panesByTf.get(`${instrument}|${tf}`);
+  return ctx;
+}
+
+export async function detect() {
+  // Single shared fetch — same Map handed to all three instrument ctxs.
   let panesByTf;
   try {
     panesByTf = await fetchAllPanes();
   } catch (err) {
     log.throttled('cloud-data-fail', 30000, () =>
-      log.warn('cloud data fetch failed', { err: err.message })
-    );
-    panesByTf = new Map();
-  }
-
-  if (panesByTf.size === 0) {
-    throw new Error('No cloud data available (Yahoo + OANDA both empty)');
-  }
-
-  // Note: TradingView Desktop is NOT consulted for bar data — Yahoo is the
-  // authoritative source. TV is still used by the drawings module to render
-  // levels on the user's active chart, but that path is independent of ctx.
-
-  // Pick anchor: 15m is the user-visible "watching" TF per 2026-05-21 directive
-  // (all alerts gate at 15m+ anyway, so 15m matches what's actually evaluated).
-  let anchor =
-    panesByTf.get('gold|15') ||
-    panesByTf.get('gold|60') ||
-    panesByTf.get('gold|5') ||
-    panesByTf.get('gold|1') ||
-    panesByTf.get('gold|240') ||
-    panesByTf.get('gold|D') ||
-    panesByTf.get('gold|1D');
-  if (!anchor) {
-    // Last-ditch: pick any gold-keyed pane regardless of TF
-    for (const [k, p] of panesByTf) {
-      if (k.startsWith('gold|')) { anchor = p; break; }
-    }
-  }
-  if (!anchor) {
-    throw new Error('No gold pane found in cloud data response');
-  }
-
-  const lastBar = anchor.bars[anchor.bars.length - 1];
-  const ts = Date.now();
-  const np = nyParts(lastBar.time);
-
-  return {
-    ts,
-    barTime: lastBar.time,
-    lastClose: lastBar.close,
-    panes: [...panesByTf.values()],
-    panesByTf,
-    anchorSymbol: anchor.symbol,
-    anchorResolution: anchor.resolution,
-    dateKey: np.dateKey,
-    dataSource: 'cloud',
-  };
-}
-
-export async function detect() {
-  let ctx;
-  try {
-    ctx = await buildCtx();
-  } catch (err) {
-    log.throttled('detect-ctx-fail', 30000, () => log.warn('detect ctx build failed', { err: err.message }));
+      log.warn('cloud data fetch failed', { err: err.message }));
     return [];
   }
+  if (panesByTf.size === 0) return [];
 
-  // Refresh runtime config each tick so Octave-toggled changes take effect immediately
   refreshConfig();
-
-  // News blackout — ±30m around any high-impact USD event blocks ALL setups.
-  // We still evaluate strategies so /bias/dashboard reflect what would have
-  // fired, but anything triggered is downgraded to invalidated with a news
-  // reason so it doesn't ping Telegram.
-  // (Trigger a periodic ForexFactory refresh — no-op when cache is fresh.)
   refreshForexFactory().catch(() => {});
   const blackout = checkBlackout(Date.now() / 1000, 30);
 
-  const results = [];
   const STRATEGY_TABLE = [
     ['USLS',      evaluateUSLS],
     ['ICT-SMC',   evaluateICTSMC],
@@ -139,53 +118,47 @@ export async function detect() {
     ['TORI',      evaluateTORI],
     ['WARRIOR',   evaluateWARRIOR],
   ];
-  for (const [name, fn] of STRATEGY_TABLE) {
-    if (!isStrategyEnabled(name)) continue;
-    try {
-      results.push(...fn(ctx));
-    } catch (err) {
-      log.error(`${name} evaluator threw`, { err: err.message, stack: err.stack });
+
+  const allResults = [];
+  for (const instrument of INSTRUMENTS) {
+    const ctx = buildInstrumentCtx(instrument, panesByTf);
+    if (!ctx) continue;
+
+    const results = [];
+    for (const [name, fn] of STRATEGY_TABLE) {
+      if (!isStrategyEnabled(name)) continue;
+      try { results.push(...fn(ctx)); }
+      catch (err) { log.error(`${name} evaluator threw`, { instrument, err: err.message, stack: err.stack }); }
     }
+    try { results.push(...evaluateChatgptPack(ctx)); }
+    catch (err) { log.error('chatgpt pack threw', { instrument, err: err.message, stack: err.stack }); }
+    try { results.push(...evaluateGeminiPack(ctx)); }
+    catch (err) { log.error('gemini pack threw', { instrument, err: err.message, stack: err.stack }); }
+    try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }
+    catch (err) { log.error('user strategies threw', { instrument, err: err.message, stack: err.stack }); }
+
+    // Stamp every result with the instrument it came from + per-instrument
+    // anchor metadata. setupId is namespaced with the instrument prefix so
+    // dedup works across all three.
+    for (const r of results) {
+      r.instrument = instrument;
+      r.symbol = ctx.anchorSymbol;
+      if (!r.timeframe) r.timeframe = ctx.anchorResolution;
+      r.lastClose = ctx.lastClose;
+      r.barTime = ctx.barTime;
+      // Namespace setupId so identical USLS setupId on gold + nasdaq doesn't collide.
+      if (!r.setupId.startsWith(`${instrument}|`)) r.setupId = `${instrument}|${r.setupId}`;
+    }
+    allResults.push(...results);
   }
 
-  // ChatGPT + Gemini packs — each runs as a bundle, internally gates per-strategy
-  // via isStrategyEnabled() on its own keys (CGT-* / GEM-*).
-  try { results.push(...evaluateChatgptPack(ctx)); }
-  catch (err) { log.error('chatgpt pack threw', { err: err.message, stack: err.stack }); }
-  try { results.push(...evaluateGeminiPack(ctx)); }
-  catch (err) { log.error('gemini pack threw', { err: err.message, stack: err.stack }); }
-
-  // User-editable strategies (defined via dashboard / Telegram).
-  // Each user strategy's enabled flag is mirrored into runtime-config so the
-  // standard /enable /disable Telegram commands work on them too.
-  try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }
-  catch (err) { log.error('user strategies threw', { err: err.message, stack: err.stack }); }
-
-  // Attach context for the alerter. We preserve a per-strategy timeframe if set,
-  // since strategies now run on their own analysis TF (15m, 1h, 4h, 1d).
-  for (const r of results) {
-    r.symbol = ctx.anchorSymbol;
-    if (!r.timeframe) r.timeframe = ctx.anchorResolution;
-    r.lastClose = ctx.lastClose;
-    r.barTime = ctx.barTime;
-  }
-
-  // === 15m+ timeframe gate (per user directive 2026-05-21) ===
-  // Only setups analyzed on 15m or HIGHER may be alerted. Lower-TF setups
-  // (1m / 5m) are dropped silently so the user only sees higher-quality signals.
+  // 15m+ gate — strategies that emit on 5m/1m never reach the user.
   const TF_MINUTES = { '1': 1, '3': 3, '5': 5, '15': 15, '30': 30, '60': 60, '240': 240, 'D': 1440, '1D': 1440, 'W': 10080 };
-  const HIGH_TF = (tf) => (TF_MINUTES[String(tf)] || 0) >= 15;
-  const filtered = results.filter((r) => {
-    if (!HIGH_TF(r.timeframe)) {
-      log.throttled(`tf-drop-${r.strategy}`, 60_000, () =>
-        log.debug('dropping sub-15m setup', { strategy: r.strategy, tf: r.timeframe, setupId: r.setupId })
-      );
-      return false;
-    }
-    return true;
-  });
+  const filtered = allResults.filter((r) => (TF_MINUTES[String(r.timeframe)] || 0) >= 15);
 
-  // === News blackout — neutralize triggered setups, leave others intact ===
+  // News blackout — soft-block triggered setups so no Telegram fires within
+  // ±30m of a high-impact event. (Forming/near_trigger continue so /bias still
+  // reflects what would have happened.)
   if (blackout.blocked) {
     for (const r of filtered) {
       if (r.status === 'triggered') {

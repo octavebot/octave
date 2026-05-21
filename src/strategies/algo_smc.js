@@ -372,6 +372,8 @@ function evaluateOneSide(ctx, direction) {
 }
 
 export function evaluateAlgoSMC(ctx) {
+  // Gold-only: spec depends on Gold/Silver SMT divergence.
+  if (ctx.instrument !== 'gold') return [];
   const now = ctx.ts / 1000;
   if (!isMarketOpen(now)) return [];
 

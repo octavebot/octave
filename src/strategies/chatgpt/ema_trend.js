@@ -22,7 +22,7 @@ const TF = '15';
 const NAME = 'EMA Trend Continuation';
 
 export function evaluate(ctx) {
-  const pane = ctx.panesByTf.get(`gold|${TF}`);
+  const pane = ctx.pane(TF);
   if (!pane || pane.bars.length < 80) return [];
   const bars = pane.bars;
   const last = bars[bars.length - 1];

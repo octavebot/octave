@@ -209,6 +209,8 @@ function evalDirection(ctx, m15, silver, kz, goldPools, silverPools, direction) 
 }
 
 export function evaluateSMTM15(ctx) {
+  // Gold-only: this entire strategy IS Gold/Silver SMT divergence.
+  if (ctx.instrument !== 'gold') return [];
   const now = ctx.ts / 1000;
   if (!isMarketOpen(now)) return [];
   const kz = activeKillZone(now);

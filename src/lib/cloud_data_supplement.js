@@ -26,12 +26,26 @@ import { beat as heartbeat } from './heartbeat.js';
 // seeing 429s, bump back to 30-60s via OCTAVE_DATA_TTL_MS env var.
 const TTL_MS = parseInt(process.env.OCTAVE_DATA_TTL_MS || '', 10) || 15 * 1000;
 
+// Three primary instruments at the execution + HTF timeframes the strategies
+// need; silver / dxy are cross-asset add-ons (SMT divergence, macro bias).
 const NEEDED_REQUESTS = [
+  // Gold (micro)
   ['gold',   '1'],
   ['gold',   '5'],
   ['gold',   '15'],
   ['gold',   '60'],
   ['gold',   '1D'],
+  // Nasdaq (micro)
+  ['nasdaq', '5'],
+  ['nasdaq', '15'],
+  ['nasdaq', '60'],
+  ['nasdaq', '1D'],
+  // S&P (micro)
+  ['sp',     '5'],
+  ['sp',     '15'],
+  ['sp',     '60'],
+  ['sp',     '1D'],
+  // Cross-asset
   ['silver', '5'],
   ['silver', '15'],
   ['dxy',    '1D'],

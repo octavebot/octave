@@ -46,9 +46,9 @@ const CHASE_MAX_DISTANCE_ATR = 1.5;
 
 function find4HGoldBars(ctx) {
   // Prefer native if some external source provides "gold|240" later
-  const native = ctx.panesByTf.get('gold|240');
+  const native = ctx.pane('240');
   if (native?.bars?.length >= 50) return native.bars;
-  const h1 = ctx.panesByTf.get('gold|60');
+  const h1 = ctx.pane('60');
   if (!h1?.bars?.length) return null;
   return resampleTo4H(h1.bars);
 }

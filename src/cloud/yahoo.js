@@ -11,14 +11,15 @@
  */
 
 // Yahoo symbol map for our internal asset keys.
-// Per user directive 2026-05-21: the bot is benchmarked to Micro Gold
-// (COMEX:MGC1!) on TradingView. MGC tracks GC tick-for-tick (1/10th contract
-// size, same underlying) so all level math stays valid; the displayed quote
-// just matches what the user sees on their MGC chart.
+// All three primary instruments use micro futures (matches what retail traders
+// run on TopstepX / Apex / Lucid prop accounts and keeps tick math consistent
+// with the user's TradingView charts).
 const SYMBOLS = {
-  gold: 'MGC=F',    // Micro Gold futures (COMEX continuous) — matches TV's COMEX:MGC1!
-  silver: 'SI=F',   // Silver futures (COMEX continuous)
-  dxy: 'DX-Y.NYB',  // US Dollar Index (ICE Futures)
+  gold:    'MGC=F',    // Micro Gold futures      → COMEX:MGC1!
+  nasdaq:  'MNQ=F',    // Micro Nasdaq-100 E-mini → CME_MINI:MNQ1!
+  sp:      'MES=F',    // Micro S&P 500 E-mini    → CME_MINI:MES1!
+  silver:  'SI=F',     // Silver futures          → COMEX:SI1!  (cross-asset for SMT)
+  dxy:     'DX-Y.NYB', // US Dollar Index         → TVC:DXY     (macro bias)
 };
 
 // Yahoo interval map for our internal timeframe keys

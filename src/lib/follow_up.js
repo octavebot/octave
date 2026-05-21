@@ -67,6 +67,7 @@ export function register(r) {
   state.setups[r.setupId] = {
     setupId: r.setupId,
     strategy: r.strategy,
+    instrument: r.instrument || 'gold',  // namespaced so price check uses the right pane
     direction: r.direction,
     entry: ep.entry,
     stop: ep.stop,
@@ -86,11 +87,15 @@ export function register(r) {
  * Walk all active setups and return any newly-hit milestones.
  * The caller decides what to do (typically send Telegram).
  *
- * @param {number} price   latest gold price
+ * @param {number|object} priceOrPriceMap  Either a single price (legacy: assumed
+ *   gold) or a map keyed by instrument: `{ gold: 4520.0, nasdaq: 29380, sp: 7430 }`.
+ *   Setups are matched against the price for their own instrument.
  * @returns {Array<{setup: object, milestone: 'be'|'tp1'|'tp2'|'runner'|'sl'|'expired'}>}
  */
-export function step(price) {
-  if (price == null || !Number.isFinite(price)) return [];
+export function step(priceOrPriceMap) {
+  const priceMap = (typeof priceOrPriceMap === 'object' && priceOrPriceMap)
+    ? priceOrPriceMap
+    : { gold: priceOrPriceMap };
   const events = [];
   const now = Date.now();
   let dirty = false;
@@ -98,6 +103,8 @@ export function step(price) {
   for (const id of Object.keys(state.setups)) {
     const s = state.setups[id];
     if (s.closedAt) continue;
+    const price = priceMap[s.instrument || 'gold'];
+    if (price == null || !Number.isFinite(price)) continue;
 
     // Expiry check first — a setup we never reached BE on but it's been 24h
     if (now - s.createdAt > EXPIRY_HOURS * 3600 * 1000) {

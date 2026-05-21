@@ -76,8 +76,8 @@ function isZoneFresh(zone, bars4h) {
 }
 
 export function evaluate(ctx) {
-  const pane60 = ctx.panesByTf.get('gold|60');
-  const pane5 = ctx.panesByTf.get('gold|5');
+  const pane60 = ctx.pane('60');
+  const pane5 = ctx.pane('5');
   // 100 1h bars (~4 days) is enough to get ~25 4h candles after resampling.
   // This was 200 originally — too tight for 7-day Yahoo backtests on h1.
   if (!pane60 || pane60.bars.length < 100) return [];

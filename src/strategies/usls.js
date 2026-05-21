@@ -20,15 +20,15 @@ const LABEL = 'Strategy #1';
 
 function pickExecutionPane(ctx) {
   // Prefer 5m > 1m > 15m. 15m is fallback if user has only one pane.
-  const tf5 = ctx.panesByTf.get(`gold|5`);
-  const tf1 = ctx.panesByTf.get(`gold|1`);
-  const tf15 = ctx.panesByTf.get(`gold|15`);
+  const tf5 = ctx.pane('5');
+  const tf1 = ctx.pane('1');
+  const tf15 = ctx.pane('15');
   return tf5 || tf1 || tf15;
 }
 
 function pickAnalysisPane(ctx) {
   // 15m is the canonical analysis TF for sessions per the spec.
-  return ctx.panesByTf.get(`gold|15`) || pickExecutionPane(ctx);
+  return ctx.pane('15') || pickExecutionPane(ctx);
 }
 
 /**

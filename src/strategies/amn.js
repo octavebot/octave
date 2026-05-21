@@ -49,8 +49,8 @@ const NAME = 'AMN';
 const LABEL = 'Strategy #8';
 const RR = 1.5;
 
-function findGold5(ctx)  { return ctx.panesByTf.get('gold|5'); }
-function findGold1(ctx)  { return ctx.panesByTf.get('gold|1'); }
+function findGold5(ctx)  { return ctx.pane('5'); }
+function findGold1(ctx)  { return ctx.pane('1'); }
 
 /**
  * Has the 5M chart been in a clean uptrend or downtrend recently?

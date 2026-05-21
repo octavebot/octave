@@ -61,9 +61,9 @@ function findHourlyOBs(bars1h, atrVal) {
 }
 
 export function evaluate(ctx) {
-  const pane1h = ctx.panesByTf.get('gold|60');
-  const pane15 = ctx.panesByTf.get(`gold|${TF}`);
-  const daily = ctx.panesByTf.get('gold|1D') || ctx.panesByTf.get('gold|D');
+  const pane1h = ctx.pane('60');
+  const pane15 = ctx.pane(TF);
+  const daily = ctx.pane('1D') || ctx.pane('D');
   if (!pane1h || pane1h.bars.length < 80) return [];
   if (!pane15 || pane15.bars.length < 60) return [];
 

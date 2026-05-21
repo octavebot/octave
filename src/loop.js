@@ -120,17 +120,24 @@ async function tick() {
   }
 
   // === Follow-up tracker — fire milestone Telegrams (BE/TP1/TP2/SL/expiry) ===
-  // Use the freshest price we have from this tick (any result has lastClose).
-  // Skipped if every result was suppressed/muted — same Telegram gate applies.
-  const latestPrice = results[0]?.lastClose;
-  if (latestPrice != null) {
+  // Build a per-instrument price map from the freshest result for each.
+  // Each setup is matched against the price for ITS instrument so a gold
+  // setup never gets stopped by a nasdaq tick.
+  const priceMap = {};
+  for (const r of results) {
+    if (r.instrument && r.lastClose != null && priceMap[r.instrument] == null) {
+      priceMap[r.instrument] = r.lastClose;
+    }
+  }
+  if (Object.keys(priceMap).length > 0) {
     let milestones = [];
-    try { milestones = followUp.step(latestPrice); }
+    try { milestones = followUp.step(priceMap); }
     catch (err) { log.warn('follow-up step threw', { err: err.message }); }
     for (const m of milestones) {
-      log.info('follow-up milestone', { setupId: m.setup.setupId, milestone: m.milestone, strategy: m.setup.strategy });
+      const inst = m.setup.instrument || 'gold';
+      log.info('follow-up milestone', { setupId: m.setup.setupId, milestone: m.milestone, strategy: m.setup.strategy, instrument: inst });
       if (!suppressTelegram) {
-        try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: latestPrice }); }
+        try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: priceMap[inst] }); }
         catch (err) { log.warn('follow-up send threw', { err: err.message }); }
       }
     }

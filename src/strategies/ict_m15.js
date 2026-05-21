@@ -36,7 +36,7 @@ const LABEL = 'Strategy #5';
 const PIP = 0.10; // gold "pip" interpreted as $0.10 (10 ticks); spec says 2 pips / 8 ticks
 
 function findGoldM15(ctx) {
-  return ctx.panesByTf.get('gold|15');
+  return ctx.pane('15');
 }
 
 function buildSetup(ctx, m15, kz, target, sweep, mss, fvg, direction) {

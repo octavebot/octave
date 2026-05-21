@@ -328,8 +328,16 @@
         <div class="value" id="last-alert">—</div>
       </div>
       <div class="stat">
-        <div class="label">Gold Price (spot)</div>
+        <div class="label">MGC1! Gold</div>
         <div class="value" id="gold-price">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">MNQ1! Nasdaq</div>
+        <div class="value" id="nasdaq-price">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">MES1! S&amp;P</div>
+        <div class="value" id="sp-price">—</div>
       </div>
       <div class="stat">
         <div class="label">Active Setups</div>
@@ -552,9 +560,18 @@ function renderState(s) {
     document.getElementById('last-alert').textContent = 'None yet';
   }
 
-  // Gold price (taken from cloud heartbeat anchor if present, else dash)
-  const px = s.cloud?.raw?.anchor?.close;
-  document.getElementById('gold-price').textContent = px ? `$${Number(px).toFixed(2)}` : '—';
+  // Per-instrument prices — derived from the per-instrument heartbeat slot
+  // (server now writes one anchor entry per instrument). Falls back to the
+  // single legacy anchor for backward compat.
+  const prices = s.cloud?.raw?.instrumentPrices || {};
+  const legacyPx = s.cloud?.raw?.anchor?.close;
+  const setPx = (id, key) => {
+    const v = prices[key]?.close ?? (key === 'gold' ? legacyPx : null);
+    document.getElementById(id).textContent = v ? `$${Number(v).toFixed(2)}` : '—';
+  };
+  setPx('gold-price', 'gold');
+  setPx('nasdaq-price', 'nasdaq');
+  setPx('sp-price', 'sp');
 
   // Active setups: prefer the live follow-up tracker count (bot uses same source)
   // and fall back to drawings.json for old systems that don't expose it.

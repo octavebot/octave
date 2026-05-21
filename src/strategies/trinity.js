@@ -191,6 +191,8 @@ function findRecentIFVG(ltfPane, narrative, sinceTime) {
 }
 
 export function evaluateTrinity(ctx) {
+  // Gold-only: Step 2 of Trinity requires Gold/Silver SMT divergence.
+  if (ctx.instrument !== 'gold') return [];
   const now = ctx.ts / 1000;
   if (!isMarketOpen(now)) return [];
   if (!isInTrinityWindow(now)) return []; // strict 9:30-11:00 EST gate

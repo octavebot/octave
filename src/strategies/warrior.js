@@ -33,7 +33,7 @@ import { atr, findSwings, volumeSpike } from '../lib/structure.js';
 const NAME = 'WARRIOR';
 const LABEL = 'Strategy #10';
 
-function findGold5(ctx) { return ctx.panesByTf.get('gold|5'); }
+function findGold5(ctx) { return ctx.pane('5'); }
 
 /** Wilder's RSI on close prices, returning the value at the last bar. */
 function rsi(bars, period = 14) {

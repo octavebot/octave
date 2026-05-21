@@ -4,6 +4,7 @@ import { buildAlertChartUrl } from './lib/chart_image.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { send as sendViaQueue, startDrain } from './lib/telegram_queue.js';
 import { register as registerFollowUp } from './lib/follow_up.js';
+import { INSTRUMENT_META } from './detector.js';
 startDrain(); // re-attempt any queued sends on startup
 
 const API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
@@ -201,7 +202,7 @@ export async function sendStartup({ symbol, timeframe }) {
 
   const text = [
     BAR,
-    `✅ *OCTAVE ONLINE*  ·  MGC1!`,
+    `✅ *OCTAVE ONLINE*  ·  MGC1! + MNQ1! + MES1!`,
     `📊 Active (${enabledStrategies.length}/${STRATEGY_INFO.length}): ${activeLine}`,
     `⚫ Inactive: ${inactiveLine}`,
     muteLine,
@@ -381,8 +382,11 @@ export async function send(r, ctx) {
   // price block; trade-management block clearly separated. No mode/local cruft.
   const lines = [];
   lines.push(BAR);
+  // Show the instrument the setup is on (MGC1!/MNQ1!/MES1!). Falls back to
+  // MGC1! if the result was created before per-instrument tagging.
+  const instMeta = INSTRUMENT_META[r.instrument] || INSTRUMENT_META.gold;
   lines.push(`${dirEmoji} *${tgEscape(display.toUpperCase())}*`);
-  lines.push(`   _Strategy ${num}_   ·   ${dirWord}   ·   MGC1!`);
+  lines.push(`   _Strategy ${num}_   ·   ${dirWord}   ·   ${instMeta.symbol}  (${instMeta.label})`);
   if (intent) lines.push(`*${intent.label}*`);
   lines.push(BAR);
   lines.push('');

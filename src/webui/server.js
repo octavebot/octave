@@ -181,9 +181,22 @@ async function gatherState() {
     userStrategies = us.list();
   } catch {}
 
+  // Pull per-instrument latest close from cloud data cache (live Yahoo).
+  // The signal-engine populates this map every ~15s via cloud_data_supplement.
+  let instrumentPrices = {};
+  try {
+    const cd = await import('../lib/cloud_data_supplement.js');
+    const panes = await cd.fetchAllPanes();
+    for (const inst of ['gold', 'nasdaq', 'sp']) {
+      const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
+      const last = p?.bars?.[p.bars.length - 1];
+      if (last) instrumentPrices[inst] = { close: last.close, ts: last.time };
+    }
+  } catch {}
+
   return {
     config,
-    cloud: { alive: cloudAlive, ageMs: cloudAgeMs, raw: cloud },
+    cloud: { alive: cloudAlive, ageMs: cloudAgeMs, raw: { ...(cloud || {}), instrumentPrices } },
     service: { pid: servicePid, uptime: serviceUptime },
     trading_view: { pid: tvPid, cdp_open: cdpOpen },
     caffeinate: { active: caffActive },

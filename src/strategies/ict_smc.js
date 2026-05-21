@@ -64,6 +64,11 @@ export function evaluateICTSMC(ctx) {
   const out = [];
   const now = ctx.ts / 1000;
 
+  // ICT/SMC uses DXY as the SMT divergence asset — that's the gold/DXY inverse
+  // relationship. For nasdaq/sp the SMT logic would need a different partner
+  // (ES↔NQ or ES↔YM), so we keep this strategy gold-only for now.
+  if (ctx.instrument !== 'gold') return out;
+
   // Weekend skip — market closed. Killzone is informational only;
   // setups can fire any weekday hour as long as every requirement is met.
   if (!isMarketOpen(now)) return out;

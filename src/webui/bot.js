@@ -432,32 +432,38 @@ async function cmd24h(arg) {
 }
 
 async function cmdPrice() {
-  // Strategies are now anchored to MGC1! (Micro Gold) per user directive
-  // 2026-05-21. MGC tracks the standard GC contract tick-for-tick, so the
-  // price you see here is identical to what your TradingView MGC chart shows.
-  let mgc = null;
-  try {
-    const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/MGC%3DF?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const data = await res.json().catch(() => null);
-    const meta = data?.chart?.result?.[0]?.meta;
-    if (meta) mgc = { price: meta.regularMarketPrice, change: meta.regularMarketPrice - meta.chartPreviousClose, time: meta.regularMarketTime };
-  } catch {}
-
-  if (!mgc) {
-    const hb = readJson(HEARTBEAT_FILE, null);
-    if (!hb?.anchor) { await send('💰 No price data available.'); return; }
-    await send(`💰 *Micro Gold* (cached)\n*$${hb.anchor.close}* · ${hb.anchor.tf}m bar`);
-    return;
-  }
-
+  // Three primary instruments: Micro Gold (MGC1!), Micro Nasdaq (MNQ1!),
+  // Micro S&P (MES1!). All futures, all tracked tick-for-tick against the
+  // standard contracts so the prices match the user's TradingView charts.
+  const INSTRUMENTS = [
+    { key: 'gold',   sym: 'MGC1!', yh: 'MGC%3DF', label: 'Micro Gold',   tv: 'COMEX:MGC1!' },
+    { key: 'nasdaq', sym: 'MNQ1!', yh: 'MNQ%3DF', label: 'Micro Nasdaq', tv: 'CME_MINI:MNQ1!' },
+    { key: 'sp',     sym: 'MES1!', yh: 'MES%3DF', label: 'Micro S&P',    tv: 'CME_MINI:MES1!' },
+  ];
   const sign = (n) => n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2);
-  await send([
-    '💰 *Micro Gold (MGC1!)*',
-    '',
-    `*$${mgc.price.toFixed(2)}*  _${sign(mgc.change)} today_`,
-    '',
-    '→ matches TradingView `COMEX:MGC1!`',
-  ].join('\n'));
+
+  const fetches = await Promise.all(INSTRUMENTS.map(async (i) => {
+    try {
+      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${i.yh}?interval=1m&range=1d`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const data = await res.json().catch(() => null);
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta) return { ...i, ok: false };
+      return { ...i, ok: true, price: meta.regularMarketPrice,
+               change: meta.regularMarketPrice - meta.chartPreviousClose };
+    } catch { return { ...i, ok: false }; }
+  }));
+
+  const lines = ['💰 *Live prices*', ''];
+  for (const r of fetches) {
+    if (!r.ok) { lines.push(`*${r.label}* (\`${r.sym}\`): _no data_`); continue; }
+    const pct = (r.change / (r.price - r.change)) * 100;
+    const dot = r.change >= 0 ? '🟢' : '🔴';
+    lines.push(`${dot} *${r.label}* \`${r.sym}\``);
+    lines.push(`   *$${r.price.toFixed(2)}*  ${sign(r.change)}  (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`);
+    lines.push('');
+  }
+  lines.push('_Source: Yahoo (tracks TradingView micro-futures tick-for-tick)._');
+  await send(lines.join('\n'));
 }
 
 async function cmdHistory(arg) {
@@ -1090,65 +1096,63 @@ async function cmdActiveSetups() {
 }
 
 async function cmdBias() {
-  await send('🧭 Computing market bias…');
+  await send('🧭 Computing market bias across MGC + MNQ + MES…');
   const r = await runDetectChild();
   if (r.error) { await send(`⚠️ ${r.error}`); return; }
 
-  // Confidence-weighted scoring: triggered counts more than forming, high
-  // confidence counts more than low.
   const STATUS_WT = { triggered: 3, near_trigger: 2, forming: 1, invalidated: 0 };
-  let longScore = 0, shortScore = 0;
-  const longSetups = [], shortSetups = [];
+  const INSTRUMENTS = [
+    { key: 'gold',   label: 'GOLD',   sym: 'MGC1!' },
+    { key: 'nasdaq', label: 'NASDAQ', sym: 'MNQ1!' },
+    { key: 'sp',     label: 'S&P',    sym: 'MES1!' },
+  ];
+
+  // Group signals by instrument
+  const byInst = {};
   for (const x of r.results || []) {
     if (!x.direction || x.direction === 'NONE') continue;
+    const inst = x.instrument || 'gold';
+    if (!byInst[inst]) byInst[inst] = { long: [], short: [], longScore: 0, shortScore: 0 };
     const w = (STATUS_WT[x.status] || 0) * (x.confidence || 0.5);
-    if (x.direction === 'LONG')  { longScore  += w; longSetups.push(x); }
-    if (x.direction === 'SHORT') { shortScore += w; shortSetups.push(x); }
+    if (x.direction === 'LONG')  { byInst[inst].long.push(x);  byInst[inst].longScore  += w; }
+    if (x.direction === 'SHORT') { byInst[inst].short.push(x); byInst[inst].shortScore += w; }
   }
 
-  // If NOTHING came back at all (no signals from any strategy), we can't bias
-  if (!longSetups.length && !shortSetups.length) {
+  const totalSignals = Object.values(byInst).reduce((n, g) => n + g.long.length + g.short.length, 0);
+  if (totalSignals === 0) {
     await send([
-      '⚪ *NEUTRAL* — no signals',
+      '⚪ *NEUTRAL* — no signals across any instrument',
       '',
-      'No strategy is showing directional development right now. The market is in chop / outside killzones / waiting for a sweep.',
-      '',
-      'Try /setup <num> on a specific strategy to see what it\'s waiting for.',
+      'Markets are in chop, outside killzones, or waiting for a sweep.',
+      'Send `/setup <num>` to see what a specific strategy is waiting for.',
     ].join('\n'));
     return;
   }
 
-  const total = longScore + shortScore;
-  let biasIcon, biasWord, biasPct;
-  if (total < 0.1) {
-    biasIcon = '⚪'; biasWord = 'NEUTRAL'; biasPct = '—';
-  } else if (longScore > shortScore * 1.3) {
-    biasIcon = '🟢'; biasWord = 'BULLISH';
-    biasPct = `${Math.round(longScore / total * 100)}%`;
-  } else if (shortScore > longScore * 1.3) {
-    biasIcon = '🔴'; biasWord = 'BEARISH';
-    biasPct = `${Math.round(shortScore / total * 100)}%`;
-  } else {
-    biasIcon = '⚪'; biasWord = 'MIXED'; biasPct = '~50/50';
-  }
-
-  const lines = [
-    `${biasIcon} *${biasWord}* bias  (${biasPct})`,
-    `Long ${longSetups.length} · Short ${shortSetups.length} signals`,
-    '',
-  ];
-  if (longSetups.length) {
-    lines.push(`🟢 *LONG*`);
-    for (const s of longSetups.slice(0, 5)) {
-      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} ${Math.round((s.confidence||0)*100)}%`);
+  const lines = ['🧭 *Multi-instrument bias*', ''];
+  for (const inst of INSTRUMENTS) {
+    const g = byInst[inst.key];
+    if (!g) {
+      lines.push(`⚪ *${inst.label}* \`${inst.sym}\` — no signals`);
+      continue;
     }
-  }
-  if (shortSetups.length) {
-    if (longSetups.length) lines.push('');
-    lines.push(`🔴 *SHORT*`);
-    for (const s of shortSetups.slice(0, 5)) {
-      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} ${Math.round((s.confidence||0)*100)}%`);
+    const total = g.longScore + g.shortScore;
+    let icon, word, pct;
+    if (total < 0.1) { icon = '⚪'; word = 'NEUTRAL'; pct = '—'; }
+    else if (g.longScore > g.shortScore * 1.3) {
+      icon = '🟢'; word = 'BULLISH'; pct = `${Math.round(g.longScore / total * 100)}%`;
+    } else if (g.shortScore > g.longScore * 1.3) {
+      icon = '🔴'; word = 'BEARISH'; pct = `${Math.round(g.shortScore / total * 100)}%`;
+    } else { icon = '⚪'; word = 'MIXED'; pct = '~50/50'; }
+    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` — ${word} (${pct})`);
+    lines.push(`   ${g.long.length} long · ${g.short.length} short signals`);
+    // Top contributors
+    const top = [...g.long, ...g.short].sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 3);
+    for (const s of top) {
+      const arrow = s.direction === 'LONG' ? '🟢' : '🔴';
+      lines.push(`     ${arrow} #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} · ${s.status} · ${Math.round((s.confidence||0)*100)}%`);
     }
+    lines.push('');
   }
   await send(lines.join('\n'));
 }

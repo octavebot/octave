@@ -26,8 +26,8 @@ const TF = '15';
 const NAME = 'VWAP Rubber Band';
 
 export function evaluate(ctx) {
-  const pane = ctx.panesByTf.get(`gold|${TF}`);
-  const pane1h = ctx.panesByTf.get('gold|60');
+  const pane = ctx.pane(TF);
+  const pane1h = ctx.pane('60');
   if (!pane || pane.bars.length < 80) return [];
   if (!pane1h || pane1h.bars.length < 60) return [];
 
