@@ -78,9 +78,11 @@ function isZoneFresh(zone, bars4h) {
 export function evaluate(ctx) {
   const pane60 = ctx.panesByTf.get('gold|60');
   const pane5 = ctx.panesByTf.get('gold|5');
-  if (!pane60 || pane60.bars.length < 200) return [];
+  // 100 1h bars (~4 days) is enough to get ~25 4h candles after resampling.
+  // This was 200 originally — too tight for 7-day Yahoo backtests on h1.
+  if (!pane60 || pane60.bars.length < 100) return [];
   const bars4h = to4h(pane60.bars);
-  if (bars4h.length < 40) return [];
+  if (bars4h.length < 20) return [];
   const atr4h = atr(bars4h, 14);
   if (!atr4h) return [];
   const zones = findZones(bars4h, atr4h).filter((z) => isZoneFresh(z, bars4h));

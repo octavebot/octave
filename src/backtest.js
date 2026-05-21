@@ -31,21 +31,46 @@ import { evaluateTrinity } from './strategies/trinity.js';
 import { evaluateAMN } from './strategies/amn.js';
 import { evaluateTORI } from './strategies/tori.js';
 import { evaluateWARRIOR } from './strategies/warrior.js';
+// ChatGPT Strategies pack
+import { evaluate as cgtEma } from './strategies/chatgpt/ema_trend.js';
+import { evaluate as cgtHtfsd } from './strategies/chatgpt/htf_supply_demand.js';
+import { evaluate as cgtLondon } from './strategies/chatgpt/london_breakout.js';
+import { evaluate as cgtNyrev } from './strategies/chatgpt/ny_reversal_trap.js';
+import { evaluate as cgtVwap } from './strategies/chatgpt/vwap_mean_reversion.js';
+// Gemini Strategies pack
+import { evaluate as gemAsia } from './strategies/gemini/asian_range_breakout.js';
+import { evaluate as gemEma } from './strategies/gemini/golden_river_ema.js';
+import { evaluate as gemFib } from './strategies/gemini/golden_fibonacci.js';
+import { evaluate as gemSmc } from './strategies/gemini/institutional_order_blocks.js';
+import { evaluate as gemVwap } from './strategies/gemini/vwap_rubber_band.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
 
+// Backtest registry — order matters for display; the `num` field is shown in
+// /backtest output and can be either a number (1..10) or a letter-prefixed id
+// (C1..C5 for ChatGPT, G1..G5 for Gemini).
 export const STRATEGIES = [
-  { name: 'USLS',     num: 1,  fn: evaluateUSLS,     label: 'USLS' },
-  { name: 'ICT-SMC',  num: 2,  fn: evaluateICTSMC,   label: 'ICT/SMC' },
-  { name: 'ALGO-SMC', num: 3,  fn: evaluateAlgoSMC,  label: 'ALGO/SMC' },
-  { name: 'ADAPTIVE', num: 4,  fn: evaluateAdaptive, label: 'Adaptive Matrix' },
-  { name: 'ICT',      num: 5,  fn: evaluateICTM15,   label: 'ICT M15' },
-  { name: 'SMT',      num: 6,  fn: evaluateSMTM15,   label: 'SMT M15' },
-  { name: 'TRINITY',  num: 7,  fn: evaluateTrinity,  label: 'Trinity' },
-  { name: 'AMN',      num: 8,  fn: evaluateAMN,      label: 'AMN Dual-Model' },
-  { name: 'TORI',     num: 9,  fn: evaluateTORI,     label: 'TORI Trendline' },
-  { name: 'WARRIOR',  num: 10, fn: evaluateWARRIOR,  label: 'Warrior Momentum' },
+  { name: 'USLS',       num: 1,   fn: evaluateUSLS,     label: 'USLS' },
+  { name: 'ICT-SMC',    num: 2,   fn: evaluateICTSMC,   label: 'ICT/SMC' },
+  { name: 'ALGO-SMC',   num: 3,   fn: evaluateAlgoSMC,  label: 'ALGO/SMC' },
+  { name: 'ADAPTIVE',   num: 4,   fn: evaluateAdaptive, label: 'Adaptive Matrix' },
+  { name: 'ICT',        num: 5,   fn: evaluateICTM15,   label: 'ICT M15' },
+  { name: 'SMT',        num: 6,   fn: evaluateSMTM15,   label: 'SMT M15' },
+  { name: 'TRINITY',    num: 7,   fn: evaluateTrinity,  label: 'Trinity' },
+  { name: 'AMN',        num: 8,   fn: evaluateAMN,      label: 'AMN Dual-Model' },
+  { name: 'TORI',       num: 9,   fn: evaluateTORI,     label: 'TORI Trendline' },
+  { name: 'WARRIOR',    num: 10,  fn: evaluateWARRIOR,  label: 'Warrior Momentum' },
+  { name: 'CGT-EMA',    num: 'C1', fn: cgtEma,           label: 'CGT · EMA Trend' },
+  { name: 'CGT-HTFSD',  num: 'C2', fn: cgtHtfsd,         label: 'CGT · HTF Supply & Demand' },
+  { name: 'CGT-LONDON', num: 'C3', fn: cgtLondon,        label: 'CGT · London Breakout' },
+  { name: 'CGT-NYREV',  num: 'C4', fn: cgtNyrev,         label: 'CGT · NY Reversal Trap' },
+  { name: 'CGT-VWAP',   num: 'C5', fn: cgtVwap,          label: 'CGT · VWAP Mean Reversion' },
+  { name: 'GEM-ASIA',   num: 'G1', fn: gemAsia,          label: 'GEM · Asian Range Breakout' },
+  { name: 'GEM-EMA',    num: 'G2', fn: gemEma,           label: 'GEM · Golden River EMA' },
+  { name: 'GEM-FIB',    num: 'G3', fn: gemFib,           label: 'GEM · Golden Fibonacci' },
+  { name: 'GEM-SMC',    num: 'G4', fn: gemSmc,           label: 'GEM · Institutional OBs' },
+  { name: 'GEM-VWAP',   num: 'G5', fn: gemVwap,          label: 'GEM · VWAP Rubber Band' },
 ];
 
 const PANE_REQUESTS = [
@@ -150,7 +175,12 @@ export async function runBacktest(opts = {}) {
   const enabledNames = opts.strategies?.length
     ? opts.strategies
     : Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => k);
-  const selected = STRATEGIES.filter((s) => enabledNames.includes(s.name));
+  // Accept multiple identifiers per strategy: full key (CGT-EMA), display num
+  // ('C1' or 1), or any case variant. Normalize before matching.
+  const requested = new Set(enabledNames.map((n) => String(n).toUpperCase()));
+  const selected = STRATEGIES.filter((s) =>
+    requested.has(String(s.name).toUpperCase()) || requested.has(String(s.num).toUpperCase())
+  );
   if (selected.length === 0) {
     return { error: 'no strategies to backtest', stats: {}, panesSummary: [], window: null };
   }
