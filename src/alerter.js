@@ -90,22 +90,57 @@ async function postPhoto(photoUrl, caption) {
   return ok;
 }
 
+// Strategy nicknames keyed by config field name. Source of truth for both
+// the running strategy list AND the startup banner.
+const STRATEGY_INFO = [
+  { key: 'USLS',     num: 1,  short: 'USLS' },
+  { key: 'ICT-SMC',  num: 2,  short: 'ICT/SMC' },
+  { key: 'ALGO-SMC', num: 3,  short: 'ALGO/SMC' },
+  { key: 'ADAPTIVE', num: 4,  short: 'Adaptive' },
+  { key: 'ICT',      num: 5,  short: 'ICT' },
+  { key: 'SMT',      num: 6,  short: 'SMT' },
+  { key: 'TRINITY',  num: 7,  short: 'Trinity' },
+  { key: 'AMN',      num: 8,  short: 'AMN' },
+  { key: 'TORI',     num: 9,  short: 'TORI' },
+  { key: 'WARRIOR',  num: 10, short: 'Warrior' },
+];
+
 export async function sendStartup({ symbol, timeframe }) {
   const sym = symbol || '(no chart)';
   const tf = timeframe || '?';
+
+  // Read live runtime-config — actually reflects what the user has enabled
+  // RIGHT NOW, not what was the case at code-write time.
+  const cfg = getRuntimeConfig() || {};
+  const enabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] === true);
+  const disabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] !== true);
+
+  const activeLine = enabledStrategies.length === 0
+    ? '_(none enabled)_'
+    : enabledStrategies.map((s) => `#${s.num} ${s.short}`).join(' · ');
+  const inactiveLine = disabledStrategies.length === 0
+    ? '_(all enabled)_'
+    : disabledStrategies.map((s) => `#${s.num}`).join(' ');
+
+  const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
+    ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
+  const muteLine = muteSec > 0 ? `🔕 Muted ${Math.round(muteSec / 60)}m` : null;
+  const bypassLine = cfg.bypassKillzones ? '🌐 24/7 mode ON' : null;
+
   const text = [
     BAR,
     `✅ *OCTAVE ONLINE*`,
-    `📊 Active strategies: #5 (ICT) · #6 (SMT) · #7 (Trinity)`,
-    `🔕 Inactive: #1-#4 (deactivated)`,
+    `📊 Active (${enabledStrategies.length}/10): ${activeLine}`,
+    `⚫ Inactive: ${inactiveLine}`,
+    muteLine,
+    bypassLine,
     BAR,
     ``,
     `🔌 Watching: \`${tgEscape(sym)}\` · \`${tgEscape(tf)}m\``,
-    `🤖 Telegram channel connected`,
     `🟢 Service started · monitoring live`,
     ``,
     BAR,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   return postRaw(text);
 }
 
