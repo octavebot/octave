@@ -566,10 +566,10 @@ async function cmdBacktest(arg) {
 
   const args = ['scripts/run-backtest-child.js', '--days', String(days)];
   if (strategy) args.push('--strategy', strategy);
-  const REPO_DIR = '/Users/jqvier/trading-alerts';
 
   // Use the SAME node that's running this bot (works on Mac /opt/homebrew,
-  // VPS /usr/bin, anywhere) instead of guessing /usr/local/bin/node.
+  // VPS /usr/bin, anywhere) and the module-level REPO_DIR (resolved from
+  // __dirname so it's correct on both Mac /Users/jqvier/... and VPS /home/octave/...)
   const child = spawn(process.execPath, args, {
     cwd: REPO_DIR,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -778,21 +778,14 @@ async function cmdCloudDiagnose() {
 
 /** Run the detector in a child process; returns the parsed results array. */
 async function runDetectChild() {
-  const REPO_DIR = '/Users/jqvier/trading-alerts';
-  // Look in a couple of standard locations — works on Mac dev + VPS
-  const candidates = [
-    '/home/octave/trading-alerts/scripts/run-detect-child.js',
-    REPO_DIR + '/scripts/run-detect-child.js',
-  ];
-  let script = null;
-  for (const p of candidates) {
-    try { if ((await import('node:fs')).existsSync(p)) { script = p; break; } } catch {}
-  }
-  if (!script) return { error: 'detect runner script not found' };
+  // Resolve from the module-level REPO_DIR (computed from __dirname so it's
+  // correct on Mac /Users/jqvier/... AND VPS /home/octave/...)
+  const script = join(REPO_DIR, 'scripts', 'run-detect-child.js');
+  if (!existsSync(script)) return { error: 'detect runner script not found at ' + script };
 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script], {
-      cwd: (script.includes('/home/octave/') ? '/home/octave/trading-alerts' : REPO_DIR),
+      cwd: REPO_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let buf = '', result = null;
