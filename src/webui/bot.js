@@ -234,6 +234,11 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 \`/menu\` — open the Control Panel with buttons
 \`/app\` or \`/panel\` — same thing
 
+📊 *Market*
+\`/bias\` — current market bias (BUY/SELL) from all strategies
+\`/setup <num>\` — what's forming on a strategy + chart
+\`/price\` — spot + futures gold
+
 📊 *Status*
 \`/status\` — overall health
 \`/cloud\` — cloud (GitHub Actions) state
@@ -283,41 +288,34 @@ async function cmdHelp() {
 
 async function cmdStatus() {
   const cfg = loadConfig();
-  const hb = readJson(HEARTBEAT_FILE, null);
   const drawings = readJson(DRAWINGS_FILE, { setups: {} });
   const session = readJson(SESSION_FILE, { lastSession: null });
   const pid = await servicePid();
 
-  let cloudLine = '🔴 No heartbeat';
-  if (hb?.lastTick) {
-    const ageMin = Math.round((Date.now() - hb.lastTick) / 60000);
-    if (ageMin < 8 && hb.status === 'ok') cloudLine = `🟢 Online (${ageMin}m ago)`;
-    else if (hb.status === 'skipped-mode-local') cloudLine = `⚪ Idle (mode=local, ${ageMin}m ago)`;
-    else if (hb.status === 'skipped-muted') cloudLine = `🔕 Muted (${ageMin}m ago)`;
-    else cloudLine = `🟠 Stale (${ageMin}m ago)`;
-  }
-
-  const onCount = cfg?.strategies ? Object.values(cfg.strategies).filter(Boolean).length : 0;
   const onNums = cfg?.strategies
     ? Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => `#${STRATEGY_NUM[k]}`).sort().join(' ')
     : '(none)';
 
-  const muteSec = cfg?.mute?.untilMs && cfg.mute.untilMs > Date.now()
-    ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
+  const muteMin = cfg?.mute?.untilMs && cfg.mute.untilMs > Date.now()
+    ? Math.round((cfg.mute.untilMs - Date.now()) / 60000) : 0;
 
-  const lines = [
-    '🎵 *Octave Status*',
+  // Lead with what matters: are we alerting? Then context.
+  const alerting = !muteMin && pid;
+  const headline = alerting
+    ? '🟢 *Octave is live and watching*'
+    : muteMin > 0
+      ? `🔕 *Muted for ${muteMin}m*`
+      : '🔴 *Octave is offline*';
+
+  await send([
+    headline,
     '',
-    `🎚 Mode: \`${cfg?.mode || '?'}\``,
-    `🟢 Enabled: ${onNums} (${onCount}/7)`,
-    muteSec > 0 ? `🔕 Muted for ${Math.round(muteSec / 60)}m` : `🔔 Alerts: live`,
+    `Active strategies: ${onNums}`,
+    `Mode: \`${cfg?.mode || 'auto'}\`  ·  Session: *${(session.lastSession || 'closed').toUpperCase()}*`,
+    `${Object.keys(drawings.setups || {}).length} setups being tracked`,
     '',
-    `☁️ Cloud: ${cloudLine}`,
-    `💻 Local: ${pid ? `🟢 PID ${pid}` : '🔴 stopped'}`,
-    `📊 Active setups: ${Object.keys(drawings.setups || {}).length}`,
-    `🌍 Session: \`${(session.lastSession || '—').toUpperCase()}\``,
-  ];
-  await send(lines.join('\n'));
+    `Send /bias for current direction · /health for service detail`,
+  ].join('\n'));
 }
 
 async function cmdCloud() {
@@ -366,16 +364,48 @@ async function cmdSession() {
 }
 
 async function cmdPrice() {
-  const hb = readJson(HEARTBEAT_FILE, null);
-  if (!hb?.anchor) { await send('💰 No price data available yet.'); return; }
-  const ageMin = Math.round((Date.now() - (hb.anchor.time || 0) * 1000) / 60000);
-  await send([
-    '💰 *Gold Price*',
-    `\`${hb.anchor.symbol}\`: *$${hb.anchor.close}*`,
-    `Bar timeframe: ${hb.anchor.tf}m`,
-    `Bar age: ${ageMin}m`,
-    `Source: cloud heartbeat (${Math.round((Date.now() - hb.lastTick) / 1000)}s ago)`,
-  ].join('\n'));
+  // Fetch BOTH spot (XAUUSD=X, matches TradingView OANDA:XAUUSD ~$1-2 diff)
+  // AND futures (GC=F, what most strategies actually evaluate on). The user
+  // sees both with delta — no more "your price doesn't match my chart."
+  let spot = null, futures = null;
+  try {
+    const [spotRes, futRes] = await Promise.all([
+      fetch('https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD%3DX?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
+      fetch('https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
+    ]);
+    const spotData = await spotRes.json().catch(() => null);
+    const futData = await futRes.json().catch(() => null);
+    const spotMeta = spotData?.chart?.result?.[0]?.meta;
+    const futMeta = futData?.chart?.result?.[0]?.meta;
+    if (spotMeta) spot = { price: spotMeta.regularMarketPrice, change: spotMeta.regularMarketPrice - spotMeta.chartPreviousClose, time: spotMeta.regularMarketTime };
+    if (futMeta)  futures = { price: futMeta.regularMarketPrice, change: futMeta.regularMarketPrice - futMeta.chartPreviousClose, time: futMeta.regularMarketTime };
+  } catch {}
+
+  if (!spot && !futures) {
+    // Fall back to the heartbeat snapshot
+    const hb = readJson(HEARTBEAT_FILE, null);
+    if (!hb?.anchor) { await send('💰 No price data available.'); return; }
+    await send(`💰 *Gold* (futures, cached)\n*$${hb.anchor.close}* · ${hb.anchor.tf}m bar`);
+    return;
+  }
+
+  const sign = (n) => n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2);
+  const lines = ['💰 *Gold*', ''];
+  if (spot) {
+    lines.push(`*Spot (XAU/USD)*: *$${spot.price.toFixed(2)}*  _${sign(spot.change)} today_`);
+    lines.push('  → matches TradingView \\`OANDA:XAUUSD\\`');
+  }
+  if (futures) {
+    lines.push('');
+    lines.push(`*Futures (GC1!)*: *$${futures.price.toFixed(2)}*  _${sign(futures.change)} today_`);
+    lines.push('  → matches TradingView \\`COMEX:GC1!\\` (strategies use this)');
+  }
+  if (spot && futures) {
+    const basis = futures.price - spot.price;
+    lines.push('');
+    lines.push(`Basis (futures − spot): *${sign(basis)}*`);
+  }
+  await send(lines.join('\n'));
 }
 
 async function cmdHistory(arg) {
@@ -562,7 +592,9 @@ async function cmdBacktest(arg) {
   if (strategy) args.push('--strategy', strategy);
   const REPO_DIR = '/Users/jqvier/trading-alerts';
 
-  const child = spawn('/usr/local/bin/node', args, {
+  // Use the SAME node that's running this bot (works on Mac /opt/homebrew,
+  // VPS /usr/bin, anywhere) instead of guessing /usr/local/bin/node.
+  const child = spawn(process.execPath, args, {
     cwd: REPO_DIR,
     stdio: ['ignore', 'pipe', 'pipe'],
     // Detached: false so parent can wait, but the child has its own event loop —
@@ -765,6 +797,169 @@ async function cmdCloudDiagnose() {
     await send(lines.join('\n'));
   } catch (err) {
     await send(`⚠️ Diagnose failed: ${err.message}`);
+  }
+}
+
+/** Run the detector in a child process; returns the parsed results array. */
+async function runDetectChild() {
+  const REPO_DIR = '/Users/jqvier/trading-alerts';
+  // Look in a couple of standard locations — works on Mac dev + VPS
+  const candidates = [
+    '/home/octave/trading-alerts/scripts/run-detect-child.js',
+    REPO_DIR + '/scripts/run-detect-child.js',
+  ];
+  let script = null;
+  for (const p of candidates) {
+    try { if ((await import('node:fs')).existsSync(p)) { script = p; break; } } catch {}
+  }
+  if (!script) return { error: 'detect runner script not found' };
+
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [script], {
+      cwd: (script.includes('/home/octave/') ? '/home/octave/trading-alerts' : REPO_DIR),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let buf = '', result = null;
+    child.stdout.on('data', (d) => {
+      buf += d.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line.startsWith('RESULT:')) {
+          try { result = JSON.parse(line.slice(7)); } catch {}
+        }
+      }
+    });
+    child.stderr.on('data', (d) => console.error('[detect-child]', d.toString().trim()));
+    const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 30_000);
+    child.on('exit', () => { clearTimeout(kill); resolve(result || { error: 'no result' }); });
+    child.on('error', (e) => { clearTimeout(kill); resolve({ error: e.message }); });
+  });
+}
+
+async function cmdBias() {
+  await send('🧭 Computing market bias…');
+  const r = await runDetectChild();
+  if (r.error) { await send(`⚠️ ${r.error}`); return; }
+
+  // Score each result: triggered=3, near_trigger=2, forming=1, invalidated=-0.5
+  const STATUS_WT = { triggered: 3, near_trigger: 2, forming: 1, invalidated: -0.5 };
+  let longScore = 0, shortScore = 0;
+  const longSetups = [], shortSetups = [];
+  for (const x of r.results || []) {
+    if (!x.direction || x.direction === 'NONE') continue;
+    const w = (STATUS_WT[x.status] || 0) * (x.confidence || 0.5);
+    if (x.direction === 'LONG')  { longScore  += w; longSetups.push(x); }
+    if (x.direction === 'SHORT') { shortScore += w; shortSetups.push(x); }
+  }
+
+  const total = longScore + shortScore;
+  let biasIcon, biasWord, biasPct;
+  if (total < 0.5) {
+    biasIcon = '⚪'; biasWord = 'NEUTRAL'; biasPct = '—';
+  } else if (longScore > shortScore * 1.3) {
+    biasIcon = '🟢'; biasWord = 'BULLISH';
+    biasPct = `${Math.round(longScore / total * 100)}%`;
+  } else if (shortScore > longScore * 1.3) {
+    biasIcon = '🔴'; biasWord = 'BEARISH';
+    biasPct = `${Math.round(shortScore / total * 100)}%`;
+  } else {
+    biasIcon = '⚪'; biasWord = 'MIXED'; biasPct = '~50/50';
+  }
+
+  const lines = [`${biasIcon} *${biasWord}* bias (${biasPct})`, ''];
+  if (longSetups.length) {
+    lines.push(`🟢 *LONG signals* (${longSetups.length}):`);
+    for (const s of longSetups.slice(0, 5)) {
+      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} (${Math.round((s.confidence||0)*100)}%)`);
+    }
+  }
+  if (shortSetups.length) {
+    lines.push('');
+    lines.push(`🔴 *SHORT signals* (${shortSetups.length}):`);
+    for (const s of shortSetups.slice(0, 5)) {
+      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} (${Math.round((s.confidence||0)*100)}%)`);
+    }
+  }
+  if (!longSetups.length && !shortSetups.length) {
+    lines.push('No directional signals from any strategy right now. Market is quiet — wait for setup development.');
+  }
+  await send(lines.join('\n'));
+}
+
+async function cmdSetup(arg) {
+  const key = resolveStrategy(arg);
+  if (!key) {
+    await send('Usage: `/setup <num>` (1-10) or `/setup <name>` (e.g. `/setup ICT`).');
+    return;
+  }
+  await send(`🔍 Checking *${key}*…`);
+  const r = await runDetectChild();
+  if (r.error) { await send(`⚠️ ${r.error}`); return; }
+  const matches = (r.results || []).filter((x) => x.strategy === key);
+  if (matches.length === 0) {
+    await send(`#${STRATEGY_NUM[key]} *${key}* — no activity right now.\n\nThe strategy is enabled and watching but no setup is forming. Common reasons: outside killzone window, no liquidity sweep yet, no HTF gap tapped, etc.`);
+    return;
+  }
+  // Pick the most advanced one (triggered > near_trigger > forming > invalidated)
+  const PRI = { triggered: 0, near_trigger: 1, forming: 2, invalidated: 3 };
+  matches.sort((a, b) => (PRI[a.status] ?? 9) - (PRI[b.status] ?? 9));
+  const top = matches[0];
+  const conf = Math.round((top.confidence || 0) * 100);
+
+  // Build a chart image if entryPlan exists OR pseudo-plan from geometry
+  let chartUrl = null;
+  if (top.entryPlan) {
+    try {
+      const m = await import('../lib/chart_image.js');
+      chartUrl = await m.buildAlertChartUrl(top);
+    } catch {}
+  }
+
+  const STAGE_LABEL = { forming: '🟡 FORMING', near_trigger: '🟠 NEAR TRIGGER', triggered: '🟢 TRIGGERED', invalidated: '❌ INVALIDATED' };
+  const lines = [
+    `🔍 *#${STRATEGY_NUM[key]} ${key}* — ${STAGE_LABEL[top.status] || top.status}`,
+    `Direction: ${top.direction === 'LONG' ? '🟢 LONG' : top.direction === 'SHORT' ? '🔴 SHORT' : '—'}`,
+    `Confidence: *${conf}%*`,
+    '',
+    top.summary || top.setupName || '',
+  ];
+  // What's confirmed vs missing
+  const g = top.geometry || {};
+  const confirmed = [], missing = [];
+  if (g.target?.level)   confirmed.push(`Target identified (${g.target.name || ''} @ ${g.target.level.toFixed(2)})`);
+  else missing.push('Liquidity target');
+  if (g.sweep?.wickPrice) confirmed.push(`Sweep wick @ ${g.sweep.wickPrice.toFixed(2)}`);
+  else missing.push('Liquidity sweep');
+  if (g.mss?.brokenPrice) confirmed.push(`MSS @ ${g.mss.brokenPrice.toFixed(2)}`);
+  else missing.push('Market structure shift (MSS)');
+  if (g.fvg?.top != null) confirmed.push(`FVG ${g.fvg.bottom.toFixed(2)}-${g.fvg.top.toFixed(2)}`);
+  else if (top.status !== 'triggered') missing.push('Fair Value Gap');
+  if (top.entryPlan) confirmed.push(`Entry plan ready @ ${top.entryPlan.entry.toFixed(2)}`);
+
+  if (confirmed.length) {
+    lines.push('');
+    lines.push('*✅ Confirmed:*');
+    for (const c of confirmed) lines.push(`  · ${c}`);
+  }
+  if (missing.length && top.status !== 'triggered') {
+    lines.push('');
+    lines.push('*⏳ Still needed:*');
+    for (const m of missing) lines.push(`  · ${m}`);
+  }
+
+  if (chartUrl) {
+    // Send via sendPhoto with this whole message as caption (truncated if needed)
+    const fits = lines.join('\n').length <= 1024;
+    const caption = fits ? lines.join('\n') : lines.join('\n').slice(0, 980) + '…';
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: CHAT_ID, photo: chartUrl, caption, parse_mode: 'Markdown' }),
+    }).catch(() => {});
+    if (!fits) await send(lines.join('\n'));
+  } else {
+    await send(lines.join('\n'));
   }
 }
 
@@ -1055,6 +1250,8 @@ const COMMANDS = {
   '/diagnose': cmdCloudDiagnose,
   '/dashboard': cmdDashboard,
   '/web': cmdDashboard,
+  '/bias': cmdBias,
+  '/setup': cmdSetup,
 };
 
 async function handleUpdate(update) {

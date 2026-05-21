@@ -208,12 +208,22 @@ async function readBody(req) {
   });
 }
 
+// Accept hosts: loopback, plus Cloudflare Tunnel patterns, plus anything the
+// user explicitly allowlists via OCTAVE_ALLOWED_HOSTS (comma-separated).
+const EXTRA_HOSTS = (process.env.OCTAVE_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
+function isAllowedHost(host) {
+  if (host === '127.0.0.1' || host === 'localhost') return true;
+  if (host.endsWith('.trycloudflare.com')) return true;
+  if (host.endsWith('.cfargotunnel.com')) return true;
+  if (EXTRA_HOSTS.includes(host)) return true;
+  return false;
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    // Loopback safety: refuse if Host header isn't localhost/127.0.0.1
     const host = (req.headers.host || '').split(':')[0];
-    if (host !== '127.0.0.1' && host !== 'localhost') {
+    if (!isAllowedHost(host)) {
       res.statusCode = 403;
       return res.end('forbidden');
     }
@@ -310,8 +320,13 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[webui] listening on http://127.0.0.1:${PORT}`);
+// Default to loopback for safety. On the VPS (where Cloudflare Tunnel runs
+// in the same machine) loopback is still fine — but the host-header allowlist
+// protects us. Override via OCTAVE_WEBUI_BIND=0.0.0.0 if you intentionally
+// want direct public access.
+const BIND = process.env.OCTAVE_WEBUI_BIND || '127.0.0.1';
+server.listen(PORT, BIND, () => {
+  console.log(`[webui] listening on http://${BIND}:${PORT}`);
 });
 
 // Webui no longer runs the Telegram bot in-process. The bot runs as its own
