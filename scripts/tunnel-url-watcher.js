@@ -15,7 +15,7 @@
  * has the current URL.
  */
 
-import { createReadStream, readFileSync, writeFileSync, existsSync, statSync, watchFile } from 'node:fs';
+import { createReadStream, readFileSync, writeFileSync, existsSync, statSync, watchFile, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 const LOG = '/home/octave/.octave-tunnel.log';
@@ -71,6 +71,9 @@ async function handleUrl(newUrl) {
   lastUrl = newUrl;
   try {
     writeFileSync(URL_FILE, newUrl + '\n');
+    // Mode 644 — readable by other users (e.g. ubuntu over SSH) so the
+    // Mac Octave.app can fetch it. URL isn't sensitive.
+    chmodSync(URL_FILE, 0o644);
   } catch (err) {
     console.error('[tunnel-watcher] could not write URL file:', err.message);
   }
