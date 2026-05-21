@@ -297,6 +297,23 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 \`/backtest <num> <days>\` — custom window
 Auto-runs Sunday 8pm NY.
 
+📓 *Trade journal*
+\`/in <id> <contracts> <price> [instrument]\` — record entry
+\`/out <id> <tp1|tp2|sl|be|manual> <price>\` — record exit
+\`/be <id>\` — moved SL to breakeven
+\`/note <id> <text>\` — attach a note
+\`/journal [N]\` — last trades
+\`/journal stats [days]\` — win rate breakdown
+
+🤖 *AI assistant*
+Send any free-form message and Claude will handle it. Examples:
+  • "I just entered MGC long at 4520 with 2 contracts"
+  • "what's my win rate this week?"
+  • "create a strategy that fades RSI extremes on the 1h"
+  • "fix backtest, then run one for 14 days"
+\`/ai <message>\` — explicit prompt
+\`/clearchat\` — wipe AI memory
+
 🚨 *System*
 \`/restart all\` — restart everything
 \`/restart bot\` / \`/restart signals\` / \`/restart webui\` — single
@@ -1577,7 +1594,143 @@ const COMMANDS = {
   '/mystrategies': cmdMyStrategies,
   '/fix': cmdFix,
   '/diagnose': cmdDiagnose,
+  '/in': cmdJournalIn,
+  '/out': cmdJournalOut,
+  '/be': cmdJournalBE,
+  '/note': cmdJournalNote,
+  '/journal': cmdJournal,
+  '/ai': cmdAi,           // explicit AI prompt (also: any non-slash text)
+  '/clearchat': cmdClearChat,
 };
+
+/**
+ * Trade journal commands.
+ *
+ * /in <setupId> <contracts> <price> [instrument]
+ * /out <setupId> <reason: tp1|tp2|sl|be|manual> <price> [contracts]
+ * /be <setupId>
+ * /note <setupId> <text…>
+ * /journal [N | stats [days]]
+ *
+ * setupId is whatever the user wants — a previously-fired alert's setupId
+ * pasted verbatim, or just a short name like "ema-long-mgc-12pm". The AI
+ * chat path is more forgiving if you'd rather talk freely.
+ */
+async function cmdJournalIn(arg) {
+  const journal = await import('../lib/trade_journal.js');
+  const parts = parseArgs(arg || '');
+  if (parts.length < 3) {
+    await send('Usage: `/in <setupId> <contracts> <price> [instrument]`\nExample: `/in ema-long-1130 2 4520 gold`');
+    return;
+  }
+  const [setupId, contractsStr, priceStr, instrument] = parts;
+  const ev = journal.log({
+    action: 'in', setupId,
+    contracts: Number(contractsStr), price: Number(priceStr),
+    instrument: instrument || undefined,
+  });
+  await send(`✅ *Entered* \`${tgEscape(setupId)}\`\n${ev.contracts}× contract(s) @ \`$${ev.price}\`${instrument ? ` · ${instrument}` : ''}\n\nWhen you exit, send \`/out ${setupId} <reason> <price>\`.`);
+}
+
+async function cmdJournalOut(arg) {
+  const journal = await import('../lib/trade_journal.js');
+  const parts = parseArgs(arg || '');
+  if (parts.length < 3) {
+    await send('Usage: `/out <setupId> <tp1|tp2|sl|be|manual> <price> [contracts]`\nExample: `/out ema-long-1130 tp1 4534 1`');
+    return;
+  }
+  const [setupId, reason, priceStr, contractsStr] = parts;
+  const ev = journal.log({
+    action: 'out', setupId, reason,
+    price: Number(priceStr),
+    contracts: contractsStr ? Number(contractsStr) : undefined,
+  });
+  const icon = reason === 'sl' ? '🛑' : reason === 'be' ? '🟡' : '🎯';
+  await send(`${icon} *Closed* \`${tgEscape(setupId)}\` — ${reason.toUpperCase()} @ \`$${ev.price}\``);
+}
+
+async function cmdJournalBE(arg) {
+  const journal = await import('../lib/trade_journal.js');
+  const setupId = (arg || '').trim();
+  if (!setupId) { await send('Usage: `/be <setupId>`'); return; }
+  journal.log({ action: 'be', setupId });
+  await send(`🟡 SL → breakeven on \`${tgEscape(setupId)}\``);
+}
+
+async function cmdJournalNote(arg) {
+  const journal = await import('../lib/trade_journal.js');
+  const parts = parseArgs(arg || '');
+  if (parts.length < 2) { await send('Usage: `/note <setupId> <text…>`'); return; }
+  const [setupId, ...rest] = parts;
+  journal.log({ action: 'note', setupId, text: rest.join(' ') });
+  await send(`📝 Note saved on \`${tgEscape(setupId)}\``);
+}
+
+async function cmdJournal(arg) {
+  const journal = await import('../lib/trade_journal.js');
+  const trimmed = (arg || '').trim();
+  if (trimmed.startsWith('stats')) {
+    const days = parseInt(trimmed.split(/\s+/)[1] || '7', 10) || 7;
+    const s = journal.stats(days);
+    await send([
+      `📊 *Journal stats — last ${days}d*`, '',
+      `Trades: ${s.totalTrades} (${s.openTrades} open, ${s.closedTrades} closed)`,
+      `Wins: ${s.wins} · Losses: ${s.losses}`,
+      `Win rate: *${(s.winRate * 100).toFixed(0)}%*`,
+      `Total contracts: ${s.totalContracts}`,
+      '',
+      'Breakdown: ' + Object.entries(s.byReason).map(([k, v]) => `${k}=${v}`).join(' · '),
+    ].join('\n'));
+    return;
+  }
+  const n = Math.max(1, Math.min(50, parseInt(trimmed, 10) || 10));
+  const trades = journal.recentTrades(n);
+  if (trades.length === 0) {
+    await send('📓 Journal is empty — log your first trade with `/in <id> <contracts> <price>`.');
+    return;
+  }
+  const lines = [`📓 *Last ${trades.length} trades*`, ''];
+  for (const t of trades) {
+    const status = t.exitReason ? `${t.exitReason.toUpperCase()} @ $${t.exitPrice}` :
+                   t.isBE ? 'open (BE)' : 'open';
+    lines.push(`\`${tgEscape(t.setupId)}\` — ${t.contracts || '?'}× @ $${t.entryPrice} → ${status}`);
+  }
+  await send(lines.join('\n'));
+}
+
+/** Explicit /ai prompt. Falls through to natural chat — same code path. */
+async function cmdAi(arg) {
+  if (!arg) { await send('Usage: `/ai <message>` — or just send any non-command text.'); return; }
+  await runAiChat(arg);
+}
+
+async function cmdClearChat() {
+  const ai = await import('../lib/ai_chat.js');
+  ai.clearSession(CHAT_ID);
+  await send('🧹 Chat memory cleared. Next message starts a fresh thread.');
+}
+
+/**
+ * Send free-form text to Claude (with tool use) and reply back.
+ * Used by /ai and by the default no-command-matched dispatcher below.
+ */
+async function runAiChat(userText) {
+  // "typing…" indicator while Claude thinks
+  try {
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: CHAT_ID, action: 'typing' }),
+    });
+  } catch {}
+  try {
+    const ai = await import('../lib/ai_chat.js');
+    const reply = await ai.chat(CHAT_ID, userText);
+    await send(reply);
+  } catch (err) {
+    await send(`⚠️ AI error: ${err.message}\n\nFalls back to commands — send \`/help\`.`);
+  }
+}
 
 /**
  * /fix [component]   /fix all   /fix backtest   /fix signal-engine
@@ -1901,11 +2054,12 @@ async function handleUpdate(update) {
   }
   if (!msg.text) return;
   const text = msg.text.trim();
-  // Match leading command + optional argument (handles "/help" and "/help@octavebot" and "/range 09:30-11:00")
+  // Match leading command + optional argument
   const m = /^\/([a-z]+)(?:@\w+)?(?:\s+(.+))?$/i.exec(text);
   if (!m) {
-    // Free-form message — guide them to /help
-    await send('I respond to commands. Send `/help` to see what I can do.');
+    // Free-form message → AI chat with tool use. Claude can run any of
+    // the bot's internal capabilities and reply naturally.
+    await runAiChat(text);
     return;
   }
   const cmd = '/' + m[1].toLowerCase();
