@@ -675,32 +675,36 @@ async function cmdDashboard() {
 
 async function cmdHealth() {
   const beats = readAllBeats();
-  const services = ['signal-engine', 'bot', 'webui', 'watchdog', 'market-data'];
-  const lines = ['🩺 *Octave Health*', ''];
-  for (const s of services) {
-    const b = beats[s];
+  const SERVICE_DISPLAY = {
+    'signal-engine': 'Signal Engine',
+    'bot':           'Telegram Bot',
+    'webui':         'Dashboard',
+    'watchdog':      'Watchdog',
+    'market-data':   'Market Data',
+  };
+  const serviceLines = [];
+  let allGreen = true;
+  for (const [key, label] of Object.entries(SERVICE_DISPLAY)) {
+    const b = beats[key];
     if (!b) {
-      lines.push(`🔴 ${s}: no heartbeat`);
+      serviceLines.push(`🔴 ${label}: not running`);
+      allGreen = false;
       continue;
     }
     const ageS = Math.round((Date.now() - b.at) / 1000);
-    const stale = isStale(s, b);
-    const icon = stale ? '🟠' : '🟢';
-    lines.push(`${icon} ${s}: ${ageS}s ago · pid ${b.pid} · ${b.mem_mb || '?'}MB · up ${Math.round((b.uptime_s || 0) / 60)}m`);
+    if (isStale(key, b)) {
+      serviceLines.push(`🟠 ${label}: stale (${ageS}s ago)`);
+      allGreen = false;
+    } else {
+      const mem = b.mem_mb ? ` · ${b.mem_mb}MB` : '';
+      serviceLines.push(`🟢 ${label}: live · ${ageS}s ago${mem}`);
+    }
   }
-
-  // Also fetch local + cloud snapshot
-  const cfg = loadConfig();
-  const hb = readJson(HEARTBEAT_FILE, null);
-  lines.push('');
-  if (hb?.lastTick) {
-    const age = Math.round((Date.now() - hb.lastTick) / 1000);
-    lines.push(`☁️ Cloud tick: ${age}s ago · status \`${hb.status}\``);
-  } else {
-    lines.push(`☁️ Cloud: no heartbeat — run \`/cloud diagnose\``);
-  }
-  lines.push(`🎚 Mode: \`${cfg?.mode || '?'}\``);
-  await send(lines.join('\n'));
+  await send([
+    allGreen ? '✅ *All systems normal*' : '⚠️ *Issues detected*',
+    '',
+    ...serviceLines,
+  ].join('\n'));
 }
 
 const SERVICE_LABELS = {
@@ -778,8 +782,6 @@ async function cmdCloudDiagnose() {
 
 /** Run the detector in a child process; returns the parsed results array. */
 async function runDetectChild() {
-  // Resolve from the module-level REPO_DIR (computed from __dirname so it's
-  // correct on Mac /Users/jqvier/... AND VPS /home/octave/...)
   const script = join(REPO_DIR, 'scripts', 'run-detect-child.js');
   if (!existsSync(script)) return { error: 'detect runner script not found at ' + script };
 
@@ -788,7 +790,7 @@ async function runDetectChild() {
       cwd: REPO_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let buf = '', result = null;
+    let buf = '', stderr = '', result = null;
     child.stdout.on('data', (d) => {
       buf += d.toString();
       let nl;
@@ -797,12 +799,24 @@ async function runDetectChild() {
         buf = buf.slice(nl + 1);
         if (line.startsWith('RESULT:')) {
           try { result = JSON.parse(line.slice(7)); } catch {}
+        } else {
+          console.log('[detect-child]', line);
         }
       }
     });
-    child.stderr.on('data', (d) => console.error('[detect-child]', d.toString().trim()));
+    child.stderr.on('data', (d) => {
+      const s = d.toString();
+      stderr += s;
+      console.error('[detect-child stderr]', s.trim());
+    });
     const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 30_000);
-    child.on('exit', () => { clearTimeout(kill); resolve(result || { error: 'no result' }); });
+    child.on('exit', (code) => {
+      clearTimeout(kill);
+      if (result) return resolve(result);
+      // No RESULT line — surface the actual stderr so the user can see why
+      const tail = (stderr || '(no stderr)').split('\n').slice(-6).join(' / ').slice(0, 400);
+      resolve({ error: `detect crashed (exit ${code}): ${tail}` });
+    });
     child.on('error', (e) => { clearTimeout(kill); resolve({ error: e.message }); });
   });
 }
@@ -812,8 +826,9 @@ async function cmdBias() {
   const r = await runDetectChild();
   if (r.error) { await send(`⚠️ ${r.error}`); return; }
 
-  // Score each result: triggered=3, near_trigger=2, forming=1, invalidated=-0.5
-  const STATUS_WT = { triggered: 3, near_trigger: 2, forming: 1, invalidated: -0.5 };
+  // Confidence-weighted scoring: triggered counts more than forming, high
+  // confidence counts more than low.
+  const STATUS_WT = { triggered: 3, near_trigger: 2, forming: 1, invalidated: 0 };
   let longScore = 0, shortScore = 0;
   const longSetups = [], shortSetups = [];
   for (const x of r.results || []) {
@@ -823,9 +838,21 @@ async function cmdBias() {
     if (x.direction === 'SHORT') { shortScore += w; shortSetups.push(x); }
   }
 
+  // If NOTHING came back at all (no signals from any strategy), we can't bias
+  if (!longSetups.length && !shortSetups.length) {
+    await send([
+      '⚪ *NEUTRAL* — no signals',
+      '',
+      'No strategy is showing directional development right now. The market is in chop / outside killzones / waiting for a sweep.',
+      '',
+      'Try /setup <num> on a specific strategy to see what it\'s waiting for.',
+    ].join('\n'));
+    return;
+  }
+
   const total = longScore + shortScore;
   let biasIcon, biasWord, biasPct;
-  if (total < 0.5) {
+  if (total < 0.1) {
     biasIcon = '⚪'; biasWord = 'NEUTRAL'; biasPct = '—';
   } else if (longScore > shortScore * 1.3) {
     biasIcon = '🟢'; biasWord = 'BULLISH';
@@ -837,22 +864,23 @@ async function cmdBias() {
     biasIcon = '⚪'; biasWord = 'MIXED'; biasPct = '~50/50';
   }
 
-  const lines = [`${biasIcon} *${biasWord}* bias (${biasPct})`, ''];
+  const lines = [
+    `${biasIcon} *${biasWord}* bias  (${biasPct})`,
+    `Long ${longSetups.length} · Short ${shortSetups.length} signals`,
+    '',
+  ];
   if (longSetups.length) {
-    lines.push(`🟢 *LONG signals* (${longSetups.length}):`);
+    lines.push(`🟢 *LONG*`);
     for (const s of longSetups.slice(0, 5)) {
-      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} (${Math.round((s.confidence||0)*100)}%)`);
+      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} ${Math.round((s.confidence||0)*100)}%`);
     }
   }
   if (shortSetups.length) {
-    lines.push('');
-    lines.push(`🔴 *SHORT signals* (${shortSetups.length}):`);
+    if (longSetups.length) lines.push('');
+    lines.push(`🔴 *SHORT*`);
     for (const s of shortSetups.slice(0, 5)) {
-      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} (${Math.round((s.confidence||0)*100)}%)`);
+      lines.push(`  · #${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy} — ${s.status} ${Math.round((s.confidence||0)*100)}%`);
     }
-  }
-  if (!longSetups.length && !shortSetups.length) {
-    lines.push('No directional signals from any strategy right now. Market is quiet — wait for setup development.');
   }
   await send(lines.join('\n'));
 }
