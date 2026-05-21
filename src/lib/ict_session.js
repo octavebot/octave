@@ -12,6 +12,9 @@
  */
 
 import { nyParts, nyWallToUnix } from './time.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const LONDON_KZ_START_MIN = 2 * 60;
 const LONDON_KZ_END_MIN = 5 * 60;
@@ -32,8 +35,25 @@ export function isInNYKZ(unixSeconds) {
   return minutesOfDay >= NY_KZ_START_MIN && minutesOfDay < NY_KZ_END_MIN;
 }
 
+// Cached read of bypassKillzones from runtime-config.json. Re-read every 10s
+// so the /24h Telegram toggle takes effect quickly without polling every bar.
+const CONFIG_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'runtime-config.json');
+let _bypassCache = { value: false, at: 0 };
+function bypassKillzones() {
+  const now = Date.now();
+  if (now - _bypassCache.at < 10_000) return _bypassCache.value;
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+    _bypassCache = { value: !!cfg.bypassKillzones, at: now };
+  } catch {
+    _bypassCache = { value: false, at: now };
+  }
+  return _bypassCache.value;
+}
+
 /** Returns the active killzone label or null. */
 export function activeKillZone(unixSeconds) {
+  if (bypassKillzones()) return 'open'; // 24/7 mode (toggle via /24h)
   if (isInLondonKZ(unixSeconds)) return 'london';
   if (isInNYKZ(unixSeconds)) return 'ny';
   return null;

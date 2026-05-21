@@ -79,17 +79,33 @@ function spawnSync(cmd, args) {
   } catch { return null; }
 }
 
-// Node import in ESM
+// Spawn a binary and capture stdout/stderr. ALWAYS resolves — even when the
+// binary doesn't exist or the call takes too long. The previous version only
+// listened for 'close' and never resolved on 'error' (ENOENT), which hung
+// /api/state and /api/services on Linux where /bin/launchctl doesn't exist.
 async function exec(cmd, args, opts = {}) {
   const { spawn } = await import('node:child_process');
+  const timeoutMs = opts.timeoutMs || 5000;
   return new Promise((res) => {
-    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; res(v); } };
+    let p;
+    try {
+      p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+    } catch (err) {
+      return settle({ code: 127, out: '', err: err.message });
+    }
     let out = '', err = '';
     p.stdout.on('data', (d) => out += d.toString());
     p.stderr.on('data', (d) => err += d.toString());
-    p.on('close', (code) => res({ code, out: out.trim(), err: err.trim() }));
+    p.on('error', (e) => settle({ code: 127, out, err: e.message })); // ENOENT etc.
+    p.on('close', (code) => settle({ code, out: out.trim(), err: err.trim() }));
+    setTimeout(() => { try { p.kill('SIGKILL'); } catch {} settle({ code: 124, out, err: 'timeout' }); }, timeoutMs);
   });
 }
+
+const isMac = process.platform === 'darwin';
+const isLinux = process.platform === 'linux';
 
 async function gatherState() {
   const config = loadConfig();
@@ -104,24 +120,30 @@ async function gatherState() {
   const drawings = readJson(DRAWINGS_FILE, { setups: {} });
   const session = readJson(SESSION_FILE, { lastSession: null });
 
-  // Service PID + uptime
-  const pidR = await exec('/usr/bin/pgrep', ['-f', 'trading-alerts/src/index.js']);
+  // Service PID + uptime — pgrep works on both macOS and Linux
+  const pidR = await exec('pgrep', ['-f', 'trading-alerts/src/index.js']);
   const servicePid = pidR.code === 0 ? Number(pidR.out.split('\n')[0]) || null : null;
   let serviceUptime = null;
   if (servicePid) {
-    const psR = await exec('/bin/ps', ['-p', String(servicePid), '-o', 'etime=']);
+    const psR = await exec('ps', ['-p', String(servicePid), '-o', 'etime=']);
     if (psR.code === 0) serviceUptime = psR.out.trim();
   }
 
-  // TV + CDP
-  const tvR = await exec('/usr/bin/pgrep', ['-f', 'TradingView']);
-  const tvPid = tvR.code === 0 ? Number(tvR.out.split('\n')[0]) || null : null;
-  const cdpR = await exec('/usr/sbin/lsof', ['-i', ':9222', '-sTCP:LISTEN']);
-  const cdpOpen = cdpR.code === 0;
+  // TV + CDP — Mac-only concept. On Linux we skip entirely.
+  let tvPid = null, cdpOpen = false;
+  if (isMac) {
+    const tvR = await exec('pgrep', ['-f', 'TradingView']);
+    tvPid = tvR.code === 0 ? Number(tvR.out.split('\n')[0]) || null : null;
+    const cdpR = await exec('lsof', ['-i', ':9222', '-sTCP:LISTEN']);
+    cdpOpen = cdpR.code === 0;
+  }
 
-  // Caffeinate
-  const caffR = await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/com.jqvier.octave-caffeinate`]);
-  const caffActive = caffR.code === 0 && /state\s*=\s*running/.test(caffR.out);
+  // Caffeinate — Mac-only (it's a macOS power-management command via launchctl)
+  let caffActive = false;
+  if (isMac) {
+    const caffR = await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/com.jqvier.octave-caffeinate`]);
+    caffActive = caffR.code === 0 && /state\s*=\s*running/.test(caffR.out);
+  }
 
   // Last alert from stdout log
   let lastAlert = null;
@@ -281,7 +303,16 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/api/restart') {
       const body = await readBody(req).catch(() => ({}));
-      const VALID = {
+      // Map service nickname → systemd unit (Linux) or launchd label (Mac)
+      const LINUX_UNITS = {
+        'signal-engine': 'octave-signal-engine',
+        'signals':       'octave-signal-engine',
+        'bot':           'octave-telegram',
+        'telegram':      'octave-telegram',
+        'webui':         'octave-webui',
+        'watchdog':      'octave-watchdog',
+      };
+      const MAC_LABELS = {
         'signal-engine': 'com.jqvier.trading-alerts',
         'signals':       'com.jqvier.trading-alerts',
         'bot':           'com.jqvier.octave-telegram',
@@ -289,18 +320,25 @@ const server = createServer(async (req, res) => {
         'webui':         'com.jqvier.octave-webui',
         'watchdog':      'com.jqvier.octave-watchdog',
       };
+      const map = isLinux ? LINUX_UNITS : MAC_LABELS;
       const service = String(body?.service || '');
       const { spawn } = await import('node:child_process');
+      const restartCmd = (target) => {
+        if (isLinux) return ['systemctl', ['restart', target]];
+        return ['/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${target}`]];
+      };
       if (service === 'all') {
-        for (const label of Object.values(VALID)) {
-          spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+        for (const target of Object.values(map)) {
+          const [cmd, args] = restartCmd(target);
+          spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
         }
-        return sendJson(res, 200, { ok: true, restarted: Object.keys(VALID) });
+        return sendJson(res, 200, { ok: true, restarted: Object.keys(map) });
       }
-      const label = VALID[service];
-      if (!label) return sendJson(res, 400, { error: `unknown service: ${service}` });
-      spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
-      return sendJson(res, 200, { ok: true, restarted: label });
+      const target = map[service];
+      if (!target) return sendJson(res, 400, { error: `unknown service: ${service}` });
+      const [cmd, args] = restartCmd(target);
+      spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+      return sendJson(res, 200, { ok: true, restarted: target });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/launch-tv') {

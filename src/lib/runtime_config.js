@@ -46,6 +46,7 @@ const DEFAULTS = Object.freeze({
   },
   mute: { untilMs: 0, reason: null },
   alertChartImages: true,
+  bypassKillzones: false,
   lastUpdated: 0,
 });
 
@@ -76,6 +77,7 @@ export function load() {
       strategies: { ...DEFAULTS.strategies, ...(raw.strategies || {}) },
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
       alertChartImages: raw.alertChartImages !== false, // default true
+      bypassKillzones: raw.bypassKillzones === true, // default false
       lastUpdated: raw.lastUpdated || 0,
     };
   } catch {

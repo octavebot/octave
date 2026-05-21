@@ -1,0 +1,17 @@
+[Unit]
+Description=Octave Tunnel URL Watcher (auto-refreshes Cloudflare Quick Tunnel URL)
+After=octave-tunnel.service
+
+[Service]
+Type=simple
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+ExecStart=/usr/bin/node /home/octave/trading-alerts/scripts/tunnel-url-watcher.js
+EnvironmentFile=/home/octave/.config/trading-alerts/.env
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/octave/.octave-logs/tunnel-watcher.log
+StandardError=append:/home/octave/.octave-logs/tunnel-watcher.log
+
+[Install]
+WantedBy=multi-user.target

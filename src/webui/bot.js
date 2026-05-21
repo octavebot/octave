@@ -241,46 +241,39 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 
 📊 *Status*
 \`/status\` — overall health
-\`/cloud\` — cloud (GitHub Actions) state
-\`/local\` — local Mac service state
+\`/health\` — per-service detail
 \`/session\` — current trading session
-\`/price\` — current gold price
 
 📜 *History*
 \`/today\` — alerts from today (NY time)
 \`/yesterday\` — alerts from yesterday
-\`/history [N]\` — last N alerts (default 10, max 50)
-\`/range HH:MM-HH:MM\` — today's alerts in NY time range
-\`/last\` — most recent alert with details
+\`/history [N]\` — last N alerts (default 10)
+\`/range HH:MM-HH:MM\` — alerts in NY time window today
+\`/last\` — most recent alert
 
 🎚 *Strategies*
-\`/strategies\` — list all 7 with on/off state
+\`/strategies\` — list all 10 with on/off state
 \`/enable <num>\` — turn on (e.g. \`/enable 5\`)
-\`/disable <num>\` — turn off (e.g. \`/disable 2\`)
+\`/disable <num>\` — turn off
 
 ⚙️ *Settings*
-\`/mode\` — show current mode
-\`/mode auto|cloud|local\` — change mode
-\`/mute <minutes>\` — pause all alerts (max 1440 = 24h)
+\`/24h on|off\` — bypass killzone gating (alerts any hour)
+\`/mute <minutes>\` — pause alerts (max 1440)
 \`/unmute\` — resume alerts
 
 📈 *Backtest*
-\`/backtest\` — 30-day backtest of all enabled strategies
-\`/backtest <num>\` — single strategy (e.g. \`/backtest 7\`)
-\`/backtest <num> <days>\` — custom window (e.g. \`/backtest 5 60\`)
-Auto-runs every Sunday 8pm EST → posted here.
-
-🩺 *Health & Diagnostics*
-\`/health\` — per-service status (signal/bot/webui/watchdog/cloud)
-\`/diagnose\` — cloud (GitHub Actions) diagnostic
-\`/restart all\` — restart everything safely
-\`/restart bot\` / \`/restart signals\` / \`/restart webui\` — single service
+\`/backtest\` — 30-day backtest of enabled strategies
+\`/backtest <num>\` — single strategy
+\`/backtest <num> <days>\` — custom window
+Auto-runs Sunday 8pm NY.
 
 🚨 *System*
+\`/restart all\` — restart everything
+\`/restart bot\` / \`/restart signals\` / \`/restart webui\` — single
 \`/version\` — current git commit
 \`/shutdown confirm\` — stop everything
 
-Tip: send \`/help\` anytime to see this menu again.`;
+Tip: send \`/help\` anytime.`;
 
 async function cmdHelp() {
   await send(HELP_TEXT);
@@ -318,49 +311,39 @@ async function cmdStatus() {
   ].join('\n'));
 }
 
-async function cmdCloud() {
-  const hb = readJson(HEARTBEAT_FILE, null);
-  if (!hb) { await send('☁️ No cloud heartbeat found.'); return; }
-  const ageSec = Math.round((Date.now() - (hb.lastTick || 0)) / 1000);
-  const lines = [
-    '☁️ *Cloud (GitHub Actions)*',
-    `Last tick: ${ageSec}s ago`,
-    `Status: \`${hb.status}\``,
-    `Fired this tick: ${hb.fired ?? 0}`,
-    `Panes: ${hb.pane_count ?? '?'}`,
-    `Anchor: \`${hb.anchor?.symbol || '?'}\` ${hb.anchor?.tf || ''}m @ ${hb.anchor?.close ?? '?'}`,
-    '',
-    'Panes summary:',
-    '`' + (hb.panes_summary || []).join('`, `') + '`',
-  ];
-  await send(lines.join('\n'));
-}
-
-async function cmdLocal() {
-  const pid = await servicePid();
-  if (!pid) { await send('💻 Local service: 🔴 *stopped*'); return; }
-  const ps = await exec('/bin/ps', ['-p', String(pid), '-o', 'etime=,rss=']);
-  const [etime, rssKb] = (ps.code === 0 ? ps.out : '').trim().split(/\s+/);
-  const drawings = readJson(DRAWINGS_FILE, { setups: {} });
-  await send([
-    '💻 *Local Service*',
-    `PID: \`${pid}\``,
-    `Uptime: \`${etime || '?'}\``,
-    `Memory: ${rssKb ? Math.round(+rssKb / 1024) + ' MB' : '?'}`,
-    `Tracked setups: ${Object.keys(drawings.setups || {}).length}`,
-  ].join('\n'));
-}
-
 async function cmdSession() {
   const session = readJson(SESSION_FILE, { lastSession: null });
   const hb = readJson(HEARTBEAT_FILE, null);
   const nyTime = nyHourMinute(Date.now());
+  const s = (session.lastSession || 'closed').toUpperCase();
+  const isOpen = s !== 'CLOSED' && s !== '—';
   await send([
-    '🌍 *Session*',
-    `Current: \`${(session.lastSession || '—').toUpperCase()}\``,
-    `NY time: \`${nyTime}\``,
-    hb?.anchor ? `Last gold close: *${hb.anchor.close}* (${hb.anchor.tf}m bar)` : '',
+    `${isOpen ? '🟢' : '⚫'} *${s}* session`,
+    `NY time: ${nyTime}`,
+    hb?.anchor ? `Gold: $${Number(hb.anchor.close).toFixed(2)}` : '',
   ].filter(Boolean).join('\n'));
+}
+
+/** /24h on|off — bypass killzone gating so strategies fire any hour. */
+async function cmd24h(arg) {
+  const a = (arg || '').trim().toLowerCase();
+  if (a !== 'on' && a !== 'off' && a !== '') {
+    await send('Usage: `/24h on` or `/24h off`');
+    return;
+  }
+  if (a === '') {
+    const cfg = loadConfig();
+    const on = !!cfg?.bypassKillzones;
+    await send(`24/7 mode: *${on ? 'ON' : 'OFF'}*\n\nSend \`/24h on\` to let strategies fire any hour (skips London/NY killzones).\nSend \`/24h off\` to require killzones (default — higher quality signals).`);
+    return;
+  }
+  const on = a === 'on';
+  await saveConfigAndPush((c) => { c.bypassKillzones = on; return c; });
+  if (on) {
+    await send('🌐 *24/7 mode ON*\n\nStrategies will fire any hour, killzone or not. Expect more alerts, lower average quality. Signal frequency goes up ~3-5x.\n\nTurn back off anytime with `/24h off`.');
+  } else {
+    await send('🎯 *24/7 mode OFF*\n\nStrategies only fire during London (02:00-05:00) and NY (07:00-10:00) killzones, plus Trinity 09:30-11:00 — default quality mode.');
+  }
 }
 
 async function cmdPrice() {
@@ -1190,8 +1173,8 @@ async function handleCallback(cq) {
       if (arg === 'status') { await cmdStatus(); return answerCallback(cq.id); }
       if (arg === 'today')  { await cmdToday();  return answerCallback(cq.id); }
       if (arg === 'last')   { await cmdLast();   return answerCallback(cq.id); }
-      if (arg === 'cloud')  { await cmdCloud();  return answerCallback(cq.id); }
-      if (arg === 'local')  { await cmdLocal();  return answerCallback(cq.id); }
+      if (arg === 'cloud')  { await cmdHealth(); return answerCallback(cq.id); }
+      if (arg === 'local')  { await cmdHealth(); return answerCallback(cq.id); }
       if (arg === 'restart') { await cmdRestart(); return answerCallback(cq.id, 'Restarting…'); }
       if (arg === 'shutdown-confirm') {
         // Two-tap confirm: turn into a confirm button row
@@ -1227,8 +1210,7 @@ const COMMANDS = {
   '/panel': cmdMenu,
   '/app': cmdMenu,
   '/status': cmdStatus,
-  '/cloud': cmdCloud,
-  '/local': cmdLocal,
+  // /cloud and /local merged into /health (cloud-only architecture now)
   '/session': cmdSession,
   '/price': cmdPrice,
   '/history': cmdHistory,
@@ -1252,6 +1234,8 @@ const COMMANDS = {
   '/web': cmdDashboard,
   '/bias': cmdBias,
   '/setup': cmdSetup,
+  '/24h': cmd24h,
+  '/24': cmd24h,
 };
 
 async function handleUpdate(update) {
