@@ -21,3 +21,4 @@ src/state/session.json
 /src/state/pending-tg.jsonl
 src/state/follow-ups.json
 src/state/news-ff-cache.json
+src/state/user-strategies.json

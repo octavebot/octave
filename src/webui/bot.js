@@ -276,9 +276,15 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 \`/last\` — most recent alert
 
 🎚 *Strategies*
-\`/strategies\` — list all 10 with on/off state
-\`/enable <num>\` — turn on (e.g. \`/enable 5\`)
+\`/strategies\` — list every strategy with on/off state (grouped by folder)
+\`/enable <num>\` — turn on (e.g. \`/enable 5\` or \`/enable C3\`)
 \`/disable <num>\` — turn off
+
+👤 *My Strategies* (user-defined)
+\`/mystrategies\` — list your custom strategies
+\`/addstrategy <id> "<name>" <entry> [tf]\` — create
+\`/editstrategy <id> key=value …\` — edit any field
+\`/delstrategy <id>\` — delete
 
 ⚙️ *Settings*
 \`/24h on|off\` — bypass killzone gating (alerts any hour)
@@ -364,7 +370,12 @@ async function cmdStatus() {
       : '🔴 *Octave is offline*';
 
   const sessLabel = (session.lastSession || 'closed').toUpperCase();
-  const setupCount = Object.keys(drawings.setups || {}).length;
+  // Open positions = follow_up tracker (matches dashboard's "Active Setups" tile)
+  let setupCount = 0;
+  try {
+    const fu = await import('../lib/follow_up.js');
+    setupCount = fu.active().length;
+  } catch {}
 
   const stratLines = enabled.length === 0
     ? ['_(no strategies enabled)_']
@@ -1215,7 +1226,7 @@ async function cmdShutdown(arg) {
 
 // ---------- INLINE KEYBOARD VIEWS ----------
 
-function buildMainMenuView() {
+async function buildMainMenuView() {
   const cfg = loadConfig() || {};
   const session = readJson(SESSION_FILE, { lastSession: null });
   const onCount = cfg.strategies ? Object.values(cfg.strategies).filter(Boolean).length : 0;
@@ -1223,10 +1234,18 @@ function buildMainMenuView() {
     ? Math.round((cfg.mute.untilMs - Date.now()) / 60000) : 0;
   const sessionLabel = (session.lastSession || 'closed').toUpperCase();
 
+  // Total = built-in STRATEGY_KEYS + any user-defined strategies on disk
+  let userCount = 0;
+  try {
+    const us = await import('../lib/user_strategies.js');
+    userCount = us.list().length;
+  } catch {}
+  const totalStrategies = STRATEGY_KEYS.length + userCount;
+
   const text = [
     '🎵 *Octave*',
     '',
-    `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/10 strategies · ${sessionLabel} session`,
+    `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/${totalStrategies} strategies · ${sessionLabel} session`,
     cfg.bypassKillzones ? '🌐 24/7 mode ON' : '',
   ].filter(Boolean).join('\n');
 
@@ -1368,7 +1387,7 @@ function buildSystemView() {
 }
 
 async function cmdMenu() {
-  const v = buildMainMenuView();
+  const v = await buildMainMenuView();
   await send(v.text, { keyboard: v.keyboard });
 }
 
@@ -1388,7 +1407,7 @@ async function handleCallback(cq) {
   try {
     if (kind === 'view') {
       let v;
-      if (arg === 'main') v = buildMainMenuView();
+      if (arg === 'main') v = await buildMainMenuView();
       else if (arg === 'strategies') v = buildStrategiesView();
       else if (arg === 'mute') v = buildMuteView();
       else if (arg === 'backtest') v = buildBacktestView();
@@ -1535,48 +1554,202 @@ const COMMANDS = {
   '/digest': cmdSummary,
   '/perf': cmdPerf,
   '/news': cmdNews,
+  '/addstrategy': cmdAddStrategy,
+  '/editstrategy': cmdEditStrategy,
+  '/delstrategy': cmdDelStrategy,
+  '/mystrategies': cmdMyStrategies,
 };
 
 /**
- * /news — show the next ~24h of high-impact USD events and the current
- * blackout state. Sources merge ForexFactory + the manual data/news.json.
+ * /mystrategies — list user-defined strategies with status.
+ */
+async function cmdMyStrategies() {
+  let items = [];
+  try {
+    const us = await import('../lib/user_strategies.js');
+    items = us.list();
+  } catch {}
+  if (items.length === 0) {
+    await send(['👤 *My Strategies*', '', '_(none defined yet)_', '',
+      'Add one from the dashboard (📁 My Strategies → ＋ New strategy)',
+      'or via Telegram:',
+      '`/addstrategy <id> <name> <entry> [tf]`',
+      'entry ∈ ema_cross | ema_pullback | bb_extreme | rsi_bounds',
+      'Example: `/addstrategy my-ema-9-21 "EMA 9/21 cross" ema_cross 15`',
+    ].join('\n'));
+    return;
+  }
+  const lines = ['👤 *My Strategies*', ''];
+  const cfg = loadConfig() || {};
+  for (const it of items) {
+    const on = cfg.strategies?.[it.id] !== false;
+    lines.push(`${on ? '🟢' : '⚫'} \`${tgEscape(it.id)}\` · ${tgEscape(it.name)}`);
+    lines.push(`   ${tgEscape(it.entry)} @ ${it.timeframe}m · stop ${it.stop_atr_mult}× ATR · TP ${it.tp_r}R`);
+  }
+  lines.push('');
+  lines.push('Edit: `/editstrategy <id> <field>=<value> ...`');
+  lines.push('Delete: `/delstrategy <id>`');
+  await send(lines.join('\n'));
+}
+
+/**
+ * /addstrategy <id> <name in quotes> <entry> [tf]
+ * Minimal Telegram CRUD. For richer fields use the dashboard.
+ */
+async function cmdAddStrategy(arg) {
+  const parts = parseArgs(arg || '');
+  if (parts.length < 3) {
+    await send([
+      'Usage: `/addstrategy <id> "<name>" <entry> [tf]`',
+      'entry: ema_cross · ema_pullback · bb_extreme · rsi_bounds',
+      'Example: `/addstrategy my-cross "EMA Cross" ema_cross 15`',
+    ].join('\n'));
+    return;
+  }
+  const [id, name, entry, tf] = parts;
+  try {
+    const us = await import('../lib/user_strategies.js');
+    const created = us.create({
+      id, name, entry, timeframe: tf || '15',
+      description: '', direction: 'auto',
+      fast: 9, slow: 21, rsi_min: 0, rsi_max: 100,
+      stop_atr_mult: 1.5, tp_r: 2, enabled: true,
+    });
+    await saveConfigAndPush((c) => { c.strategies = c.strategies || {}; c.strategies[created.id] = true; return c; });
+    await send(`✅ Created \`${tgEscape(created.id)}\` — ${tgEscape(created.name)}\nEnabled by default. Edit any field with \`/editstrategy ${created.id} <key>=<value>\`.`);
+  } catch (err) {
+    await send(`⚠️ ${err.message}`);
+  }
+}
+
+/**
+ * /editstrategy <id> key=value key=value …
+ * Updates any of: name, description, timeframe, direction, entry, fast, slow,
+ *                 rsi_min, rsi_max, stop_atr_mult, tp_r, enabled.
+ */
+async function cmdEditStrategy(arg) {
+  const parts = parseArgs(arg || '');
+  if (parts.length < 2) {
+    await send('Usage: `/editstrategy <id> key=value …`\nKeys: name, description, timeframe, direction, entry, fast, slow, rsi_min, rsi_max, stop_atr_mult, tp_r, enabled');
+    return;
+  }
+  const id = parts[0];
+  try {
+    const us = await import('../lib/user_strategies.js');
+    const cur = us.get(id);
+    if (!cur) { await send(`No strategy with id \`${tgEscape(id)}\`. See \`/mystrategies\`.`); return; }
+    const patch = { ...cur };
+    for (const kv of parts.slice(1)) {
+      const eq = kv.indexOf('=');
+      if (eq < 0) continue;
+      const k = kv.slice(0, eq).trim();
+      const v = kv.slice(eq + 1).trim();
+      if (['fast', 'slow', 'rsi_min', 'rsi_max'].includes(k)) patch[k] = Number(v);
+      else if (['stop_atr_mult', 'tp_r'].includes(k)) patch[k] = Number(v);
+      else if (k === 'enabled') patch.enabled = (v === 'true' || v === '1' || v === 'on');
+      else patch[k] = v;
+    }
+    const updated = us.update(id, patch);
+    await saveConfigAndPush((c) => { c.strategies = c.strategies || {}; c.strategies[updated.id] = updated.enabled; return c; });
+    await send(`✅ Updated \`${tgEscape(updated.id)}\` — ${tgEscape(updated.name)}`);
+  } catch (err) {
+    await send(`⚠️ ${err.message}`);
+  }
+}
+
+async function cmdDelStrategy(arg) {
+  const id = (arg || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!id) { await send('Usage: `/delstrategy <id>`'); return; }
+  try {
+    const us = await import('../lib/user_strategies.js');
+    us.remove(id);
+    await saveConfigAndPush((c) => {
+      c.strategies = c.strategies || {};
+      delete c.strategies[id];
+      return c;
+    });
+    await send(`🗑 Deleted \`${tgEscape(id)}\``);
+  } catch (err) {
+    await send(`⚠️ ${err.message}`);
+  }
+}
+
+/** Tokenize a Telegram arg string, honoring "double-quoted phrases". */
+function parseArgs(s) {
+  const out = [];
+  const re = /"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(s))) out.push(m[1] != null ? m[1] : m[2]);
+  return out;
+}
+
+/**
+ * /news — clean digest of high-impact USD events.
+ * Header tells you EXACTLY whether the bot is paused right now; body groups
+ * the next events by day so you can plan around them.
  */
 async function cmdNews(arg) {
-  const { upcomingEvents, checkBlackout, refreshForexFactory } = await import('../lib/news.js');
+  const { upcomingEvents, checkBlackout, refreshForexFactory, nextEvent } = await import('../lib/news.js');
   await refreshForexFactory().catch(() => {});
-  const hours = Math.max(1, Math.min(168, parseInt((arg || '').trim(), 10) || 24));
+  const hours = Math.max(1, Math.min(168, parseInt((arg || '').trim(), 10) || 48));
   const now = Date.now() / 1000;
   const bo = checkBlackout(now, 30);
   const evs = upcomingEvents(now, hours);
 
-  const lines = [`📰 *News watch* — next ${hours}h`, ''];
-  if (bo.blocked && bo.event) {
-    lines.push(`🚫 *BLACKOUT ACTIVE* — ${tgEscape(bo.event.title || 'high-impact event')}`);
-    lines.push(`   ${bo.minutesAway}m away, ±30m window`);
-    lines.push('');
-  } else {
-    lines.push('✅ No active blackout — strategies allowed to fire');
-    lines.push('');
+  // ── Header — single most important line ──
+  const header = bo.blocked && bo.event
+    ? `🚫 *Bot paused — news blackout*\n   ${tgEscape(bo.event.title || 'high-impact event')} · ${bo.minutesAway}m away`
+    : `✅ *Bot is trading freely*\n   _No high-impact event in the next 30m._`;
+
+  // ── Next event countdown ──
+  let nextLine = '';
+  const nxt = nextEvent(now);
+  if (nxt && nxt.minutesAway > 30) {
+    const m = nxt.minutesAway;
+    const away = m < 60 ? `${m}m`
+                : m < 1440 ? `${(m / 60).toFixed(1)}h`
+                : `${(m / 1440).toFixed(1)}d`;
+    nextLine = `⏳ Next: *${tgEscape(nxt.title || '?')}* in ${away}`;
   }
 
-  if (evs.length === 0) {
-    lines.push('_No upcoming high-impact USD events in window._');
+  // ── Group upcoming by NY date ──
+  const fmtDate = (unix) => new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
+  }).format(new Date(unix * 1000));
+  const fmtTime = (unix) => new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(new Date(unix * 1000));
+
+  const byDay = new Map();
+  for (const ev of evs) {
+    const key = fmtDate(ev.unix);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(ev);
+  }
+
+  const lines = [
+    '📰 *News watch*',
+    '',
+    header,
+    nextLine,
+    '',
+    `─── next ${hours}h ───`,
+  ].filter(Boolean);
+
+  if (byDay.size === 0) {
+    lines.push('');
+    lines.push('_No upcoming high-impact USD events in this window._');
   } else {
-    lines.push(`*Upcoming (${evs.length}):*`);
-    for (const ev of evs.slice(0, 12)) {
-      const t = new Date(ev.unix * 1000);
-      const nyT = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-      }).format(t);
-      const mins = Math.round((ev.unix - now) / 60);
-      const away = mins < 60 ? `${mins}m` : mins < 1440 ? `${(mins / 60).toFixed(1)}h` : `${(mins / 1440).toFixed(1)}d`;
-      lines.push(`  • \`${nyT}\` EST · ${tgEscape(ev.title || ev.name || '?')} _(${away})_`);
+    for (const [day, dayEvents] of byDay) {
+      lines.push('');
+      lines.push(`*${day}*`);
+      for (const ev of dayEvents) {
+        lines.push(`  \`${fmtTime(ev.unix)}\` · ${tgEscape(ev.title || ev.name || '?')}`);
+      }
     }
-    if (evs.length > 12) lines.push(`  …and ${evs.length - 12} more`);
   }
   lines.push('');
-  lines.push('_Source: ForexFactory + manual list. Strategies auto-pause ±30m around each event._');
+  lines.push('_Auto-paused ±30m around each event. Source: ForexFactory._');
   await send(lines.join('\n'));
 }
 

@@ -78,27 +78,39 @@ export function activeSession(unixSeconds) {
   return 'off';
 }
 
+// Lazy dynamic import — we can't statically import runtime_config from here
+// because runtime_config may import other things that reach back into time.
+// Default to permissive (24/7 on) until the real module loads, then swap in
+// the live reader. This matches the new default in runtime_config.
+let _is24x7Reader = () => true;
+import('./runtime_config.js').then((mod) => { _is24x7Reader = mod.is24x7; }).catch(() => {});
+function bypass() { return _is24x7Reader(); }
+
 /**
  * Trinity Model execution window: 9:30–11:00 AM EST (per Rule #2).
+ * Returns true any weekday when 24/7 mode is on.
  */
 export function isInTrinityWindow(unixSeconds) {
   const { minutesOfDay, weekday } = nyParts(unixSeconds);
   if (weekday === 'Sat' || weekday === 'Sun') return false;
+  if (bypass()) return true;
   return minutesOfDay >= 9 * 60 + 30 && minutesOfDay < 11 * 60;
 }
 
 /**
  * NY AM Killzone window for Strategy 2: 8:30–11:00 EST.
  * Also the ICT macro windows: 9:50–10:10 and 10:50–11:10.
+ * Returns inKillzone:true any weekday when 24/7 mode is on (macros still
+ * track the real window so confidence boosts remain accurate).
  */
 export function killzoneStatus(unixSeconds) {
   const { minutesOfDay, weekday } = nyParts(unixSeconds);
   if (weekday === 'Sat' || weekday === 'Sun') return { inKillzone: false, inMacro: false };
-  const inKillzone = minutesOfDay >= 8 * 60 + 30 && minutesOfDay < 11 * 60;
+  const realInKillzone = minutesOfDay >= 8 * 60 + 30 && minutesOfDay < 11 * 60;
   const inMacro1 = minutesOfDay >= 9 * 60 + 50 && minutesOfDay < 10 * 60 + 10;
   const inMacro2 = minutesOfDay >= 10 * 60 + 50 && minutesOfDay < 11 * 60 + 10;
   return {
-    inKillzone,
+    inKillzone: bypass() ? true : realInKillzone,
     inMacro: inMacro1 || inMacro2,
     macroLabel: inMacro1 ? 'macro1' : inMacro2 ? 'macro2' : null,
   };

@@ -198,6 +198,61 @@
   }
   .toggle.saving { opacity: 0.5; pointer-events: none; }
 
+  /* Strategy folders */
+  .folder {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    background: var(--bg-elev);
+  }
+  .folder-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px;
+    cursor: pointer;
+    user-select: none;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+  }
+  .folder.collapsed .folder-header { border-bottom: 0; }
+  .folder-header:hover { background: var(--bg-elev); }
+  .folder-title { font-size: 13px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text); }
+  .folder-meta  { font-size: 11px; color: var(--text-faint); }
+  .folder-caret { color: var(--text-faint); margin-left: 8px; transition: transform 180ms; }
+  .folder.collapsed .folder-caret { transform: rotate(-90deg); }
+  .folder-body { padding: 4px 14px; }
+  .folder.collapsed .folder-body { display: none; }
+
+  /* Custom strategy actions */
+  .strategy-row-actions { display: flex; gap: 6px; margin-right: 8px; }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-faint);
+    padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--text-faint); }
+  .icon-btn.danger:hover { color: var(--red); border-color: rgba(255,92,108,0.4); }
+
+  /* Strategy editor modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; min-width: 320px; max-width: 92vw; max-height: 88vh; overflow-y: auto;
+  }
+  .modal h3 { margin: 0 0 16px; font-size: 16px; }
+  .modal label { display: block; font-size: 11px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.4px; margin: 12px 0 4px; }
+  .modal input, .modal select, .modal textarea {
+    width: 100%; box-sizing: border-box;
+    background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-family: inherit; font-size: 13px;
+  }
+  .modal textarea { min-height: 60px; resize: vertical; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 18px; justify-content: flex-end; }
+
   /* Action buttons row */
   .actions {
     display: flex; gap: 10px; margin-top: 8px;
@@ -314,19 +369,109 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<!-- Strategy editor modal -->
+<div class="modal-backdrop" id="strategy-modal">
+  <div class="modal">
+    <h3 id="modal-title">New Strategy</h3>
+    <label>ID (unique key)</label>
+    <input id="field-id" placeholder="my-ema-cross" />
+    <label>Name</label>
+    <input id="field-name" placeholder="My EMA Cross" />
+    <label>Description</label>
+    <textarea id="field-desc" placeholder="What this strategy does"></textarea>
+    <label>Timeframe</label>
+    <select id="field-tf">
+      <option value="15">15m</option>
+      <option value="30">30m</option>
+      <option value="60">1h</option>
+      <option value="240">4h</option>
+    </select>
+    <label>Direction</label>
+    <select id="field-direction">
+      <option value="auto">Auto (long & short)</option>
+      <option value="long">Long only</option>
+      <option value="short">Short only</option>
+    </select>
+    <label>Entry trigger</label>
+    <select id="field-entry">
+      <option value="ema_cross">EMA cross (fast crosses slow)</option>
+      <option value="ema_pullback">EMA pullback (close touches slow EMA + rejection)</option>
+      <option value="bb_extreme">Bollinger Band extreme (wick beyond ±2σ)</option>
+      <option value="rsi_bounds">RSI oversold/overbought reversal</option>
+    </select>
+    <div style="display:flex; gap:8px">
+      <div style="flex:1"><label>Fast EMA</label><input id="field-fast" type="number" value="9" /></div>
+      <div style="flex:1"><label>Slow EMA</label><input id="field-slow" type="number" value="21" /></div>
+    </div>
+    <div style="display:flex; gap:8px">
+      <div style="flex:1"><label>RSI min (long gate)</label><input id="field-rsi-min" type="number" value="0" min="0" max="100" /></div>
+      <div style="flex:1"><label>RSI max (short gate)</label><input id="field-rsi-max" type="number" value="100" min="0" max="100" /></div>
+    </div>
+    <div style="display:flex; gap:8px">
+      <div style="flex:1"><label>Stop = N × ATR</label><input id="field-stop" type="number" step="0.1" value="1.5" /></div>
+      <div style="flex:1"><label>TP = N × R</label><input id="field-tp" type="number" step="0.1" value="2" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeStrategyEditor()">Cancel</button>
+      <button class="btn" onclick="saveStrategy()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
-const STRATEGY_META = [
-  { key: 'USLS',      num: '#1', name: 'USLS',            desc: 'Universal Session Liquidity Sweep' },
-  { key: 'ICT-SMC',   num: '#2', name: 'ICT/SMC',         desc: 'NY-AM killzone, judas + MSS + PD array' },
-  { key: 'ALGO-SMC',  num: '#3', name: 'ALGO/SMC',        desc: '5-state HTF sweep + Silver SMT + 71% Fib' },
-  { key: 'ADAPTIVE',  num: '#4', name: 'Adaptive Matrix', desc: 'Regime-aware (ADX) trend/range/breakout' },
-  { key: 'ICT',       num: '#5', name: 'ICT',             desc: 'M15 killzone sweep + MSS + FVG' },
-  { key: 'SMT',       num: '#6', name: 'SMT',             desc: 'M15 Gold/Silver cross-asset divergence' },
-  { key: 'TRINITY',   num: '#7', name: 'Trinity',         desc: 'HTF gap → SMT → LTF inverse FVG (9:30-11 EST)' },
-  { key: 'AMN',       num: '#8', name: 'AMN',             desc: '5M demand zone + 1M CHoCH or 5M IFVG (1:1.5 RR)' },
-  { key: 'TORI',      num: '#9', name: 'TORI',            desc: '4H trendline body-close breakout (1:2 RR floor)' },
-  { key: 'WARRIOR',   num: '#10', name: 'Warrior',         desc: '5m bull flag + RSI extreme reversal' },
+// Source of truth for built-in strategies in the dashboard. Grouped by
+// folder; the renderer collapses each group below its header.
+const STRATEGY_GROUPS = [
+  {
+    folder: 'Core (10)',
+    items: [
+      { key: 'USLS',      num: '#1',  name: 'USLS',            desc: 'Universal Session Liquidity Sweep' },
+      { key: 'ICT-SMC',   num: '#2',  name: 'ICT/SMC',         desc: 'HTF judas + MSS + PD array entry' },
+      { key: 'ALGO-SMC',  num: '#3',  name: 'ALGO/SMC',        desc: '5-state HTF sweep + Silver SMT + 71% Fib' },
+      { key: 'ADAPTIVE',  num: '#4',  name: 'Adaptive Matrix', desc: 'Regime-aware (ADX) trend/range/breakout' },
+      { key: 'ICT',       num: '#5',  name: 'ICT',             desc: 'M15 killzone sweep + MSS + FVG' },
+      { key: 'SMT',       num: '#6',  name: 'SMT',             desc: 'M15 Gold/Silver cross-asset divergence' },
+      { key: 'TRINITY',   num: '#7',  name: 'Trinity',         desc: 'HTF gap → SMT → LTF inverse FVG' },
+      { key: 'AMN',       num: '#8',  name: 'AMN',             desc: '5M demand zone + 1M CHoCH or 5M IFVG' },
+      { key: 'TORI',      num: '#9',  name: 'TORI',            desc: '4H trendline body-close breakout (1:2R)' },
+      { key: 'WARRIOR',   num: '#10', name: 'Warrior',         desc: '5m bull flag + RSI extreme reversal' },
+    ],
+  },
+  {
+    folder: 'ChatGPT Strategies',
+    items: [
+      { key: 'CGT-EMA',    num: '#C1', name: 'EMA Trend',           desc: '20/50 EMA pullback + engulfing (2R)' },
+      { key: 'CGT-HTFSD',  num: '#C2', name: 'HTF Supply/Demand',   desc: '4H zone tap + 5m displacement' },
+      { key: 'CGT-LONDON', num: '#C3', name: 'London Breakout',     desc: 'Asian range break + pullback + retest' },
+      { key: 'CGT-NYREV',  num: '#C4', name: 'NY Reversal Trap',    desc: 'PDH/PDL sweep + rejection back inside' },
+      { key: 'CGT-VWAP',   num: '#C5', name: 'VWAP Mean Reversion', desc: '2× ATR from VWAP + RSI div + exhaustion' },
+    ],
+  },
+  {
+    folder: 'Gemini Strategies',
+    items: [
+      { key: 'GEM-ASIA',  num: '#G1', name: 'Asian Range Breakout',    desc: 'Asian high/low complete close-outside (1.5R)' },
+      { key: 'GEM-EMA',   num: '#G2', name: 'Golden River EMA',        desc: '9/21/50 EMA + RSI confluence (2R)' },
+      { key: 'GEM-FIB',   num: '#G3', name: 'Golden Fibonacci',        desc: '0.618-0.786 retracement entry to 0% TP' },
+      { key: 'GEM-SMC',   num: '#G4', name: 'Institutional OBs',       desc: '1H OB mitigation + 15m CHoCH + LTF OB entry' },
+      { key: 'GEM-VWAP',  num: '#G5', name: 'VWAP Rubber Band',        desc: '1H ADX<25 + 2.5σ BB pierce + reversal' },
+    ],
+  },
 ];
+
+// Flat list helper for any code path that still wants a single sequence.
+const STRATEGY_META = STRATEGY_GROUPS.flatMap((g) => g.items);
+
+// Folder collapse state — persisted in localStorage so it survives reloads.
+const COLLAPSE_STATE_KEY = 'octave_folder_collapse';
+function loadCollapseState() {
+  try { return JSON.parse(localStorage.getItem(COLLAPSE_STATE_KEY)) || {}; }
+  catch { return {}; }
+}
+function saveCollapseState(state) {
+  try { localStorage.setItem(COLLAPSE_STATE_KEY, JSON.stringify(state)); }
+  catch {}
+}
 
 const MODE_DESC = {
   auto:  'Cloud is primary when alive; local takes over on Mac when cloud is stale (recommended).',
@@ -386,7 +531,11 @@ function renderState(s) {
   } else {
     headlineEl.innerHTML = `🔴 Signal engine is offline`;
   }
-  subEl.textContent = `${enabledCount}/10 strategies enabled${s.config?.bypassKillzones ? ' · 24/7 mode ON' : ''}`;
+  // Count total strategies = built-in + any user-defined ones (from state)
+  const totalBuiltIn = STRATEGY_META.length;
+  const userStrategies = s.user_strategies || [];
+  const totalStrategies = totalBuiltIn + userStrategies.length;
+  subEl.textContent = `${enabledCount}/${totalStrategies} strategies enabled${s.config?.bypassKillzones ? ' · 24/7 mode ON' : ''}`;
 
   // Session
   document.getElementById('session-status').textContent =
@@ -406,32 +555,131 @@ function renderState(s) {
   const px = s.cloud?.raw?.anchor?.close;
   document.getElementById('gold-price').textContent = px ? `$${Number(px).toFixed(2)}` : '—';
 
-  // Active setups count
-  document.getElementById('active-setups').textContent = String(s.activity.tracked_setups || 0);
+  // Active setups: prefer the live follow-up tracker count (bot uses same source)
+  // and fall back to drawings.json for old systems that don't expose it.
+  const activeCount = (typeof s.activity.active_setups === 'number'
+    ? s.activity.active_setups
+    : (s.activity.tracked_setups || 0));
+  document.getElementById('active-setups').textContent = String(activeCount);
 
-  // Strategies
+  // ── Strategies in folders ──
   const container = document.getElementById('strategies');
-  if (!container.dataset.rendered) {
-    container.innerHTML = STRATEGY_META.map(m => `
-      <div class="strategy">
-        <div class="info">
-          <div><span class="num">${m.num}</span><span class="name">${m.name}</span></div>
-          <div class="desc">${m.desc}</div>
-        </div>
-        <div class="toggle" data-strategy="${m.key}" role="switch"></div>
-      </div>
-    `).join('');
-    container.dataset.rendered = '1';
+  const enabledMap = s.config?.strategies || {};
+  const userStrategies = s.user_strategies || [];
+  const collapse = loadCollapseState();
+
+  // Compose the displayed folder list = built-in + user (if any)
+  const displayGroups = [...STRATEGY_GROUPS];
+  if (userStrategies.length > 0 || s.allow_user_strategies) {
+    displayGroups.push({
+      folder: 'My Strategies',
+      isUser: true,
+      items: userStrategies.map((u) => ({
+        key: u.id, num: '#U', name: u.name,
+        desc: u.description || u.summary || 'Custom strategy',
+        custom: true,
+      })),
+    });
   }
+
+  // Rerender from scratch any time the count of items changes (cheap; <50 rows)
+  const fingerprint = displayGroups.map((g) => `${g.folder}:${g.items.length}`).join('|');
+  if (container.dataset.fingerprint !== fingerprint) {
+    container.innerHTML = displayGroups.map((g) => {
+      const onCount = g.items.filter((m) => !!enabledMap[m.key]).length;
+      const isCollapsed = collapse[g.folder] === true;
+      const rows = g.items.length === 0
+        ? `<div class="strategy" style="opacity:0.6"><div class="info"><div class="desc">_(empty — add one below)_</div></div></div>`
+        : g.items.map((m) => `
+          <div class="strategy">
+            <div class="info">
+              <div><span class="num">${m.num}</span><span class="name">${m.name}</span></div>
+              <div class="desc">${m.desc}</div>
+            </div>
+            ${m.custom ? `<div class="strategy-row-actions">
+              <button class="icon-btn" data-edit-strategy="${m.key}">edit</button>
+              <button class="icon-btn danger" data-delete-strategy="${m.key}">del</button>
+            </div>` : ''}
+            <div class="toggle" data-strategy="${m.key}" role="switch"></div>
+          </div>`).join('');
+      const newBtn = g.isUser
+        ? `<div class="strategy" style="justify-content:center"><button class="icon-btn" id="new-user-strategy">＋ New strategy</button></div>`
+        : '';
+      return `
+        <div class="folder ${isCollapsed ? 'collapsed' : ''}" data-folder="${g.folder}">
+          <div class="folder-header" data-toggle-folder="${g.folder}">
+            <div>
+              <div class="folder-title">📁 ${g.folder}</div>
+              <div class="folder-meta">${onCount}/${g.items.length} enabled</div>
+            </div>
+            <div class="folder-caret">▾</div>
+          </div>
+          <div class="folder-body">
+            ${rows}
+            ${newBtn}
+          </div>
+        </div>`;
+    }).join('');
+    container.dataset.fingerprint = fingerprint;
+  } else {
+    // Just refresh enabled counts in the headers
+    for (const folderEl of container.querySelectorAll('.folder')) {
+      const folderName = folderEl.dataset.folder;
+      const group = displayGroups.find((g) => g.folder === folderName);
+      if (!group) continue;
+      const onCount = group.items.filter((m) => !!enabledMap[m.key]).length;
+      const meta = folderEl.querySelector('.folder-meta');
+      if (meta) meta.textContent = `${onCount}/${group.items.length} enabled`;
+    }
+  }
+
+  // Sync toggle visual state
   for (const t of container.querySelectorAll('.toggle')) {
-    if (t.classList.contains('saving')) continue; // don't flip a toggle mid-save
-    const enabled = !!s.config.strategies[t.dataset.strategy];
+    if (t.classList.contains('saving')) continue;
+    const enabled = !!enabledMap[t.dataset.strategy];
     t.classList.toggle('on', enabled);
   }
 }
 
 document.addEventListener('click', async (e) => {
-  // Strategy toggles
+  // Folder collapse toggle
+  const fh = e.target.closest('[data-toggle-folder]');
+  if (fh) {
+    const name = fh.dataset.toggleFolder;
+    const folderEl = fh.closest('.folder');
+    folderEl.classList.toggle('collapsed');
+    const collapse = loadCollapseState();
+    collapse[name] = folderEl.classList.contains('collapsed');
+    saveCollapseState(collapse);
+    return;
+  }
+
+  // New strategy
+  if (e.target.id === 'new-user-strategy') {
+    openStrategyEditor(null);
+    return;
+  }
+  // Edit strategy
+  const editBtn = e.target.closest('[data-edit-strategy]');
+  if (editBtn) {
+    openStrategyEditor(editBtn.dataset.editStrategy);
+    return;
+  }
+  // Delete strategy
+  const delBtn = e.target.closest('[data-delete-strategy]');
+  if (delBtn) {
+    if (!confirm(`Delete strategy "${delBtn.dataset.deleteStrategy}"?`)) return;
+    try {
+      const r = await fetch(`/api/user-strategies/${encodeURIComponent(delBtn.dataset.deleteStrategy)}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(await r.text());
+      toast('🗑 Deleted');
+      delete document.getElementById('strategies').dataset.fingerprint; // force rerender
+      fetchState();
+    } catch (err) { toast('✗ Delete failed: ' + err.message); }
+    return;
+  }
+
+  // Strategy enable/disable toggle
   const t = e.target.closest('.toggle[data-strategy]');
   if (t) {
     if (t.classList.contains('saving')) return;
@@ -457,6 +705,82 @@ async function openLogs() {
     toast('📂 Opening logs in Finder');
   } catch (e) {
     toast('✗ Could not open logs');
+  }
+}
+
+// ── Custom strategy editor ──
+// User-editable strategies are JSON definitions stored on the VPS. The
+// schema is intentionally constrained to a few proven patterns (ema_cross,
+// rsi_bounds, bb_extreme) so a non-coder can wire something useful without
+// risking arbitrary code execution.
+let editingStrategyId = null;
+
+async function openStrategyEditor(id) {
+  editingStrategyId = id;
+  let existing = { id: '', name: '', description: '', timeframe: '15',
+    direction: 'auto', entry: 'ema_cross', fast: 9, slow: 21,
+    rsi_min: 0, rsi_max: 100, stop_atr_mult: 1.5, tp_r: 2 };
+  if (id) {
+    try {
+      const r = await fetch(`/api/user-strategies/${encodeURIComponent(id)}`);
+      if (r.ok) existing = await r.json();
+    } catch {}
+  }
+  // Build the modal
+  document.getElementById('modal-title').textContent = id ? 'Edit Strategy' : 'New Strategy';
+  document.getElementById('field-id').value = existing.id || '';
+  document.getElementById('field-id').disabled = !!id;
+  document.getElementById('field-name').value = existing.name || '';
+  document.getElementById('field-desc').value = existing.description || '';
+  document.getElementById('field-tf').value = String(existing.timeframe || '15');
+  document.getElementById('field-direction').value = existing.direction || 'auto';
+  document.getElementById('field-entry').value = existing.entry || 'ema_cross';
+  document.getElementById('field-fast').value = existing.fast ?? 9;
+  document.getElementById('field-slow').value = existing.slow ?? 21;
+  document.getElementById('field-rsi-min').value = existing.rsi_min ?? 0;
+  document.getElementById('field-rsi-max').value = existing.rsi_max ?? 100;
+  document.getElementById('field-stop').value = existing.stop_atr_mult ?? 1.5;
+  document.getElementById('field-tp').value = existing.tp_r ?? 2;
+  document.getElementById('strategy-modal').classList.add('show');
+}
+
+function closeStrategyEditor() {
+  document.getElementById('strategy-modal').classList.remove('show');
+  editingStrategyId = null;
+}
+
+async function saveStrategy() {
+  const body = {
+    id: document.getElementById('field-id').value.trim(),
+    name: document.getElementById('field-name').value.trim(),
+    description: document.getElementById('field-desc').value.trim(),
+    timeframe: document.getElementById('field-tf').value,
+    direction: document.getElementById('field-direction').value,
+    entry: document.getElementById('field-entry').value,
+    fast: Number(document.getElementById('field-fast').value),
+    slow: Number(document.getElementById('field-slow').value),
+    rsi_min: Number(document.getElementById('field-rsi-min').value),
+    rsi_max: Number(document.getElementById('field-rsi-max').value),
+    stop_atr_mult: Number(document.getElementById('field-stop').value),
+    tp_r: Number(document.getElementById('field-tp').value),
+  };
+  if (!body.id || !body.name) { toast('id and name are required'); return; }
+  try {
+    const method = editingStrategyId ? 'PUT' : 'POST';
+    const path = editingStrategyId
+      ? `/api/user-strategies/${encodeURIComponent(editingStrategyId)}`
+      : '/api/user-strategies';
+    const r = await fetch(path, {
+      method, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    toast(editingStrategyId ? '✓ Updated' : '✓ Created');
+    closeStrategyEditor();
+    delete document.getElementById('strategies').dataset.fingerprint; // force rerender
+    fetchState();
+  } catch (err) {
+    toast('✗ Save failed: ' + (err.message || ''));
   }
 }
 

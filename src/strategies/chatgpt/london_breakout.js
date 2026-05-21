@@ -18,6 +18,7 @@
 import { atr } from '../../lib/structure.js';
 import { dayScopedId, buildTriggered, rangeOf, barsInWindow, volNoticeable } from '../_helpers.js';
 import { gmtParts, gmtAsianWindow, gmtWallToUnix } from '../../lib/time.js';
+import { is24x7 } from '../../lib/runtime_config.js';
 
 const KEY = 'CGT-LONDON';
 const TF = '15';
@@ -31,15 +32,16 @@ export function evaluate(ctx) {
   if (!last) return [];
 
   const gp = gmtParts(last.time);
-  // London window 08:00–11:00 GMT (covers London cash open 08:00 GMT through
-  // London/NY overlap onset). Spec says "London time"; in winter London = GMT,
-  // in summer London = GMT+1, so 08:00-11:00 London ≈ 07:00-11:00 GMT depending
-  // on DST. We use 07:00-11:00 GMT as a permissive union of both seasons.
-  const inWindow = gp.minutesOfDay >= 7 * 60 && gp.minutesOfDay < 11 * 60;
-  if (!inWindow) return [];
-  // Weekend exclusion (GMT date)
+  // Weekend exclusion (GMT date) — always enforced; gold doesn't trade.
   const wd = new Date(last.time * 1000).getUTCDay();
   if (wd === 6 || wd === 0) return [];
+  // London window 08:00–11:00 GMT (covers London cash open 08:00 GMT through
+  // London/NY overlap onset). When 24/7 mode is on, the window is dropped so
+  // the strategy can fire on any post-Asian breakout intraday.
+  if (!is24x7()) {
+    const inWindow = gp.minutesOfDay >= 7 * 60 && gp.minutesOfDay < 11 * 60;
+    if (!inWindow) return [];
+  }
 
   // Asian range for today (00:00–06:00 GMT, same calendar day)
   const { start, end } = gmtAsianWindow(last.time);

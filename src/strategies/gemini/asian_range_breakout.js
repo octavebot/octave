@@ -15,6 +15,7 @@
 import { atr } from '../../lib/structure.js';
 import { dayScopedId, buildTriggered, rangeOf, barsInWindow, volNoticeable } from '../_helpers.js';
 import { gmtParts, gmtAsianWindow, gmtWallToUnix } from '../../lib/time.js';
+import { is24x7 } from '../../lib/runtime_config.js';
 
 const KEY = 'GEM-ASIA';
 const TF = '15';
@@ -28,11 +29,15 @@ export function evaluate(ctx) {
   if (!last) return [];
 
   const gp = gmtParts(last.time);
-  // London open onwards (07:00-16:00 GMT cap so we don't chase late)
-  const inWindow = gp.minutesOfDay >= 7 * 60 && gp.minutesOfDay < 16 * 60;
-  if (!inWindow) return [];
   const wd = new Date(last.time * 1000).getUTCDay();
   if (wd === 6 || wd === 0) return [];
+  // Default window is London open through end of NY (07:00-21:00 GMT). When
+  // 24/7 mode is on, drop the window so the bot can fire on a late Asian
+  // breakout etc.
+  if (!is24x7()) {
+    const inWindow = gp.minutesOfDay >= 7 * 60 && gp.minutesOfDay < 16 * 60;
+    if (!inWindow) return [];
+  }
 
   const { start, end } = gmtAsianWindow(last.time);
   const asianBars = barsInWindow(bars, start, end);

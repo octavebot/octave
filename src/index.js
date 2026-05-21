@@ -8,13 +8,14 @@ import { run, stop } from './loop.js';
 const verifyMode = process.argv.includes('--verify');
 
 async function bestEffortSnapshot() {
+  // 15m is the user-visible "watching" TF — all alerts gate at 15m+.
   try {
     const s = await snapshot();
-    if (!s) return { symbol: 'GOLD (cloud)', timeframe: '5' }; // tradingview-mcp missing (VPS)
+    if (!s) return { symbol: 'MGC1! (cloud)', timeframe: '15' };
     return s;
   } catch (err) {
     log.warn('initial snapshot failed (TV may not be up yet)', { err: err.message });
-    return { symbol: 'GOLD', timeframe: '5' };
+    return { symbol: 'MGC1!', timeframe: '15' };
   }
 }
 

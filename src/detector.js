@@ -42,6 +42,7 @@ import { fetchAllPanes, supplement as supplementWithCloudData } from './lib/clou
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateChatgptPack } from './strategies/chatgpt/index.js';
 import { evaluateGeminiPack } from './strategies/gemini/index.js';
+import { evaluateUserStrategies } from './lib/user_strategies.js';
 
 /** Build the unified context object all strategies consume. */
 async function buildCtx() {
@@ -68,12 +69,13 @@ async function buildCtx() {
   // authoritative source. TV is still used by the drawings module to render
   // levels on the user's active chart, but that path is independent of ctx.
 
-  // Pick anchor: prefer execution TFs (5m / 1m / 15m), fall back to ANY gold pane.
+  // Pick anchor: 15m is the user-visible "watching" TF per 2026-05-21 directive
+  // (all alerts gate at 15m+ anyway, so 15m matches what's actually evaluated).
   let anchor =
-    panesByTf.get('gold|5') ||
-    panesByTf.get('gold|1') ||
     panesByTf.get('gold|15') ||
     panesByTf.get('gold|60') ||
+    panesByTf.get('gold|5') ||
+    panesByTf.get('gold|1') ||
     panesByTf.get('gold|240') ||
     panesByTf.get('gold|D') ||
     panesByTf.get('gold|1D');
@@ -152,6 +154,12 @@ export async function detect() {
   catch (err) { log.error('chatgpt pack threw', { err: err.message, stack: err.stack }); }
   try { results.push(...evaluateGeminiPack(ctx)); }
   catch (err) { log.error('gemini pack threw', { err: err.message, stack: err.stack }); }
+
+  // User-editable strategies (defined via dashboard / Telegram).
+  // Each user strategy's enabled flag is mirrored into runtime-config so the
+  // standard /enable /disable Telegram commands work on them too.
+  try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }
+  catch (err) { log.error('user strategies threw', { err: err.message, stack: err.stack }); }
 
   // Attach context for the alerter. We preserve a per-strategy timeframe if set,
   // since strategies now run on their own analysis TF (15m, 1h, 4h, 1d).

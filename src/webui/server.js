@@ -164,6 +164,23 @@ async function gatherState() {
     }
   } catch {}
 
+  // Active follow-up count = source of truth for "live setups" in dashboard.
+  // tracked_setups (from drawings.json) is stale because drawings persist
+  // across days; follow_up.active() reflects only open positions.
+  let activeSetups = 0;
+  try {
+    const fu = await import('../lib/follow_up.js');
+    activeSetups = fu.active().length;
+  } catch {}
+
+  // User-editable strategies — surfaced so the dashboard can render the
+  // "My Strategies" folder + its enable/disable toggles.
+  let userStrategies = [];
+  try {
+    const us = await import('../lib/user_strategies.js');
+    userStrategies = us.list();
+  } catch {}
+
   return {
     config,
     cloud: { alive: cloudAlive, ageMs: cloudAgeMs, raw: cloud },
@@ -172,9 +189,12 @@ async function gatherState() {
     caffeinate: { active: caffActive },
     activity: {
       tracked_setups: Object.keys(drawings.setups || {}).length,
+      active_setups: activeSetups,
       current_session: session.lastSession,
       last_alert: lastAlert,
     },
+    user_strategies: userStrategies,
+    allow_user_strategies: true,
     now_ms: Date.now(),
   };
 }
@@ -187,8 +207,15 @@ async function saveConfig(updates) {
   const next = { ...current };
   if (updates.strategies && typeof updates.strategies === 'object') {
     next.strategies = { ...current.strategies };
+    // Built-in strategies must be in DEFAULTS; user strategies (custom ids) are
+    // allowed through unconditionally so the dashboard can toggle them.
+    let userKeys = new Set();
+    try {
+      const us = await import('../lib/user_strategies.js');
+      userKeys = new Set(us.list().map((s) => s.id));
+    } catch {}
     for (const [k, v] of Object.entries(updates.strategies)) {
-      if (k in DEFAULTS.strategies) next.strategies[k] = !!v;
+      if (k in DEFAULTS.strategies || userKeys.has(k)) next.strategies[k] = !!v;
     }
   }
   if (typeof updates.bypassKillzones === 'boolean') next.bypassKillzones = updates.bypassKillzones;
@@ -255,6 +282,51 @@ const server = createServer(async (req, res) => {
       if (!body) return sendJson(res, 400, { error: 'bad json' });
       const next = await saveConfig(body);
       return sendJson(res, 200, { config: next });
+    }
+
+    // ─── User-editable strategies CRUD ───
+    if (req.method === 'GET' && url.pathname === '/api/user-strategies') {
+      const us = await import('../lib/user_strategies.js');
+      return sendJson(res, 200, { items: us.list() });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/user-strategies') {
+      const body = await readBody(req).catch(() => null);
+      if (!body) return sendJson(res, 400, { error: 'bad json' });
+      try {
+        const us = await import('../lib/user_strategies.js');
+        const created = us.create(body);
+        // Mirror enabled flag into runtime config so /enable /disable also works
+        await saveConfig({ strategies: { [created.id]: created.enabled } });
+        return sendJson(res, 200, created);
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message });
+      }
+    }
+    const usMatch = url.pathname.match(/^\/api\/user-strategies\/(.+)$/);
+    if (usMatch) {
+      const id = decodeURIComponent(usMatch[1]);
+      const us = await import('../lib/user_strategies.js');
+      if (req.method === 'GET') {
+        const item = us.get(id);
+        if (!item) return sendJson(res, 404, { error: 'not found' });
+        return sendJson(res, 200, item);
+      }
+      if (req.method === 'PUT') {
+        const body = await readBody(req).catch(() => null);
+        if (!body) return sendJson(res, 400, { error: 'bad json' });
+        try {
+          const updated = us.update(id, body);
+          await saveConfig({ strategies: { [updated.id]: updated.enabled } });
+          return sendJson(res, 200, updated);
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+      if (req.method === 'DELETE') {
+        try { us.remove(id); }
+        catch (err) { return sendJson(res, 404, { error: err.message }); }
+        return sendJson(res, 200, { ok: true });
+      }
     }
 
     if (req.method === 'POST' && url.pathname === '/api/open-logs') {

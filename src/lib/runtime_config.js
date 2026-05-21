@@ -58,7 +58,9 @@ const DEFAULTS = Object.freeze({
   },
   mute: { untilMs: 0, reason: null },
   alertChartImages: true,
-  bypassKillzones: false,
+  // 24/7 by default per user directive 2026-05-21: every strategy should
+  // fire any hour. Toggle off via /24h off if you want killzone gating back.
+  bypassKillzones: true,
   lastUpdated: 0,
 });
 
@@ -142,6 +144,16 @@ export function save(next) {
 export function isStrategyEnabled(key) {
   const cfg = get();
   return cfg.strategies[key] === true;
+}
+
+/**
+ * 24/7 mode toggle: when true, every strategy ignores its killzone /
+ * session-window gating and fires any hour the market is open.
+ * Default is true per the 2026-05-21 user directive.
+ */
+export function is24x7() {
+  const cfg = get();
+  return cfg.bypassKillzones === true;
 }
 
 /** Convenience: are alerts currently muted? */
