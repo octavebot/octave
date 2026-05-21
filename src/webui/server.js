@@ -38,6 +38,7 @@ const DEFAULTS = {
   strategies: {
     USLS: false, 'ICT-SMC': false, 'ALGO-SMC': false, ADAPTIVE: false,
     ICT: true, SMT: true, TRINITY: true,
+    AMN: true, TORI: true, WARRIOR: true,
   },
   lastUpdated: 0,
 };

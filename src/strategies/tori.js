@@ -75,7 +75,12 @@ function findA_Plus_Trendline(bars, direction) {
   // direction='DOWN' → descending trendline through swing HIGHS (break upward)
   // direction='UP'   → ascending trendline through swing LOWS  (break downward)
   const { highs, lows } = findSwings(bars, 3);
-  const candidates = direction === 'DOWN' ? highs : lows;
+  // Cap candidates to the most recent 30 swings. The triple-nested loop below
+  // is O(n³) — without this cap, a 60-day 4H backtest with 80+ swings runs
+  // 500k+ iterations per anchor tick × thousands of ticks → freezes the
+  // backtest child for minutes. 30 swings keeps it under 30k iterations.
+  let candidates = direction === 'DOWN' ? highs : lows;
+  if (candidates.length > 30) candidates = candidates.slice(-30);
   if (candidates.length < MIN_TOUCHES) return null;
   const a14 = atr(bars, 14) || 1;
   const tolerance = TRENDLINE_TOLERANCE_ATR * a14;
