@@ -7,6 +7,7 @@
 .vscode/
 *.log
 /src/state/heartbeats/
+/src/state/runtime-config.json
 /src/state/trades.jsonl
 # by the GitHub Actions workflow — those are the shared dedup source.
 # Cloud state files (cloud-dedup.json, cloud-heartbeat.json) ARE committed
