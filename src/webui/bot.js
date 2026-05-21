@@ -689,12 +689,12 @@ async function cmdDashboard() {
     ].join('\n'));
     return;
   }
-  // Build inline keyboard with a web_app button — opens inside Telegram
+  // Plain URL button — opens in the user's default browser. The web_app
+  // variant needs BotFather domain whitelist which we don't have set up.
   const keyboard = [
-    [{ text: '🎵 Open Octave Dashboard', web_app: { url } }],
-    [{ text: 'Open in browser', url }],
+    [{ text: '🎵 Open Dashboard', url }],
   ];
-  await send(`🌐 *Octave Dashboard*\n\n\`${url}\`\n\nTap below to open. The "Open Octave Dashboard" button opens inside Telegram (mobile-friendly).`, { keyboard });
+  await send(`🌐 *Octave Dashboard*\n\nTap the button to open in your browser:\n\`${url}\``, { keyboard });
 }
 
 async function cmdHealth() {
