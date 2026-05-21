@@ -1,0 +1,39 @@
+# Logrotate config for Octave on Linux VPS.
+#
+# Install:
+#   sudo cp /home/octave/trading-alerts/scripts/logrotate.octave /etc/logrotate.d/octave
+#   sudo logrotate -d /etc/logrotate.d/octave   # dry-run to verify
+#
+# logrotate runs daily on Ubuntu via /etc/cron.daily/logrotate, so once
+# this file is in place rotation happens automatically.
+
+/home/octave/.octave-logs/*.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su octave octave
+}
+
+/home/octave/trading-alerts/src/state/trades.jsonl {
+    size 50M
+    rotate 12
+    missingok
+    notifempty
+    compress
+    copytruncate
+    su octave octave
+}
+
+/home/octave/trading-alerts/src/state/pending-tg.jsonl {
+    size 10M
+    rotate 3
+    missingok
+    notifempty
+    compress
+    copytruncate
+    su octave octave
+}

@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { beat as heartbeat, startHeartbeat, readAllBeats, isStale, STALE_TOLERANCE_MS } from '../lib/heartbeat.js';
+import { sessionLabel } from '../lib/trade_log.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,7 +26,16 @@ const CONFIG_FILE = join(REPO_DIR, 'src', 'state', 'runtime-config.json');
 const HEARTBEAT_FILE = join(REPO_DIR, 'src', 'state', 'cloud-heartbeat.json');
 const DRAWINGS_FILE = join(REPO_DIR, 'src', 'state', 'drawings.json');
 const SESSION_FILE = join(REPO_DIR, 'src', 'state', 'session.json');
-const STDOUT_LOG = '/Users/jqvier/Library/Logs/trading-alerts/stdout.log';
+// Resolve the signal-engine log: Mac uses ~/Library/Logs/trading-alerts/stdout.log,
+// VPS uses /home/octave/.octave-logs/signal-engine.log. First-existing wins.
+import { existsSync as _existsSync } from 'node:fs';
+const STDOUT_LOG_CANDIDATES = [
+  '/Users/jqvier/Library/Logs/trading-alerts/stdout.log',
+  '/home/octave/.octave-logs/signal-engine.log',
+  process.env.HOME + '/.octave-logs/signal-engine.log',
+];
+const STDOUT_LOG = STDOUT_LOG_CANDIDATES.find((p) => p && _existsSync(p)) || STDOUT_LOG_CANDIDATES[0];
+const TRADE_LOG = join(REPO_DIR, 'src', 'state', 'trades.jsonl');
 // Multiple candidate locations — first found wins. Mac uses ~/.config,
 // VPS uses /home/octave/.config. Also we honor env vars set by systemd's
 // EnvironmentFile, which is the primary delivery mechanism on Linux.
@@ -235,6 +245,8 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 📊 *Status*
 \`/status\` — overall health
 \`/health\` — per-service detail
+\`/perf\` — VPS hardware + process stats
+\`/summary [days]\` — alerts + trades digest (default 1 day)
 \`/session\` — current trading session
 
 📜 *History*
@@ -671,6 +683,152 @@ async function cmdDashboard() {
     [{ text: '🎵 Open Dashboard', url }],
   ];
   await send(`🌐 *Octave Dashboard*\n\nTap the button to open in your browser:\n\`${url}\``, { keyboard });
+}
+
+/** /summary [days] — activity digest. Default 1 day. */
+async function cmdSummary(arg) {
+  const days = Math.max(1, Math.min(30, parseInt(arg, 10) || 1));
+  const sinceMs = Date.now() - days * 86_400_000;
+  const alerts = readAlerts({ since: sinceMs, limit: 1000 });
+
+  // Per-strategy + per-status counts
+  const byStrategy = {};
+  let triggered = 0, formed = 0, near = 0;
+  for (const a of alerts) {
+    byStrategy[a.strategy] = byStrategy[a.strategy] || { triggered: 0, near: 0, forming: 0, total: 0 };
+    byStrategy[a.strategy].total++;
+    if (a.status === 'triggered') { byStrategy[a.strategy].triggered++; triggered++; }
+    else if (a.status === 'near_trigger') { byStrategy[a.strategy].near++; near++; }
+    else if (a.status === 'forming') { byStrategy[a.strategy].forming++; formed++; }
+  }
+
+  // Session breakdown (NY-local hour bucketing)
+  const sessions = { Asian: 0, London: 0, 'NY-AM': 0, 'NY-PM': 0 };
+  for (const a of alerts) {
+    if (a.status !== 'triggered') continue;
+    const sess = sessionLabel(Math.floor(a.time / 1000));
+    if (sess in sessions) sessions[sess]++;
+  }
+
+  // Completed trades from trades.jsonl (in window)
+  let trades = [];
+  try {
+    if (existsSync(TRADE_LOG)) {
+      const lines = readFileSync(TRADE_LOG, 'utf8').split('\n').filter(Boolean);
+      for (const ln of lines) {
+        try {
+          const t = JSON.parse(ln);
+          const ts = Date.parse(t.opened_at || t.ts || '') || 0;
+          if (ts >= sinceMs) trades.push(t);
+        } catch {}
+      }
+    }
+  } catch {}
+
+  const wins = trades.filter((t) => t.outcome === 'WIN').length;
+  const losses = trades.filter((t) => t.outcome === 'LOSS').length;
+  const sumR = trades.reduce((acc, t) => acc + (+t.result_R || 0), 0);
+
+  const lines = [
+    `📊 *${days === 1 ? 'Today\'s' : `${days}-day`} Summary*`,
+    '',
+    `Alerts: *${alerts.length}*  (${triggered} triggered · ${near} near · ${formed} forming)`,
+  ];
+  if (trades.length > 0) {
+    const wr = ((wins / trades.length) * 100).toFixed(0);
+    lines.push(`Trades: *${trades.length}*  ·  ${wins}W / ${losses}L  (${wr}% wins)  ·  ${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R`);
+  }
+  lines.push('');
+
+  // Top strategies
+  const ranked = Object.entries(byStrategy).sort((a, b) => b[1].total - a[1].total).slice(0, 7);
+  if (ranked.length > 0) {
+    lines.push('*By strategy*');
+    for (const [name, s] of ranked) {
+      const num = STRATEGY_NUM[name] || '?';
+      lines.push(`  #${num} ${name}: ${s.total} (${s.triggered}🟢/${s.near}🟠/${s.forming}🟡)`);
+    }
+    lines.push('');
+  }
+
+  // Triggered by session
+  const sessParts = Object.entries(sessions).filter(([, n]) => n > 0).map(([s, n]) => `${s} ${n}`);
+  if (sessParts.length > 0) {
+    lines.push('*Triggered by session*');
+    lines.push(`  ${sessParts.join(' · ')}`);
+    lines.push('');
+  }
+
+  if (alerts.length === 0) {
+    lines.push('_Quiet window. No alerts in this period._');
+  }
+
+  lines.push('Tip: `/summary 7` for the last week, `/summary 30` for the month.');
+  await send(lines.join('\n'));
+}
+
+/** /perf — VPS hardware + Octave runtime perf snapshot. */
+async function cmdPerf() {
+  const lines = ['⚡ *Performance*', ''];
+
+  // CPU load average (1/5/15-min). Linux exposes via /proc/loadavg; Mac via uptime.
+  const loadR = await exec('/usr/bin/uptime', []);
+  const loadMatch = loadR.out.match(/load averages?:\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
+  if (loadMatch) {
+    lines.push(`CPU load: *${loadMatch[1]}* (1m) · ${loadMatch[2]} (5m) · ${loadMatch[3]} (15m)`);
+  }
+
+  // RAM — /proc/meminfo on Linux
+  try {
+    const { readFileSync } = await import('node:fs');
+    const mi = readFileSync('/proc/meminfo', 'utf8');
+    const total = +(mi.match(/MemTotal:\s+(\d+)/)?.[1] || 0) * 1024;
+    const avail = +(mi.match(/MemAvailable:\s+(\d+)/)?.[1] || 0) * 1024;
+    if (total > 0) {
+      const usedGB = ((total - avail) / 1024 ** 3).toFixed(1);
+      const totalGB = (total / 1024 ** 3).toFixed(1);
+      const usedPct = Math.round(((total - avail) / total) * 100);
+      lines.push(`RAM: *${usedGB} GB / ${totalGB} GB* (${usedPct}%)`);
+    }
+  } catch {}
+
+  // Disk — df for the root filesystem
+  const dfR = await exec('/bin/df', ['-h', '/']);
+  const dfLine = dfR.out.split('\n').filter((l) => l.trim() && !l.startsWith('Filesystem'))[0];
+  if (dfLine) {
+    const parts = dfLine.split(/\s+/);
+    if (parts.length >= 5) {
+      lines.push(`Disk: *${parts[2]} / ${parts[1]}* (${parts[4]})`);
+    }
+  }
+
+  lines.push('');
+  lines.push('*Octave processes*');
+
+  // RSS per service from heartbeats
+  const beats = readAllBeats();
+  const SVC = { 'signal-engine': 'Signal', 'bot': 'Bot', 'webui': 'Dashboard', 'watchdog': 'Watchdog' };
+  let totalMb = 0;
+  for (const [key, label] of Object.entries(SVC)) {
+    const b = beats[key];
+    if (b && b.mem_mb) {
+      lines.push(`  ${label}: ${b.mem_mb} MB · up ${Math.round((b.uptime_s || 0) / 60)}m`);
+      totalMb += b.mem_mb;
+    } else {
+      lines.push(`  ${label}: not reporting`);
+    }
+  }
+  lines.push(`  Total: *${totalMb} MB*`);
+
+  // Market data freshness
+  const md = beats['market-data'];
+  if (md?.last_fetch_ms) {
+    const age = Math.round((Date.now() - md.last_fetch_ms) / 1000);
+    lines.push('');
+    lines.push(`Market data: last Yahoo fetch ${age}s ago · ${md.pane_count || 0} panes cached`);
+  }
+
+  await send(lines.join('\n'));
 }
 
 async function cmdHealth() {
@@ -1310,6 +1468,9 @@ const COMMANDS = {
   '/setup': cmdSetup,
   '/24h': cmd24h,
   '/24': cmd24h,
+  '/summary': cmdSummary,
+  '/digest': cmdSummary,
+  '/perf': cmdPerf,
 };
 
 async function handleUpdate(update) {
