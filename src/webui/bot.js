@@ -821,6 +821,36 @@ async function runDetectChild() {
   });
 }
 
+/** Lists every strategy with directional activity right now (forming/near/triggered). */
+async function cmdActiveSetups() {
+  await send('🎯 Checking all strategies…');
+  const r = await runDetectChild();
+  if (r.error) { await send(`⚠️ ${r.error}`); return; }
+  const directional = (r.results || []).filter((x) => x.direction === 'LONG' || x.direction === 'SHORT');
+  if (directional.length === 0) {
+    await send('🎯 *No active setups*\n\nNo strategy is showing directional development. Could be: outside killzones, no liquidity sweep yet, market consolidating. Try `/24h on` to allow signals any hour (lower quality).');
+    return;
+  }
+  // Group by strategy with the most-advanced status per
+  const PRI = { triggered: 0, near_trigger: 1, forming: 2, invalidated: 3 };
+  const byStrategy = {};
+  for (const x of directional) {
+    const cur = byStrategy[x.strategy];
+    if (!cur || (PRI[x.status] ?? 9) < (PRI[cur.status] ?? 9)) byStrategy[x.strategy] = x;
+  }
+  const sorted = Object.values(byStrategy).sort((a, b) => (PRI[a.status] ?? 9) - (PRI[b.status] ?? 9));
+  const STAGE = { triggered: '🟢 TRIGGERED', near_trigger: '🟠 NEAR', forming: '🟡 FORMING' };
+  const lines = ['🎯 *Active Setups*', ''];
+  for (const s of sorted) {
+    const dir = s.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+    lines.push(`*#${STRATEGY_NUM[s.strategy] || '?'} ${s.strategy}* — ${dir} · ${STAGE[s.status] || s.status} · ${Math.round((s.confidence||0)*100)}%`);
+    if (s.summary) lines.push(`  _${s.summary.slice(0, 100)}_`);
+    lines.push('');
+  }
+  lines.push('Send `/setup <num>` for a chart + what\'s still missing.');
+  await send(lines.join('\n'));
+}
+
 async function cmdBias() {
   await send('🧭 Computing market bias…');
   const r = await runDetectChild();
@@ -973,79 +1003,48 @@ async function cmdShutdown(arg) {
 
 function buildMainMenuView() {
   const cfg = loadConfig() || {};
-  const hb = readJson(HEARTBEAT_FILE, null);
   const session = readJson(SESSION_FILE, { lastSession: null });
   const onCount = cfg.strategies ? Object.values(cfg.strategies).filter(Boolean).length : 0;
-  const onNums = cfg.strategies
-    ? Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => `#${STRATEGY_NUM[k]}`).sort().join(' ')
-    : '(none)';
-  let cloudLine = '🔴 no heartbeat';
-  if (hb?.lastTick) {
-    const ageMin = Math.round((Date.now() - hb.lastTick) / 60000);
-    if (ageMin < 8 && hb.status === 'ok') cloudLine = `🟢 ${ageMin}m ago`;
-    else if (hb.status === 'skipped-mode-local') cloudLine = `⚪ idle (mode=local)`;
-    else if (hb.status === 'skipped-muted') cloudLine = `🔕 muted`;
-    else cloudLine = `🟠 ${ageMin}m stale`;
-  }
-  const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
-    ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
-  const muteLine = muteSec > 0 ? `🔕 ${Math.round(muteSec / 60)}m left` : `🔔 live`;
+  const muteMin = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
+    ? Math.round((cfg.mute.untilMs - Date.now()) / 60000) : 0;
+  const sessionLabel = (session.lastSession || 'closed').toUpperCase();
 
   const text = [
-    '🎵 *Octave Control Panel*',
+    '🎵 *Octave*',
     '',
-    `🎚 Mode: \`${cfg.mode || 'auto'}\``,
-    `🟢 Enabled: ${onNums} (${onCount}/7)`,
-    `🔔 Alerts: ${muteLine}`,
-    `☁️ Cloud: ${cloudLine}`,
-    `🌍 Session: \`${(session.lastSession || '—').toUpperCase()}\``,
-  ].join('\n');
+    `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/10 strategies · ${sessionLabel} session`,
+    cfg.bypassKillzones ? '🌐 24/7 mode ON' : '',
+  ].filter(Boolean).join('\n');
 
+  // Trader-focused layout: most-used commands first, by daily workflow
   const keyboard = [
     [
-      { text: '🎚 Mode', callback_data: 'view:mode' },
+      { text: '🧭 Bias',       callback_data: 'act:bias' },
+      { text: '🎯 Active Setups', callback_data: 'act:setups' },
+    ],
+    [
+      { text: '📊 Today',      callback_data: 'act:today' },
+      { text: '🔔 Last Alert', callback_data: 'act:last' },
+    ],
+    [
+      { text: '💰 Price',      callback_data: 'act:price' },
+      { text: '🌍 Session',    callback_data: 'act:session' },
+    ],
+    [
       { text: '🎛 Strategies', callback_data: 'view:strategies' },
+      { text: '🔕 Mute',       callback_data: 'view:mute' },
     ],
     [
-      { text: '🔕 Mute', callback_data: 'view:mute' },
-      { text: '📊 Status', callback_data: 'act:status' },
+      { text: '📈 Backtest',   callback_data: 'view:backtest' },
+      { text: '🌐 Dashboard',  callback_data: 'act:dashboard' },
     ],
     [
-      { text: '📜 Today', callback_data: 'act:today' },
-      { text: '🔔 Last alert', callback_data: 'act:last' },
+      { text: '🩺 Health',     callback_data: 'act:health' },
+      { text: '⚙️ Settings',   callback_data: 'view:settings' },
     ],
     [
-      { text: '☁️ Cloud', callback_data: 'act:cloud' },
-      { text: '💻 Local', callback_data: 'act:local' },
+      { text: '🔄 Refresh',    callback_data: 'view:main' },
     ],
-    [
-      { text: '🔄 Refresh', callback_data: 'view:main' },
-      { text: '🚨 System', callback_data: 'view:system' },
-    ],
-  ];
-  return { text, keyboard };
-}
-
-function buildModeView() {
-  const cfg = loadConfig() || {};
-  const cur = cfg.mode || 'auto';
-  const mark = (m) => m === cur ? '✅ ' : '   ';
-  const text = [
-    '🎚 *Mode*',
-    '',
-    `Current: \`${cur}\``,
-    '',
-    '_auto_  — cloud-primary, local-fallback',
-    '_cloud_ — only cloud sends Telegram',
-    '_local_ — only local sends Telegram',
-  ].join('\n');
-  const keyboard = [
-    [
-      { text: `${mark('auto')}Auto`, callback_data: 'mode:auto' },
-      { text: `${mark('cloud')}Cloud`, callback_data: 'mode:cloud' },
-      { text: `${mark('local')}Local`, callback_data: 'mode:local' },
-    ],
-    [{ text: '« Back', callback_data: 'view:main' }],
   ];
   return { text, keyboard };
 }
@@ -1056,7 +1055,6 @@ function buildStrategiesView() {
     '🎛 *Strategies*',
     '',
     'Tap any strategy to toggle on/off.',
-    'State syncs to GitHub for the cloud tick.',
   ].join('\n');
   const keyboard = STRATEGY_KEYS.map((k) => {
     const on = !!cfg.strategies[k];
@@ -1075,7 +1073,7 @@ function buildMuteView() {
     ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
   const text = sec > 0
     ? `🔕 *Muted* — ${Math.round(sec / 60)}m remaining\n\nUntil: \`${nyHourMinute(cfg.mute.untilMs)}\` NY`
-    : '🔔 *Alerts are live*\n\nMute pauses ALL alerts (local + cloud).';
+    : '🔔 *Alerts are live*\n\nMute pauses all alerts for the chosen duration.';
   const keyboard = [
     [
       { text: '🔕 30 min', callback_data: 'mute:30' },
@@ -1092,15 +1090,56 @@ function buildMuteView() {
   return { text, keyboard };
 }
 
+function buildBacktestView() {
+  const text = [
+    '📈 *Backtest*',
+    '',
+    'Pick a window. Reports run in an isolated process — bot stays responsive even if a strategy is slow.',
+  ].join('\n');
+  const keyboard = [
+    [
+      { text: '7 days',  callback_data: 'bt:7' },
+      { text: '30 days', callback_data: 'bt:30' },
+      { text: '60 days', callback_data: 'bt:60' },
+    ],
+    [
+      { text: 'All enabled (30d)', callback_data: 'bt:30' },
+    ],
+    [{ text: '« Back', callback_data: 'view:main' }],
+  ];
+  return { text, keyboard };
+}
+
+function buildSettingsView() {
+  const cfg = loadConfig() || {};
+  const text = [
+    '⚙️ *Settings*',
+    '',
+    `24/7 mode:    ${cfg.bypassKillzones ? '🟢 ON (alerts any hour)' : '⚫ OFF (killzones only)'}`,
+    `Chart images: ${cfg.alertChartImages !== false ? '🟢 ON' : '⚫ OFF'}`,
+  ].join('\n');
+  const keyboard = [
+    [{ text: cfg.bypassKillzones ? '⚫ Turn 24/7 mode OFF' : '🌐 Turn 24/7 mode ON', callback_data: `set:24h:${cfg.bypassKillzones ? 'off' : 'on'}` }],
+    [{ text: cfg.alertChartImages !== false ? '⚫ Disable chart images' : '🟢 Enable chart images', callback_data: `set:charts:${cfg.alertChartImages !== false ? 'off' : 'on'}` }],
+    [{ text: '🚨 System (restart/shutdown)', callback_data: 'view:system' }],
+    [{ text: '« Back', callback_data: 'view:main' }],
+  ];
+  return { text, keyboard };
+}
+
 function buildSystemView() {
   const text = [
     '🚨 *System Actions*',
     '',
-    'Restart kickstarts the local LaunchAgent.',
-    'Shutdown stops EVERYTHING (alerts, TV, caffeinate, bot itself).',
+    'Restart bounces a single service. Shutdown stops Octave entirely (you\'d have to SSH back in to restart).',
   ].join('\n');
   const keyboard = [
-    [{ text: '🔄 Restart local service', callback_data: 'act:restart' }],
+    [{ text: '🔄 Restart all',          callback_data: 'act:restart-all' }],
+    [{ text: '🔄 Restart signal engine', callback_data: 'act:restart' }],
+    [{ text: '🔄 Restart bot',          callback_data: 'act:restart-bot' }],
+    [{ text: '🔄 Restart dashboard',    callback_data: 'act:restart-webui' }],
+    [{ text: '« Back', callback_data: 'view:settings' }],
+    [{ text: '⏸ Shutdown ALL', callback_data: 'act:shutdown-confirm' }],
     [{ text: '⏸ Shutdown ALL', callback_data: 'act:shutdown-confirm' }],
     [{ text: '« Back', callback_data: 'view:main' }],
   ];
@@ -1129,9 +1168,10 @@ async function handleCallback(cq) {
     if (kind === 'view') {
       let v;
       if (arg === 'main') v = buildMainMenuView();
-      else if (arg === 'mode') v = buildModeView();
       else if (arg === 'strategies') v = buildStrategiesView();
       else if (arg === 'mute') v = buildMuteView();
+      else if (arg === 'backtest') v = buildBacktestView();
+      else if (arg === 'settings') v = buildSettingsView();
       else if (arg === 'system') v = buildSystemView();
       if (v) {
         await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
@@ -1139,15 +1179,6 @@ async function handleCallback(cq) {
       } else {
         await answerCallback(cq.id, 'unknown view');
       }
-      return;
-    }
-
-    if (kind === 'mode') {
-      if (!['auto', 'cloud', 'local'].includes(arg)) return answerCallback(cq.id, 'invalid');
-      await saveConfigAndPush((c) => { c.mode = arg; return c; });
-      const v = buildModeView();
-      await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
-      await answerCallback(cq.id, `Mode → ${arg}`);
       return;
     }
 
@@ -1183,16 +1214,46 @@ async function handleCallback(cq) {
       return;
     }
 
+    if (kind === 'set') {
+      const [what, val] = arg.split(':');
+      if (what === '24h') {
+        await saveConfigAndPush((c) => { c.bypassKillzones = (val === 'on'); return c; });
+        const v = buildSettingsView();
+        await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+        return answerCallback(cq.id, '24/7 → ' + val);
+      }
+      if (what === 'charts') {
+        await saveConfigAndPush((c) => { c.alertChartImages = (val === 'on'); return c; });
+        const v = buildSettingsView();
+        await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
+        return answerCallback(cq.id, 'Charts → ' + val);
+      }
+      return answerCallback(cq.id, 'unknown setting');
+    }
+
+    if (kind === 'bt') {
+      const days = parseInt(arg, 10) || 30;
+      await editMessage(chatId, messageId, `⏳ Running ${days}-day backtest…`, { keyboard: [] });
+      await answerCallback(cq.id);
+      await cmdBacktest(String(days));
+      return;
+    }
+
     if (kind === 'act') {
-      if (arg === 'status') { await cmdStatus(); return answerCallback(cq.id); }
-      if (arg === 'today')  { await cmdToday();  return answerCallback(cq.id); }
-      if (arg === 'last')   { await cmdLast();   return answerCallback(cq.id); }
-      if (arg === 'cloud')  { await cmdHealth(); return answerCallback(cq.id); }
-      if (arg === 'local')  { await cmdHealth(); return answerCallback(cq.id); }
-      if (arg === 'restart') { await cmdRestart(); return answerCallback(cq.id, 'Restarting…'); }
+      if (arg === 'bias')      { await cmdBias();      return answerCallback(cq.id); }
+      if (arg === 'setups')    { await cmdActiveSetups(); return answerCallback(cq.id); }
+      if (arg === 'today')     { await cmdToday();     return answerCallback(cq.id); }
+      if (arg === 'last')      { await cmdLast();      return answerCallback(cq.id); }
+      if (arg === 'price')     { await cmdPrice();     return answerCallback(cq.id); }
+      if (arg === 'session')   { await cmdSession();   return answerCallback(cq.id); }
+      if (arg === 'health')    { await cmdHealth();    return answerCallback(cq.id); }
+      if (arg === 'dashboard') { await cmdDashboard(); return answerCallback(cq.id); }
+      if (arg === 'restart')      { await cmdRestartSvc('signal-engine'); return answerCallback(cq.id, 'Restarting signal engine…'); }
+      if (arg === 'restart-all')  { await cmdRestartSvc('all');  return answerCallback(cq.id, 'Restarting all…'); }
+      if (arg === 'restart-bot')  { await cmdRestartSvc('bot');  return answerCallback(cq.id, 'Restarting bot…'); }
+      if (arg === 'restart-webui'){ await cmdRestartSvc('webui'); return answerCallback(cq.id, 'Restarting dashboard…'); }
       if (arg === 'shutdown-confirm') {
-        // Two-tap confirm: turn into a confirm button row
-        const text = '⚠️ *Confirm Shutdown*\n\nThis will stop EVERYTHING:\n• Alerts service\n• Caffeinate\n• TradingView\n• Claude Code\n• Web UI + Bot\n\nClick the Octave icon to restart.';
+        const text = '⚠️ *Confirm Shutdown*\n\nThis stops every service on the VPS. You\'ll need to SSH in to bring Octave back.';
         await editMessage(chatId, messageId, text, {
           keyboard: [
             [{ text: '✅ Yes, shut down', callback_data: 'act:shutdown-do' }],
@@ -1235,7 +1296,7 @@ const COMMANDS = {
   '/strategies': cmdStrategies,
   '/enable': cmdEnable,
   '/disable': cmdDisable,
-  '/mode': cmdMode,
+  // /mode removed — cloud-only architecture, no more switching
   '/mute': cmdMute,
   '/unmute': cmdUnmute,
   '/version': cmdVersion,

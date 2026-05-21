@@ -2,6 +2,8 @@ import { config } from './config.js';
 import { log } from './logger.js';
 import { buildAlertChartUrl } from './lib/chart_image.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
+import { send as sendViaQueue, startDrain } from './lib/telegram_queue.js';
+startDrain(); // re-attempt any queued sends on startup
 
 const API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
 const API_PHOTO = `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`;
@@ -52,22 +54,14 @@ async function postRaw(text) {
   const gap = Date.now() - lastSendAt;
   if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
   lastSendAt = Date.now();
-  const res = await fetch(API, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: config.telegramChatId,
-      text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true,
-    }),
+  // Routes through the queue: succeeds immediately on a good network, or
+  // gets persisted to disk + retried with backoff when Telegram is down.
+  return sendViaQueue(config.telegramBotToken, 'sendMessage', {
+    chat_id: config.telegramChatId,
+    text,
+    parse_mode: 'Markdown',
+    disable_web_page_preview: true,
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    log.warn('telegram non-2xx', { status: res.status, body });
-    return false;
-  }
-  return true;
 }
 
 /**
@@ -84,26 +78,16 @@ async function postPhoto(photoUrl, caption) {
   const fitsInCaption = fullText.length <= TG_CAPTION_MAX;
   const shortCaption = fitsInCaption ? fullText : (fullText.slice(0, TG_CAPTION_MAX - 40) + '…\n_(full detail below)_');
 
-  const res = await fetch(API_PHOTO, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: config.telegramChatId,
-      photo: photoUrl,
-      caption: shortCaption,
-      parse_mode: 'Markdown',
-    }),
+  const ok = await sendViaQueue(config.telegramBotToken, 'sendPhoto', {
+    chat_id: config.telegramChatId,
+    photo: photoUrl,
+    caption: shortCaption,
+    parse_mode: 'Markdown',
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    log.warn('telegram sendPhoto non-2xx', { status: res.status, body });
-    return false;
-  }
-  if (!fitsInCaption) {
-    // Follow up with the full text as a separate message
+  if (ok && !fitsInCaption) {
     await postRaw(fullText);
   }
-  return true;
+  return ok;
 }
 
 export async function sendStartup({ symbol, timeframe }) {
@@ -248,6 +232,19 @@ export async function send(r, ctx) {
   }
   if (intent?.hint) lines.push(`_${tgEscape(intent.hint)}_`);
   lines.push('');
+
+  // ---- Trade management hints ----
+  // Universal rule: move SL → breakeven at +1R, scale out at TP1, trail to runner
+  const bePrice = ep.t1 != null
+    ? (r.direction === 'LONG' ? ep.entry + risk : ep.entry - risk)
+    : null;
+  if (bePrice != null) {
+    lines.push('💡 *Trade management*');
+    lines.push(`• At +1R ($${fmt(bePrice)}): move SL → breakeven ($${fmt(ep.entry)})`);
+    if (ep.t1 != null) lines.push(`• At TP1 ($${fmt(ep.t1)}): close 50%, let rest run`);
+    if (ep.t2 != null && ep.t2 !== ep.t1) lines.push(`• At TP2 ($${fmt(ep.t2)}): close remainder OR trail to runner`);
+    lines.push('');
+  }
 
   lines.push(`⚡ Confidence: *${conf}%*   ⏰ TF: \`${ctx.timeframe || '?'}m\``);
   if (r.summary) {

@@ -18,3 +18,4 @@ node_modules/
 src/state/dedup.json
 src/state/drawings.json
 src/state/session.json
+/src/state/pending-tg.jsonl
