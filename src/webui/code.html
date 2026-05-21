@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Octave · Code</title>
+<link rel="icon" href="/api/icon" type="image/png">
+<style>
+  :root {
+    --bg: #0b0e14; --bg-elev: #131720; --bg-card: #1a1f2c;
+    --border: #232a3a; --text: #e7eaf3; --text-dim: #8b94aa;
+    --text-faint: #5b667d; --accent: #ffd23f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    height: 100vh; overflow: hidden;
+  }
+  header {
+    display:flex; align-items:center; gap:14px; padding:12px 20px;
+    border-bottom: 1px solid var(--border); background: var(--bg-elev);
+  }
+  header img { width: 36px; height: 36px; border-radius: 8px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .back { color: var(--accent); text-decoration: none; font-size: 13px; margin-left: auto; }
+  header .repo { color: var(--text-faint); font-size: 12px; }
+  main { display: flex; height: calc(100vh - 64px); }
+  aside {
+    width: 320px; min-width: 320px;
+    background: var(--bg-elev); border-right: 1px solid var(--border);
+    overflow: auto; padding: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  aside .dir { color: var(--accent); cursor: pointer; padding: 3px 6px; border-radius: 4px; }
+  aside .dir:hover { background: var(--bg-card); }
+  aside .file { color: var(--text-dim); cursor: pointer; padding: 3px 6px; border-radius: 4px; display: block; }
+  aside .file:hover { background: var(--bg-card); color: var(--text); }
+  aside .file.active { background: var(--bg-card); color: var(--accent); }
+  aside .nested { margin-left: 14px; }
+  aside .dir-row::before { content: '▸ '; color: var(--text-faint); }
+  aside .dir-row.open::before { content: '▾ '; }
+  section.viewer { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .viewer-toolbar {
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-card); font-size: 13px;
+  }
+  .viewer-toolbar .path { color: var(--text); font-family: ui-monospace, monospace; }
+  .viewer-toolbar .size { color: var(--text-faint); margin-left: auto; }
+  .viewer-toolbar button {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    color: var(--text); padding: 5px 10px; border-radius: 5px;
+    font-size: 12px; cursor: pointer;
+  }
+  .viewer-toolbar button:hover { border-color: var(--text-faint); }
+  pre.content {
+    flex: 1; margin: 0; padding: 18px; overflow: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.55; color: var(--text);
+    background: var(--bg); white-space: pre;
+    tab-size: 2;
+  }
+  .empty { padding: 40px; text-align: center; color: var(--text-faint); }
+  .empty h2 { color: var(--text); margin: 0 0 10px; }
+  @media (max-width: 720px) {
+    main { flex-direction: column; }
+    aside { width: 100%; min-width: 0; height: 40vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <img src="/api/icon" alt="">
+  <div>
+    <h1>Octave · Source Code</h1>
+    <div class="repo">Auto-refreshes when the VPS pulls updates · clone to make your own bot</div>
+  </div>
+  <a class="back" href="/">← Dashboard</a>
+</header>
+<main>
+  <aside id="tree">Loading…</aside>
+  <section class="viewer">
+    <div class="viewer-toolbar" id="toolbar" style="display:none">
+      <span class="path" id="path">—</span>
+      <span class="size" id="size"></span>
+      <button onclick="copyContent()">📋 Copy</button>
+    </div>
+    <pre class="content" id="content"></pre>
+    <div class="empty" id="empty">
+      <h2>Octave Source Code</h2>
+      <p>Pick a file on the left to view.</p>
+      <p style="font-size:12px;margin-top:30px;">To clone this bot for yourself:<br>
+        <code style="background:var(--bg-elev);padding:6px 10px;border-radius:4px;display:inline-block;margin-top:8px;">git clone <span id="repo-url">https://github.com/octavebot/octave</span></code></p>
+    </div>
+  </section>
+</main>
+<script>
+let activeFile = null;
+
+async function loadTree() {
+  try {
+    const r = await fetch('/api/code/tree');
+    const data = await r.json();
+    document.getElementById('repo-url').textContent = data.repoUrl;
+    renderTree(data.tree, document.getElementById('tree'));
+  } catch (e) {
+    document.getElementById('tree').textContent = 'Failed to load tree';
+  }
+}
+
+function renderTree(nodes, container, depth = 0) {
+  container.innerHTML = '';
+  for (const n of nodes) {
+    if (n.type === 'dir') {
+      const wrap = document.createElement('div');
+      const row = document.createElement('div');
+      row.className = 'dir dir-row';
+      row.textContent = n.name + '/';
+      const inner = document.createElement('div');
+      inner.className = 'nested';
+      inner.style.display = depth < 1 ? 'block' : 'none';
+      if (depth < 1) row.classList.add('open');
+      row.onclick = (e) => {
+        e.stopPropagation();
+        const isOpen = inner.style.display !== 'none';
+        inner.style.display = isOpen ? 'none' : 'block';
+        row.classList.toggle('open', !isOpen);
+      };
+      wrap.appendChild(row);
+      renderTree(n.children, inner, depth + 1);
+      wrap.appendChild(inner);
+      container.appendChild(wrap);
+    } else {
+      const a = document.createElement('span');
+      a.className = 'file';
+      a.textContent = n.name;
+      a.dataset.path = n.path;
+      a.dataset.size = n.size;
+      a.onclick = () => openFile(n.path, a);
+      container.appendChild(a);
+    }
+  }
+}
+
+async function openFile(path, el) {
+  if (activeFile) activeFile.classList.remove('active');
+  if (el) { el.classList.add('active'); activeFile = el; }
+  try {
+    const r = await fetch('/api/code/file?path=' + encodeURIComponent(path));
+    if (!r.ok) { document.getElementById('content').textContent = '(file not readable)'; return; }
+    const data = await r.json();
+    document.getElementById('empty').style.display = 'none';
+    document.getElementById('toolbar').style.display = 'flex';
+    document.getElementById('path').textContent = data.path;
+    document.getElementById('size').textContent = (el?.dataset.size || '') + ' bytes';
+    document.getElementById('content').textContent = data.content;
+  } catch (e) {
+    document.getElementById('content').textContent = 'Error: ' + e.message;
+  }
+}
+
+function copyContent() {
+  const text = document.getElementById('content').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('.viewer-toolbar button');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+
+// Reload tree every 60s — picks up new files when the VPS pulls
+loadTree();
+setInterval(loadTree, 60000);
+</script>
+</body>
+</html>

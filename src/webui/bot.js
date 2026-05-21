@@ -138,20 +138,13 @@ function loadConfig() {
 }
 
 async function saveConfigAndPush(updater) {
+  // VPS is authoritative. We just write the file atomically. No git push —
+  // that was racing with the webui's POST /api/config writes, causing
+  // strategies (notably AMN, TORI, WARRIOR) to flip back to disabled.
   const cur = loadConfig() || {};
   const next = updater(JSON.parse(JSON.stringify(cur)));
   next.lastUpdated = Date.now();
   writeJsonAtomic(CONFIG_FILE, next);
-  // Background push to GitHub so cloud picks up the change
-  spawn('/bin/sh', ['-c', `
-    cd "${REPO_DIR}" && \
-    git add src/state/runtime-config.json && \
-    git diff --cached --quiet || (
-      git commit -m "octave: bot-update $(date -u +%FT%TZ)" >/dev/null 2>&1 && \
-      git pull --rebase --autostash --quiet 2>/dev/null && \
-      git push --quiet 2>/dev/null
-    )
-  `], { detached: true, stdio: 'ignore' }).unref();
   return next;
 }
 
@@ -1229,7 +1222,6 @@ const COMMANDS = {
   '/shutdown': cmdShutdown,
   '/backtest': cmdBacktest,
   '/health': cmdHealth,
-  '/diagnose': cmdCloudDiagnose,
   '/dashboard': cmdDashboard,
   '/web': cmdDashboard,
   '/bias': cmdBias,

@@ -175,39 +175,21 @@ async function gatherState() {
 }
 
 async function saveConfig(updates) {
+  // VPS is authoritative. We just write the file atomically. No git push —
+  // that was racing with the bot's saveConfigAndPush writes, causing user
+  // toggles (notably AMN/TORI/WARRIOR) to flip back to disabled.
   const current = loadConfig();
   const next = { ...current };
-  if (typeof updates.mode === 'string' && ['auto', 'cloud', 'local'].includes(updates.mode)) {
-    next.mode = updates.mode;
-  }
   if (updates.strategies && typeof updates.strategies === 'object') {
     next.strategies = { ...current.strategies };
     for (const [k, v] of Object.entries(updates.strategies)) {
       if (k in DEFAULTS.strategies) next.strategies[k] = !!v;
     }
   }
+  if (typeof updates.bypassKillzones === 'boolean') next.bypassKillzones = updates.bypassKillzones;
+  if (updates.mute && typeof updates.mute === 'object') next.mute = updates.mute;
   next.lastUpdated = Date.now();
   writeJsonAtomic(CONFIG_FILE, next);
-
-  // Background: commit + push so cloud picks up the change
-  (async () => {
-    const a = await exec('/usr/bin/git', ['add', 'src/state/runtime-config.json'], { cwd: REPO_DIR });
-    if (a.code !== 0) { console.error('[webui] git add failed:', a.err); return; }
-    const c = await exec('/usr/bin/git', ['commit', '-m', `octave: runtime-config via webui ${new Date().toISOString()}`], { cwd: REPO_DIR });
-    if (c.code !== 0 && !/nothing to commit/.test(c.out + c.err)) {
-      console.error('[webui] git commit failed:', c.err || c.out);
-      return;
-    }
-    if (/nothing to commit/.test(c.out + c.err)) {
-      console.log('[webui] no change to push');
-      return;
-    }
-    const r = await exec('/usr/bin/git', ['pull', '--rebase', '--autostash', '--quiet'], { cwd: REPO_DIR });
-    const p = await exec('/usr/bin/git', ['push', '--quiet'], { cwd: REPO_DIR });
-    if (p.code !== 0) console.error('[webui] git push failed:', p.err);
-    else console.log('[webui] pushed config update');
-  })().catch((e) => console.error('[webui] background push threw:', e.message));
-
   return next;
 }
 
@@ -341,12 +323,64 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, restarted: target });
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/launch-tv') {
-      const { spawn } = await import('node:child_process');
-      spawn('/Applications/TradingView.app/Contents/MacOS/TradingView', ['--remote-debugging-port=9222'], {
-        detached: true, stdio: 'ignore',
-      }).unref();
-      return sendJson(res, 200, { ok: true });
+    if (req.method === 'GET' && url.pathname === '/api/icon') {
+      try {
+        const iconPath = join(__dirname, 'octave-icon.png');
+        const png = readFileSync(iconPath);
+        res.statusCode = 200;
+        res.setHeader('content-type', 'image/png');
+        res.setHeader('cache-control', 'public, max-age=86400');
+        return res.end(png);
+      } catch {
+        res.statusCode = 404;
+        return res.end('no icon');
+      }
+    }
+
+    // ---- Code viewer (/code page + /api/code/tree + /api/code/file) ----
+    if (req.method === 'GET' && url.pathname === '/code') {
+      const html = readFileSync(join(__dirname, 'code.html'), 'utf8');
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.setHeader('cache-control', 'no-store');
+      return res.end(html);
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/code/tree') {
+      const { readdirSync, statSync } = await import('node:fs');
+      const SKIP = new Set(['node_modules', '.git', 'src/state', 'state']);
+      function walk(dir, prefix = '') {
+        const out = [];
+        try {
+          for (const name of readdirSync(dir).sort()) {
+            if (name.startsWith('.')) continue;
+            const full = join(dir, name);
+            const rel = prefix ? `${prefix}/${name}` : name;
+            if (SKIP.has(name) || SKIP.has(rel)) continue;
+            const stat = statSync(full);
+            if (stat.isDirectory()) {
+              out.push({ type: 'dir', name, path: rel, children: walk(full, rel) });
+            } else if (stat.isFile() && stat.size < 200 * 1024) {
+              out.push({ type: 'file', name, path: rel, size: stat.size });
+            }
+          }
+        } catch {}
+        return out;
+      }
+      const tree = walk(REPO_DIR);
+      return sendJson(res, 200, { tree, repoUrl: 'https://github.com/octavebot/octave' });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/code/file') {
+      const path = url.searchParams.get('path') || '';
+      if (path.includes('..') || path.startsWith('/')) return sendJson(res, 400, { error: 'bad path' });
+      const full = join(REPO_DIR, path);
+      try {
+        const content = readFileSync(full, 'utf8');
+        return sendJson(res, 200, { path, content });
+      } catch (err) {
+        return sendJson(res, 404, { error: err.message });
+      }
     }
 
     res.statusCode = 404;

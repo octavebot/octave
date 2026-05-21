@@ -50,6 +50,12 @@
     font-weight: 700; font-size: 28px;
     box-shadow: 0 0 20px rgba(255,210,63,0.4);
   }
+  .logo-img {
+    width: 56px; height: 56px;
+    border-radius: 12px;
+    object-fit: contain;
+    background: transparent;
+  }
   h1 {
     font-size: 28px; margin: 0; letter-spacing: -0.02em;
   }
@@ -240,44 +246,24 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">🎵</div>
+    <img class="logo-img" alt="Octave" src="/api/icon" onerror="this.style.display='none';document.getElementById('logo-fallback').style.display='grid'">
+    <div id="logo-fallback" class="logo" style="display:none">🎵</div>
     <div>
       <h1>Octave</h1>
-      <div class="subtitle">Gold trading alerts · local + cloud autonomous</div>
+      <div class="subtitle">Autonomous gold trading bot · running 24/7 on cloud VPS</div>
     </div>
   </header>
 
-  <!-- MODE -->
+  <!-- HEADLINE STATUS -->
   <div class="card">
-    <h2>Alert Source Mode</h2>
-    <div class="segmented" id="mode-seg">
-      <button data-mode="auto">Auto</button>
-      <button data-mode="cloud">Cloud only</button>
-      <button data-mode="local">Local only</button>
-    </div>
-    <div class="seg-desc" id="mode-desc">—</div>
+    <div id="headline" style="font-size:18px;font-weight:600;">Loading…</div>
+    <div id="sub-headline" style="color:var(--text-dim);font-size:13px;margin-top:6px;">—</div>
   </div>
 
-  <!-- STATUS -->
+  <!-- ACTIVITY -->
   <div class="card">
-    <h2>System Status</h2>
+    <h2>Activity</h2>
     <div class="status-grid">
-      <div class="stat">
-        <div class="label">Cloud (GitHub Actions)</div>
-        <div class="value" id="cloud-status"><span class="dot gray"></span>Loading…</div>
-      </div>
-      <div class="stat">
-        <div class="label">Local Service</div>
-        <div class="value" id="local-status"><span class="dot gray"></span>Loading…</div>
-      </div>
-      <div class="stat">
-        <div class="label">TradingView (CDP)</div>
-        <div class="value" id="tv-status"><span class="dot gray"></span>Loading…</div>
-      </div>
-      <div class="stat">
-        <div class="label">Caffeinate (no-sleep)</div>
-        <div class="value" id="caff-status"><span class="dot gray"></span>Loading…</div>
-      </div>
       <div class="stat">
         <div class="label">Current Session</div>
         <div class="value" id="session-status">—</div>
@@ -286,16 +272,23 @@
         <div class="label">Last Alert</div>
         <div class="value" id="last-alert">—</div>
       </div>
+      <div class="stat">
+        <div class="label">Gold Price (spot)</div>
+        <div class="value" id="gold-price">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">Active Setups</div>
+        <div class="value" id="active-setups">—</div>
+      </div>
     </div>
   </div>
 
   <!-- SERVICES -->
   <div class="card">
-    <h2>Services <span style="font-weight:400;font-size:11px;color:var(--text-faint);text-transform:none;">(per-service health · restart any independently)</span></h2>
+    <h2>Services</h2>
     <div id="services"></div>
     <div class="actions" style="margin-top:14px;">
-      <button class="btn" onclick="restartService('all')">🔄 Restart ALL services</button>
-      <button class="btn" onclick="launchTV()">📡 Launch TradingView</button>
+      <button class="btn" onclick="restartService('all')">🔄 Restart All</button>
     </div>
   </div>
 
@@ -309,14 +302,14 @@
   <div class="card">
     <h2>Actions</h2>
     <div class="actions">
-      <button class="btn" onclick="window.open('https://github.com/octavebot/octave/actions','_blank')">📜 GitHub Actions</button>
+      <button class="btn" onclick="window.location.href='/code'">💻 View Code</button>
       <button class="btn" onclick="openLogs()">📂 Logs</button>
       <button class="btn danger" onclick="confirmShutdown()">⏸ Shut Down All</button>
     </div>
   </div>
 
   <footer>
-    Auto-refresh every 5s · Config syncs to <a href="https://github.com/octavebot/octave" target="_blank">octavebot/octave</a> · Loopback only (127.0.0.1)
+    Cloud-only · Auto-refresh every 5s
   </footer>
 </div>
 <div class="toast" id="toast"></div>
@@ -379,49 +372,25 @@ function fmtAge(ms) {
 }
 
 function renderState(s) {
-  // Mode
-  for (const btn of document.querySelectorAll('#mode-seg button')) {
-    btn.classList.toggle('active', btn.dataset.mode === s.config.mode);
-  }
-  document.getElementById('mode-desc').textContent = MODE_DESC[s.config.mode] || '';
-
-  // Cloud
-  const cloudEl = document.getElementById('cloud-status');
-  if (s.cloud.alive) {
-    cloudEl.innerHTML = `<span class="dot green"></span>Online · ${fmtAge(s.cloud.ageMs)}`;
-  } else if (s.cloud.raw) {
-    cloudEl.innerHTML = `<span class="dot orange"></span>Stale · ${fmtAge(s.cloud.ageMs)}`;
+  // Headline: "Octave is live and watching" or muted state
+  const enabledCount = Object.values(s.config?.strategies || {}).filter(Boolean).length;
+  const muteSec = s.config?.mute?.untilMs && s.config.mute.untilMs > s.now_ms
+    ? Math.round((s.config.mute.untilMs - s.now_ms) / 1000) : 0;
+  const signalPid = s.service?.pid;
+  const headlineEl = document.getElementById('headline');
+  const subEl = document.getElementById('sub-headline');
+  if (muteSec > 0) {
+    headlineEl.innerHTML = `🔕 Muted for ${Math.round(muteSec / 60)}m`;
+  } else if (signalPid) {
+    headlineEl.innerHTML = `🟢 Octave is live and watching`;
   } else {
-    cloudEl.innerHTML = `<span class="dot red"></span>No heartbeat`;
+    headlineEl.innerHTML = `🔴 Signal engine is offline`;
   }
-
-  // Local service
-  const localEl = document.getElementById('local-status');
-  if (s.service.pid) {
-    localEl.innerHTML = `<span class="dot green"></span>PID ${s.service.pid} · ${s.service.uptime || '?'}`;
-  } else {
-    localEl.innerHTML = `<span class="dot red"></span>Stopped`;
-  }
-
-  // TV
-  const tvEl = document.getElementById('tv-status');
-  if (s.trading_view.cdp_open) {
-    tvEl.innerHTML = `<span class="dot green"></span>Open (PID ${s.trading_view.pid || '?'})`;
-  } else if (s.trading_view.pid) {
-    tvEl.innerHTML = `<span class="dot orange"></span>Running, no CDP`;
-  } else {
-    tvEl.innerHTML = `<span class="dot gray"></span>Closed`;
-  }
-
-  // Caffeinate
-  const caffEl = document.getElementById('caff-status');
-  caffEl.innerHTML = s.caffeinate.active
-    ? `<span class="dot green"></span>Active`
-    : `<span class="dot gray"></span>Off`;
+  subEl.textContent = `${enabledCount}/10 strategies enabled${s.config?.bypassKillzones ? ' · 24/7 mode ON' : ''}`;
 
   // Session
   document.getElementById('session-status').textContent =
-    (s.activity.current_session || '—').toUpperCase().replace('_', ' ');
+    (s.activity.current_session || 'closed').toUpperCase().replace('_', ' ');
 
   // Last alert
   const la = s.activity.last_alert;
@@ -432,6 +401,13 @@ function renderState(s) {
   } else {
     document.getElementById('last-alert').textContent = 'None yet';
   }
+
+  // Gold price (taken from cloud heartbeat anchor if present, else dash)
+  const px = s.cloud?.raw?.anchor?.close;
+  document.getElementById('gold-price').textContent = px ? `$${Number(px).toFixed(2)}` : '—';
+
+  // Active setups count
+  document.getElementById('active-setups').textContent = String(s.activity.tracked_setups || 0);
 
   // Strategies
   const container = document.getElementById('strategies');
@@ -448,25 +424,13 @@ function renderState(s) {
     container.dataset.rendered = '1';
   }
   for (const t of container.querySelectorAll('.toggle')) {
+    if (t.classList.contains('saving')) continue; // don't flip a toggle mid-save
     const enabled = !!s.config.strategies[t.dataset.strategy];
     t.classList.toggle('on', enabled);
   }
 }
 
 document.addEventListener('click', async (e) => {
-  // Mode segments
-  if (e.target.closest('#mode-seg button')) {
-    const btn = e.target.closest('button');
-    const mode = btn.dataset.mode;
-    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('mode-desc').textContent = MODE_DESC[mode] || '';
-    try {
-      await postConfig({ mode });
-      toast(`✓ Mode → ${mode}`);
-    } catch (e) { toast('✗ Save failed'); }
-    return;
-  }
   // Strategy toggles
   const t = e.target.closest('.toggle[data-strategy]');
   if (t) {

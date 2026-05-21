@@ -21,10 +21,10 @@
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
 import { beat as heartbeat } from './heartbeat.js';
 
-// 60s is a compromise: fresh enough for 5m+ strategies, well under Yahoo's
-// unofficial ~2000/hour rate limit (8 panes × 60/hr = 480 req/hr).
-// Lower this (e.g. to 20s) if you need fresher 1m bars and accept higher risk.
-const TTL_MS = parseInt(process.env.OCTAVE_DATA_TTL_MS || '', 10) || 60 * 1000;
+// 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
+// still under Yahoo's unofficial ~2000/hr threshold. If we ever start
+// seeing 429s, bump back to 30-60s via OCTAVE_DATA_TTL_MS env var.
+const TTL_MS = parseInt(process.env.OCTAVE_DATA_TTL_MS || '', 10) || 15 * 1000;
 
 const NEEDED_REQUESTS = [
   ['gold',   '1'],
