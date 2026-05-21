@@ -10,9 +10,13 @@
  *   - personal use OK; commercial restricted by Yahoo TOS
  */
 
-// Yahoo symbol map for our internal asset keys
+// Yahoo symbol map for our internal asset keys.
+// Per user directive 2026-05-21: the bot is benchmarked to Micro Gold
+// (COMEX:MGC1!) on TradingView. MGC tracks GC tick-for-tick (1/10th contract
+// size, same underlying) so all level math stays valid; the displayed quote
+// just matches what the user sees on their MGC chart.
 const SYMBOLS = {
-  gold: 'GC=F',     // Gold futures (COMEX continuous)
+  gold: 'MGC=F',    // Micro Gold futures (COMEX continuous) — matches TV's COMEX:MGC1!
   silver: 'SI=F',   // Silver futures (COMEX continuous)
   dxy: 'DX-Y.NYB',  // US Dollar Index (ICE Futures)
 };

@@ -1,25 +1,35 @@
 /**
- * News blackout helper.
+ * News blackout helper + ForexFactory auto-fetch.
  *
- * Reads ~/trading-alerts/data/news.json. Strategies should check
- * `isBlackedOut(now)` before firing setups.
+ * Two sources merged:
+ *   1. ~/trading-alerts/data/news.json — user-maintained (hot-reloaded).
+ *   2. ForexFactory weekly calendar (https://nfs.faireconomy.media/ff_calendar_thisweek.json)
+ *      — auto-fetched every 30 min, USD high-impact events only, mostly the
+ *      ones that move gold (NFP, CPI, PPI, FOMC, Powell, Retail Sales, etc.).
  *
- * Window per strategy docs: ±30 minutes around any 'high' impact event.
- * High-impact items for gold: NFP, CPI, PPI, FOMC, Retail Sales, Fed speakers.
- *
- * The JSON file is hot-reloaded once per minute so the user can edit it
- * without restarting the service.
+ * Strategies should call `checkBlackout()` before firing — returns true when
+ * we're within ±30 minutes of any high-impact USD event from either source.
  */
 
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const NEWS_FILE = join(__dirname, '..', '..', 'data', 'news.json');
+const FF_CACHE = join(__dirname, '..', 'state', 'news-ff-cache.json');
 
 let cache = { mtime: 0, events: [] };
+let ffCache = { fetchedAt: 0, events: [] };
+
+const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+const FF_TTL_MS = 30 * 60 * 1000; // 30 min — calendar is weekly, no need to hammer
+const HIGH_IMPACT_KEYWORDS = [
+  'nfp', 'non-farm', 'cpi', 'ppi', 'fomc', 'powell', 'retail sales',
+  'unemployment', 'jobless', 'gdp', 'fed', 'rate decision', 'core pce',
+  'ism', 'jolts', 'pce', 'consumer confidence', 'durable goods',
+];
 
 function reload() {
   if (!existsSync(NEWS_FILE)) {
@@ -36,6 +46,71 @@ function reload() {
     /* swallow; keep old cache */
   }
 }
+
+/** Load the persisted ForexFactory cache on startup, if any. */
+function loadFfCache() {
+  if (!existsSync(FF_CACHE)) return;
+  try {
+    const raw = JSON.parse(readFileSync(FF_CACHE, 'utf8'));
+    if (raw?.events) ffCache = { fetchedAt: raw.fetchedAt || 0, events: raw.events };
+  } catch {}
+}
+loadFfCache();
+
+function saveFfCache() {
+  try {
+    mkdirSync(dirname(FF_CACHE), { recursive: true });
+    writeFileSync(FF_CACHE, JSON.stringify(ffCache, null, 2));
+  } catch {}
+}
+
+/**
+ * Fetch the weekly ForexFactory calendar, filter to USD high-impact events
+ * (the ones that move gold), and merge into the in-memory cache. Cached to
+ * disk so a restart doesn't lose the calendar.
+ */
+export async function refreshForexFactory(force = false) {
+  if (!force && Date.now() - ffCache.fetchedAt < FF_TTL_MS) return ffCache.events;
+  try {
+    const res = await fetch(FF_URL, { headers: { 'User-Agent': 'OctaveBot/1.0' } });
+    if (!res.ok) return ffCache.events;
+    const data = await res.json();
+    if (!Array.isArray(data)) return ffCache.events;
+    const events = [];
+    for (const ev of data) {
+      if (!ev?.date || !ev?.title) continue;
+      const country = (ev.country || '').toUpperCase();
+      if (country !== 'USD' && country !== 'US') continue;
+      const impact = (ev.impact || '').toLowerCase();
+      const titleLc = String(ev.title).toLowerCase();
+      const keywordHit = HIGH_IMPACT_KEYWORDS.some((kw) => titleLc.includes(kw));
+      // Keep High-impact OR explicit keyword hits at any impact
+      if (impact !== 'high' && !keywordHit) continue;
+      // ForexFactory date is ISO with timezone offset, e.g. "2026-05-22T08:30:00-04:00"
+      const unix = Math.floor(new Date(ev.date).getTime() / 1000);
+      if (!Number.isFinite(unix)) continue;
+      events.push({
+        title: ev.title,
+        impact: 'high',
+        source: 'forexfactory',
+        unix,
+        date: ev.date.slice(0, 10),
+        time: ev.date.slice(11, 16),
+      });
+    }
+    ffCache = { fetchedAt: Date.now(), events };
+    saveFfCache();
+  } catch {
+    /* network failure — keep stale cache */
+  }
+  return ffCache.events;
+}
+
+// Kick off a background refresh on import so the cache populates immediately.
+// Failures are swallowed by refreshForexFactory.
+refreshForexFactory().catch(() => {});
+// And schedule periodic re-fetches.
+setInterval(() => refreshForexFactory().catch(() => {}), FF_TTL_MS).unref?.();
 
 /** Resolve a news event entry into a unix-seconds timestamp. */
 function eventTime(ev) {
@@ -62,19 +137,31 @@ function eventTime(ev) {
   return Math.floor((fakeUtc + offset) / 1000);
 }
 
+/** Combined event stream (manual JSON + ForexFactory cache). */
+function allHighImpactEvents() {
+  reload();
+  const out = [];
+  for (const ev of cache.events) {
+    if (ev.impact !== 'high') continue;
+    const t = eventTime(ev);
+    if (!t) continue;
+    out.push({ ...ev, unix: t, source: ev.source || 'manual' });
+  }
+  for (const ev of ffCache.events) {
+    if (Number.isFinite(ev.unix)) out.push(ev);
+  }
+  return out;
+}
+
 /**
  * Is the current moment within ±windowMinutes of any high-impact event?
  * @returns {{ blocked: boolean, event: object|null, minutesAway: number|null }}
  */
 export function checkBlackout(nowUnix = Date.now() / 1000, windowMinutes = 30) {
-  reload();
   let nearest = null;
   let nearestMin = Infinity;
-  for (const ev of cache.events) {
-    if (ev.impact !== 'high') continue;
-    const t = eventTime(ev);
-    if (!t) continue;
-    const diffMin = Math.abs(t - nowUnix) / 60;
+  for (const ev of allHighImpactEvents()) {
+    const diffMin = Math.abs(ev.unix - nowUnix) / 60;
     if (diffMin < nearestMin) {
       nearestMin = diffMin;
       nearest = ev;
@@ -90,11 +177,16 @@ export function checkBlackout(nowUnix = Date.now() / 1000, windowMinutes = 30) {
 
 /** Return all upcoming high-impact events in the next `hoursAhead` hours. */
 export function upcomingEvents(nowUnix = Date.now() / 1000, hoursAhead = 24) {
-  reload();
   const cutoff = nowUnix + hoursAhead * 3600;
-  return cache.events
-    .map((ev) => ({ ev, t: eventTime(ev) }))
-    .filter(({ t }) => t != null && t >= nowUnix && t <= cutoff)
-    .sort((a, b) => a.t - b.t)
-    .map(({ ev, t }) => ({ ...ev, unix: t }));
+  return allHighImpactEvents()
+    .filter((ev) => ev.unix >= nowUnix && ev.unix <= cutoff)
+    .sort((a, b) => a.unix - b.unix);
+}
+
+/** Next single upcoming high-impact event (or null), with minutesAway. */
+export function nextEvent(nowUnix = Date.now() / 1000) {
+  const up = upcomingEvents(nowUnix, 7 * 24);
+  if (up.length === 0) return null;
+  const ev = up[0];
+  return { ...ev, minutesAway: Math.round((ev.unix - nowUnix) / 60) };
 }

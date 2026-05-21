@@ -5,6 +5,7 @@ import * as alerter from './alerter.js';
 import * as dedup from './dedup.js';
 import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
+import * as followUp from './lib/follow_up.js';
 import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
@@ -114,6 +115,23 @@ async function tick() {
         await drawings.syncDrawings(r);
       } catch (err) {
         log.warn('drawings sync threw', { err: err.message });
+      }
+    }
+  }
+
+  // === Follow-up tracker — fire milestone Telegrams (BE/TP1/TP2/SL/expiry) ===
+  // Use the freshest price we have from this tick (any result has lastClose).
+  // Skipped if every result was suppressed/muted — same Telegram gate applies.
+  const latestPrice = results[0]?.lastClose;
+  if (latestPrice != null) {
+    let milestones = [];
+    try { milestones = followUp.step(latestPrice); }
+    catch (err) { log.warn('follow-up step threw', { err: err.message }); }
+    for (const m of milestones) {
+      log.info('follow-up milestone', { setupId: m.setup.setupId, milestone: m.milestone, strategy: m.setup.strategy });
+      if (!suppressTelegram) {
+        try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: latestPrice }); }
+        catch (err) { log.warn('follow-up send threw', { err: err.message }); }
       }
     }
   }

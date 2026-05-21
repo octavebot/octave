@@ -3,6 +3,7 @@ import { log } from './logger.js';
 import { buildAlertChartUrl } from './lib/chart_image.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { send as sendViaQueue, startDrain } from './lib/telegram_queue.js';
+import { register as registerFollowUp } from './lib/follow_up.js';
 startDrain(); // re-attempt any queued sends on startup
 
 const API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
@@ -30,10 +31,50 @@ const STRATEGY_NUM = {
   AMN: '#8',
   TORI: '#9',
   WARRIOR: '#10',
+  // ChatGPT pack
+  'CGT-EMA': '#C1',
+  'CGT-HTFSD': '#C2',
+  'CGT-LONDON': '#C3',
+  'CGT-NYREV': '#C4',
+  'CGT-VWAP': '#C5',
+  // Gemini pack
+  'GEM-ASIA': '#G1',
+  'GEM-EMA': '#G2',
+  'GEM-FIB': '#G3',
+  'GEM-SMC': '#G4',
+  'GEM-VWAP': '#G5',
+};
+
+// Pretty name used in the alert header — what the user actually wants to see.
+const STRATEGY_DISPLAY = {
+  USLS: 'USLS · Session Sweep',
+  'ICT-SMC': 'ICT/SMC · HTF Judas',
+  'ALGO-SMC': 'Algo SMC · 71% Fib',
+  ADAPTIVE: 'Adaptive Matrix',
+  ICT: 'ICT Killzone',
+  SMT: 'Gold/Silver SMT',
+  TRINITY: 'Trinity Model',
+  AMN: 'AMN Dual-Model',
+  TORI: 'TORI · 4H Trendline',
+  WARRIOR: 'Warrior Momentum',
+  'CGT-EMA': 'EMA Trend Continuation',
+  'CGT-HTFSD': 'HTF Supply & Demand Sniper',
+  'CGT-LONDON': 'London Breakout Momentum',
+  'CGT-NYREV': 'NY Reversal Trap',
+  'CGT-VWAP': 'VWAP Mean Reversion',
+  'GEM-ASIA': 'Asian Range Breakout',
+  'GEM-EMA': 'Golden River EMA',
+  'GEM-FIB': 'Golden Fibonacci Pullback',
+  'GEM-SMC': 'Institutional Order Blocks',
+  'GEM-VWAP': 'VWAP Rubber Band',
 };
 
 function strategyNum(name) {
   return STRATEGY_NUM[name] || `(${name})`;
+}
+
+function strategyDisplay(name) {
+  return STRATEGY_DISPLAY[name] || name;
 }
 
 function tgEscape(s) {
@@ -90,19 +131,29 @@ async function postPhoto(photoUrl, caption) {
   return ok;
 }
 
-// Strategy nicknames keyed by config field name. Source of truth for both
-// the running strategy list AND the startup banner.
+// Strategy nicknames keyed by config field name. Source of truth for the
+// startup banner; mirrors STRATEGY_DISPLAY but trimmed for compactness.
 const STRATEGY_INFO = [
-  { key: 'USLS',     num: 1,  short: 'USLS' },
-  { key: 'ICT-SMC',  num: 2,  short: 'ICT/SMC' },
-  { key: 'ALGO-SMC', num: 3,  short: 'ALGO/SMC' },
-  { key: 'ADAPTIVE', num: 4,  short: 'Adaptive' },
-  { key: 'ICT',      num: 5,  short: 'ICT' },
-  { key: 'SMT',      num: 6,  short: 'SMT' },
-  { key: 'TRINITY',  num: 7,  short: 'Trinity' },
-  { key: 'AMN',      num: 8,  short: 'AMN' },
-  { key: 'TORI',     num: 9,  short: 'TORI' },
-  { key: 'WARRIOR',  num: 10, short: 'Warrior' },
+  { key: 'USLS',       short: 'USLS' },
+  { key: 'ICT-SMC',    short: 'ICT/SMC' },
+  { key: 'ALGO-SMC',   short: 'ALGO/SMC' },
+  { key: 'ADAPTIVE',   short: 'Adaptive' },
+  { key: 'ICT',        short: 'ICT' },
+  { key: 'SMT',        short: 'SMT' },
+  { key: 'TRINITY',    short: 'Trinity' },
+  { key: 'AMN',        short: 'AMN' },
+  { key: 'TORI',       short: 'TORI' },
+  { key: 'WARRIOR',    short: 'Warrior' },
+  { key: 'CGT-EMA',    short: 'CGT·EMA' },
+  { key: 'CGT-HTFSD',  short: 'CGT·HTF' },
+  { key: 'CGT-LONDON', short: 'CGT·London' },
+  { key: 'CGT-NYREV',  short: 'CGT·NYRev' },
+  { key: 'CGT-VWAP',   short: 'CGT·VWAP' },
+  { key: 'GEM-ASIA',   short: 'GEM·Asia' },
+  { key: 'GEM-EMA',    short: 'GEM·EMA' },
+  { key: 'GEM-FIB',    short: 'GEM·Fib' },
+  { key: 'GEM-SMC',    short: 'GEM·SMC' },
+  { key: 'GEM-VWAP',   short: 'GEM·VWAP' },
 ];
 
 export async function sendStartup({ symbol, timeframe }) {
@@ -117,10 +168,10 @@ export async function sendStartup({ symbol, timeframe }) {
 
   const activeLine = enabledStrategies.length === 0
     ? '_(none enabled)_'
-    : enabledStrategies.map((s) => `#${s.num} ${s.short}`).join(' · ');
+    : enabledStrategies.map((s) => `${strategyNum(s.key)} ${s.short}`).join(' · ');
   const inactiveLine = disabledStrategies.length === 0
     ? '_(all enabled)_'
-    : disabledStrategies.map((s) => `#${s.num}`).join(' ');
+    : disabledStrategies.map((s) => strategyNum(s.key)).join(' ');
 
   const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
     ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
@@ -129,8 +180,8 @@ export async function sendStartup({ symbol, timeframe }) {
 
   const text = [
     BAR,
-    `✅ *OCTAVE ONLINE*`,
-    `📊 Active (${enabledStrategies.length}/10): ${activeLine}`,
+    `✅ *OCTAVE ONLINE*  ·  MGC1!`,
+    `📊 Active (${enabledStrategies.length}/${STRATEGY_INFO.length}): ${activeLine}`,
     `⚫ Inactive: ${inactiveLine}`,
     muteLine,
     bypassLine,
@@ -146,6 +197,68 @@ export async function sendStartup({ symbol, timeframe }) {
 
 export async function sendDown(reason) {
   return postRaw(`${BAR}\n⚠️ *OCTAVE STOPPING*\n${tgEscape(reason)}\n${BAR}`);
+}
+
+/**
+ * Follow-up milestone message — fired by loop.js when the follow-up tracker
+ * detects price reaching BE / TP1 / TP2 / Runner / SL / expiry on an active
+ * setup. Short and focused: tells the user what just happened and what to do.
+ */
+export async function sendFollowUp({ setup, milestone, currentPrice }) {
+  const num = strategyNum(setup.strategy);
+  const display = strategyDisplay(setup.strategy);
+  const dirWord = setup.direction === 'LONG' ? 'LONG' : 'SHORT';
+  const fmt = (v) => (v != null && Number.isFinite(+v)) ? Number(v).toFixed(2) : '—';
+
+  let head, body, action;
+  switch (milestone) {
+    case 'be':
+      head = '🟡 *MOVE TO BREAKEVEN*';
+      body = `+1R reached on ${dirWord} setup. Drag SL to entry now — trade is risk-free from here.`;
+      action = `New SL: \`$${fmt(setup.entry)}\``;
+      break;
+    case 'tp1':
+      head = '🎯 *TP1 HIT — TAKE PARTIAL*';
+      body = `Close 50%, leave runner to TP2. SL should already be at BE (or trail it tighter).`;
+      action = `TP1 was \`$${fmt(setup.t1)}\``;
+      break;
+    case 'tp2':
+      head = '🏆 *TP2 HIT — FULL TARGET*';
+      body = `Trade completed at full target.${setup.runner != null && setup.runner !== setup.t2 ? ' Optional: trail remainder to runner.' : ''}`;
+      action = `TP2 was \`$${fmt(setup.t2)}\``;
+      break;
+    case 'runner':
+      head = '🚀 *RUNNER HIT*';
+      body = `Trade extended past TP2 to the runner target. Close it out — banner trade.`;
+      action = `Runner was \`$${fmt(setup.runner)}\``;
+      break;
+    case 'sl':
+      head = '🛑 *STOP LOSS HIT*';
+      body = `Setup invalidated, trade closed. Risk was managed per plan.`;
+      action = `SL was \`$${fmt(setup.stop)}\``;
+      break;
+    case 'expired':
+      head = '⏳ *SETUP EXPIRED*';
+      body = `24h elapsed without TP1 or SL hit. Close any remaining position manually.`;
+      action = '';
+      break;
+    default:
+      return;
+  }
+
+  const text = [
+    BAR,
+    head,
+    `${display}  ·  ${num}  ·  ${dirWord}`,
+    BAR,
+    '',
+    body,
+    action,
+    '',
+    currentPrice != null ? `📍 Now: *$${fmt(currentPrice)}*` : '',
+    BAR,
+  ].filter(Boolean).join('\n');
+  return postRaw(text);
 }
 
 /**
@@ -215,13 +328,11 @@ function entryIntent(direction, entry, currentPrice, risk) {
 }
 
 export async function send(r, ctx) {
-  // TRIGGERED-only format per user directive. Non-triggered (forming /
-  // near_trigger / invalidated) shouldn't reach here because loop.js filters,
-  // but if one slips through we send a minimal one-liner instead of crashing.
   if (r.status !== 'triggered' || !r.entryPlan) {
+    const g = STATUS_GLYPH[r.status] || { head: '🔔', verb: r.status };
     return postRaw([
       BAR,
-      `${STATUS_EMOJI[r.status] || '🔔'} *${STATUS_LABEL[r.status] || r.status}*`,
+      `${g.head} *${g.verb.toUpperCase()}*`,
       tgEscape(r.setupName || ''),
       BAR,
     ].join('\n'));
@@ -229,6 +340,8 @@ export async function send(r, ctx) {
 
   const ep = r.entryPlan;
   const num = strategyNum(r.strategy);
+  const display = strategyDisplay(r.strategy);
+  const dirEmoji = r.direction === 'LONG' ? '🟢' : '🔴';
   const dirWord = r.direction === 'LONG' ? 'LONG' : 'SHORT';
   const conf = Math.round((r.confidence || 0) * 100);
   const risk = ep.risk ?? Math.abs(ep.entry - ep.stop);
@@ -236,57 +349,57 @@ export async function send(r, ctx) {
   const fmt = (v) => (v != null && Number.isFinite(+v)) ? Number(v).toFixed(2) : '—';
   const t1r = ep.t1 != null ? Math.abs(ep.t1 - ep.entry) / risk : null;
   const t2r = ep.t2 != null ? Math.abs(ep.t2 - ep.entry) / risk : null;
+  const bePrice = r.direction === 'LONG' ? ep.entry + risk : ep.entry - risk;
 
+  // Register for follow-up so future ticks ping BE/TP1/TP2/SL milestones.
+  try { registerFollowUp(r); }
+  catch (err) { log.warn('registerFollowUp threw', { err: err.message }); }
+
+  // === Visual format per user directive 2026-05-21 ===
+  // Strategy name leads (big, bold). Number badge as subtitle. One clean
+  // price block; trade-management block clearly separated. No mode/local cruft.
   const lines = [];
   lines.push(BAR);
-  lines.push(`🚀 *GOLD ${dirWord}*  ·  ${num}`);
+  lines.push(`${dirEmoji} *${tgEscape(display.toUpperCase())}*`);
+  lines.push(`   _Strategy ${num}_   ·   ${dirWord}   ·   MGC1!`);
   if (intent) lines.push(`*${intent.label}*`);
   lines.push(BAR);
   lines.push('');
 
-  // Monospace price block — tappable & copy-friendly on mobile
+  // Price block (monospace, copy-friendly)
   lines.push('```');
-  lines.push(`Entry  $${fmt(ep.entry)}`);
-  lines.push(`SL     $${fmt(ep.stop)}     -$${fmt(risk)} risk`);
-  if (ep.t1 != null) lines.push(`TP1    $${fmt(ep.t1)}     +${t1r != null ? t1r.toFixed(1) : '?'}R`);
-  if (ep.t2 != null) lines.push(`TP2    $${fmt(ep.t2)}     +${t2r != null ? t2r.toFixed(1) : '?'}R`);
+  lines.push(`Entry   $${fmt(ep.entry)}`);
+  lines.push(`Stop    $${fmt(ep.stop)}    risk -$${fmt(risk)}`);
+  if (ep.t1 != null) lines.push(`TP1     $${fmt(ep.t1)}    +${t1r != null ? t1r.toFixed(1) : '?'}R`);
+  if (ep.t2 != null) lines.push(`TP2     $${fmt(ep.t2)}    +${t2r != null ? t2r.toFixed(1) : '?'}R`);
   if (ep.runner != null && ep.runner !== ep.t2) {
     const rr = Math.abs(ep.runner - ep.entry) / risk;
-    lines.push(`Runner $${fmt(ep.runner)}     +${rr.toFixed(1)}R`);
+    lines.push(`Runner  $${fmt(ep.runner)}    +${rr.toFixed(1)}R`);
   }
   lines.push('```');
   lines.push('');
 
-  // Live context
+  // Current price context
   if (ctx.lastClose != null && ep.entry != null) {
     const diff = ctx.lastClose - ep.entry;
     const sign = diff >= 0 ? '+' : '';
-    lines.push(`📍 Current: *$${fmt(ctx.lastClose)}*  (${sign}${diff.toFixed(2)} from entry)`);
+    lines.push(`📍 Now: *$${fmt(ctx.lastClose)}*  _(${sign}${diff.toFixed(2)} from entry)_`);
   } else if (ctx.lastClose != null) {
-    lines.push(`📍 Current: *$${fmt(ctx.lastClose)}*`);
+    lines.push(`📍 Now: *$${fmt(ctx.lastClose)}*`);
   }
   if (intent?.hint) lines.push(`_${tgEscape(intent.hint)}_`);
   lines.push('');
 
-  // ---- Trade management hints ----
-  // Universal rule: move SL → breakeven at +1R, scale out at TP1, trail to runner
-  const bePrice = ep.t1 != null
-    ? (r.direction === 'LONG' ? ep.entry + risk : ep.entry - risk)
-    : null;
-  if (bePrice != null) {
-    lines.push('💡 *Trade management*');
-    lines.push(`• At +1R ($${fmt(bePrice)}): move SL → breakeven ($${fmt(ep.entry)})`);
-    if (ep.t1 != null) lines.push(`• At TP1 ($${fmt(ep.t1)}): close 50%, let rest run`);
-    if (ep.t2 != null && ep.t2 !== ep.t1) lines.push(`• At TP2 ($${fmt(ep.t2)}): close remainder OR trail to runner`);
-    lines.push('');
-  }
-
-  lines.push(`⚡ Confidence: *${conf}%*   ⏰ TF: \`${ctx.timeframe || '?'}m\``);
-  if (r.summary) {
-    lines.push('');
-    lines.push(`ℹ️ ${tgEscape(r.summary)}`);
-  }
+  // Trade management — the "what to do next" line
+  lines.push('🛡 *Risk plan*');
+  lines.push(`  • At +1R \`$${fmt(bePrice)}\` → move SL to breakeven`);
+  if (ep.t1 != null) lines.push(`  • At TP1 \`$${fmt(ep.t1)}\` → close 50%`);
+  if (ep.t2 != null && ep.t2 !== ep.t1) lines.push(`  • At TP2 \`$${fmt(ep.t2)}\` → close remainder or trail`);
+  lines.push(`  _You'll be auto-pinged when each level prints._`);
   lines.push('');
+
+  lines.push(`⚡ ${conf}% conf   ·   ⏰ ${ctx.timeframe || '?'}m`);
+  if (r.summary) lines.push(`ℹ️ ${tgEscape(r.summary)}`);
   lines.push(BAR);
 
   const text = lines.join('\n');

@@ -19,3 +19,5 @@ src/state/dedup.json
 src/state/drawings.json
 src/state/session.json
 /src/state/pending-tg.jsonl
+src/state/follow-ups.json
+src/state/news-ff-cache.json

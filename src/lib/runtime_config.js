@@ -43,6 +43,18 @@ const DEFAULTS = Object.freeze({
     AMN: true,
     TORI: true,
     WARRIOR: true,
+    // ChatGPT pack (5 strategies)
+    'CGT-EMA': true,
+    'CGT-HTFSD': true,
+    'CGT-LONDON': true,
+    'CGT-NYREV': true,
+    'CGT-VWAP': true,
+    // Gemini pack (5 strategies)
+    'GEM-ASIA': true,
+    'GEM-EMA': true,
+    'GEM-FIB': true,
+    'GEM-SMC': true,
+    'GEM-VWAP': true,
   },
   mute: { untilMs: 0, reason: null },
   alertChartImages: true,
@@ -50,18 +62,32 @@ const DEFAULTS = Object.freeze({
   lastUpdated: 0,
 });
 
-// All strategy keys this system knows about (in numeric order)
+// All strategy keys this system knows about (in display order). The first
+// 10 are the original numbered set; the ChatGPT and Gemini packs each add
+// 5 named strategies organized by folder.
 export const ALL_STRATEGIES = [
-  { key: 'USLS', num: '#1', label: 'Strategy #1 (USLS)' },
-  { key: 'ICT-SMC', num: '#2', label: 'Strategy #2 (ICT/SMC)' },
-  { key: 'ALGO-SMC', num: '#3', label: 'Strategy #3 (ALGO/SMC)' },
-  { key: 'ADAPTIVE', num: '#4', label: 'Strategy #4 (Adaptive Matrix)' },
-  { key: 'ICT', num: '#5', label: 'Strategy #5 (ICT)' },
-  { key: 'SMT', num: '#6', label: 'Strategy #6 (SMT)' },
-  { key: 'TRINITY', num: '#7', label: 'Strategy #7 (Trinity)' },
-  { key: 'AMN', num: '#8', label: 'Strategy #8 (AMN — Dual-Model)' },
-  { key: 'TORI', num: '#9', label: 'Strategy #9 (TORI — 4H Trendline)' },
-  { key: 'WARRIOR', num: '#10', label: 'Strategy #10 (Warrior Momentum)' },
+  { key: 'USLS', num: '#1', label: 'Strategy #1 (USLS)', group: 'Core' },
+  { key: 'ICT-SMC', num: '#2', label: 'Strategy #2 (ICT/SMC)', group: 'Core' },
+  { key: 'ALGO-SMC', num: '#3', label: 'Strategy #3 (ALGO/SMC)', group: 'Core' },
+  { key: 'ADAPTIVE', num: '#4', label: 'Strategy #4 (Adaptive Matrix)', group: 'Core' },
+  { key: 'ICT', num: '#5', label: 'Strategy #5 (ICT)', group: 'Core' },
+  { key: 'SMT', num: '#6', label: 'Strategy #6 (SMT)', group: 'Core' },
+  { key: 'TRINITY', num: '#7', label: 'Strategy #7 (Trinity)', group: 'Core' },
+  { key: 'AMN', num: '#8', label: 'Strategy #8 (AMN — Dual-Model)', group: 'Core' },
+  { key: 'TORI', num: '#9', label: 'Strategy #9 (TORI — 4H Trendline)', group: 'Core' },
+  { key: 'WARRIOR', num: '#10', label: 'Strategy #10 (Warrior Momentum)', group: 'Core' },
+  // ChatGPT Strategies folder
+  { key: 'CGT-EMA',    num: '#C1', label: 'EMA Trend Continuation', group: 'Chatgpt Strategies' },
+  { key: 'CGT-HTFSD',  num: '#C2', label: 'HTF Supply & Demand Sniper', group: 'Chatgpt Strategies' },
+  { key: 'CGT-LONDON', num: '#C3', label: 'London Breakout Momentum', group: 'Chatgpt Strategies' },
+  { key: 'CGT-NYREV',  num: '#C4', label: 'NY Reversal Trap', group: 'Chatgpt Strategies' },
+  { key: 'CGT-VWAP',   num: '#C5', label: 'VWAP Mean Reversion', group: 'Chatgpt Strategies' },
+  // Gemini Strategies folder
+  { key: 'GEM-ASIA',   num: '#G1', label: 'Asian Range Breakout', group: 'Gemini Strategies' },
+  { key: 'GEM-EMA',    num: '#G2', label: 'Golden River EMA', group: 'Gemini Strategies' },
+  { key: 'GEM-FIB',    num: '#G3', label: 'Golden Fibonacci Pullback', group: 'Gemini Strategies' },
+  { key: 'GEM-SMC',    num: '#G4', label: 'Institutional Order Blocks', group: 'Gemini Strategies' },
+  { key: 'GEM-VWAP',   num: '#G5', label: 'VWAP Rubber Band', group: 'Gemini Strategies' },
 ];
 
 let cache = null;

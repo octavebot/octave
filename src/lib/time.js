@@ -164,3 +164,68 @@ export function fmtNY(unixSeconds) {
   const p = nyParts(unixSeconds);
   return `${p.weekday} ${p.dateKey} ${String(p.h).padStart(2, '0')}:${String(p.min).padStart(2, '0')} EST`;
 }
+
+/**
+ * Get NY date parts for a unix-seconds timestamp at a specific NY wall hour.
+ * Returns the unix-seconds of that NY wall time on the same calendar day.
+ * Used by strategies that anchor to GMT or NY session boundaries.
+ */
+export function nyDayStartUnix(unixSeconds) {
+  const p = nyParts(unixSeconds);
+  return nyWallToUnix(p.y, p.m, p.d, 0, 0);
+}
+
+/**
+ * GMT wall-clock components for a unix-seconds timestamp.
+ * Used by strategies that define their windows in GMT (e.g. Asian Range
+ * Breakout uses 00:00-06:00 GMT, London open 07:00 GMT).
+ */
+export function gmtParts(unixSeconds) {
+  const d = new Date(unixSeconds * 1000);
+  return {
+    y: d.getUTCFullYear(),
+    m: d.getUTCMonth() + 1,
+    d: d.getUTCDate(),
+    h: d.getUTCHours(),
+    min: d.getUTCMinutes(),
+    minutesOfDay: d.getUTCHours() * 60 + d.getUTCMinutes(),
+    dateKey: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`,
+  };
+}
+
+/**
+ * Build a GMT wall-clock unix timestamp from components.
+ */
+export function gmtWallToUnix(y, m, d, hour, minute) {
+  return Math.floor(Date.UTC(y, m - 1, d, hour, minute, 0) / 1000);
+}
+
+/**
+ * Asian session window in GMT (00:00-06:00 GMT). Returns the start/end
+ * unix-seconds for the asian session of the current calendar day in GMT.
+ */
+export function gmtAsianWindow(unixSeconds) {
+  const p = gmtParts(unixSeconds);
+  const start = gmtWallToUnix(p.y, p.m, p.d, 0, 0);
+  const end = gmtWallToUnix(p.y, p.m, p.d, 6, 0);
+  return { start, end };
+}
+
+/**
+ * London session window in GMT (07:00-12:00 GMT). Strategy 1 (Gemini) caps
+ * London at 11:00 LONDON time (which == 11:00 GMT in winter / 10:00 GMT in DST);
+ * Strategy 1 (ChatGPT) uses 8:00-11:00 London time. We keep a generous window
+ * 07:00-12:00 GMT to cover both; each strategy can further gate inside that.
+ */
+export function gmtLondonWindow(unixSeconds) {
+  const p = gmtParts(unixSeconds);
+  const start = gmtWallToUnix(p.y, p.m, p.d, 7, 0);
+  const end = gmtWallToUnix(p.y, p.m, p.d, 12, 0);
+  return { start, end };
+}
+
+/** NY session start in NY-local time (09:30 EST, i.e. 13:30/14:30 GMT). */
+export function nyOpenUnix(unixSeconds) {
+  const p = nyParts(unixSeconds);
+  return nyWallToUnix(p.y, p.m, p.d, 9, 30);
+}

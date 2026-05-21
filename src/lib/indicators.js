@@ -188,6 +188,37 @@ export function rsiDivergence(bars, swingLookback = 3, rsiPeriod = 14) {
 }
 
 /**
+ * Bollinger Bands (period N, stddev mult K). Returns latest {mid, upper, lower}
+ * or null if not enough bars.
+ */
+export function bollinger(bars, period = 20, mult = 2) {
+  if (!bars || bars.length < period) return null;
+  const closes = bars.slice(-period).map((b) => b.close);
+  const mid = closes.reduce((a, b) => a + b, 0) / period;
+  const variance = closes.reduce((a, c) => a + (c - mid) ** 2, 0) / period;
+  const sd = Math.sqrt(variance);
+  return { mid, upper: mid + mult * sd, lower: mid - mult * sd, sd };
+}
+
+/**
+ * Session-anchored VWAP. Resets at session boundaries — `sessionStartTime`
+ * is unix seconds of the most recent reset (e.g. NY open at 13:30 GMT).
+ * Returns the latest VWAP value, or null if no bars in window.
+ */
+export function vwap(bars, sessionStartTime) {
+  if (!bars || bars.length === 0) return null;
+  let pv = 0, vv = 0;
+  for (const b of bars) {
+    if (sessionStartTime != null && b.time < sessionStartTime) continue;
+    const v = b.volume || 0;
+    const typical = (b.high + b.low + b.close) / 3;
+    pv += typical * v;
+    vv += v;
+  }
+  return vv > 0 ? pv / vv : null;
+}
+
+/**
  * Detect a tight consolidation range over the last N bars
  * (Strategy #4 breakout playbook precondition). Returns {top, bottom, ratio}
  * where ratio = range_height / ATR(14). Tight = ratio < 2.5 over >= 8 bars.

@@ -39,6 +39,9 @@ import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
 import { fetchAllPanes, supplement as supplementWithCloudData } from './lib/cloud_data_supplement.js';
+import { checkBlackout, refreshForexFactory } from './lib/news.js';
+import { evaluateChatgptPack } from './strategies/chatgpt/index.js';
+import { evaluateGeminiPack } from './strategies/gemini/index.js';
 
 /** Build the unified context object all strategies consume. */
 async function buildCtx() {
@@ -113,6 +116,14 @@ export async function detect() {
   // Refresh runtime config each tick so Octave-toggled changes take effect immediately
   refreshConfig();
 
+  // News blackout — ±30m around any high-impact USD event blocks ALL setups.
+  // We still evaluate strategies so /bias/dashboard reflect what would have
+  // fired, but anything triggered is downgraded to invalidated with a news
+  // reason so it doesn't ping Telegram.
+  // (Trigger a periodic ForexFactory refresh — no-op when cache is fresh.)
+  refreshForexFactory().catch(() => {});
+  const blackout = checkBlackout(Date.now() / 1000, 30);
+
   const results = [];
   const STRATEGY_TABLE = [
     ['USLS',      evaluateUSLS],
@@ -135,12 +146,45 @@ export async function detect() {
     }
   }
 
-  // Attach context for the alerter
+  // ChatGPT + Gemini packs — each runs as a bundle, internally gates per-strategy
+  // via isStrategyEnabled() on its own keys (CGT-* / GEM-*).
+  try { results.push(...evaluateChatgptPack(ctx)); }
+  catch (err) { log.error('chatgpt pack threw', { err: err.message, stack: err.stack }); }
+  try { results.push(...evaluateGeminiPack(ctx)); }
+  catch (err) { log.error('gemini pack threw', { err: err.message, stack: err.stack }); }
+
+  // Attach context for the alerter. We preserve a per-strategy timeframe if set,
+  // since strategies now run on their own analysis TF (15m, 1h, 4h, 1d).
   for (const r of results) {
     r.symbol = ctx.anchorSymbol;
-    r.timeframe = ctx.anchorResolution;
+    if (!r.timeframe) r.timeframe = ctx.anchorResolution;
     r.lastClose = ctx.lastClose;
     r.barTime = ctx.barTime;
   }
-  return results;
+
+  // === 15m+ timeframe gate (per user directive 2026-05-21) ===
+  // Only setups analyzed on 15m or HIGHER may be alerted. Lower-TF setups
+  // (1m / 5m) are dropped silently so the user only sees higher-quality signals.
+  const TF_MINUTES = { '1': 1, '3': 3, '5': 5, '15': 15, '30': 30, '60': 60, '240': 240, 'D': 1440, '1D': 1440, 'W': 10080 };
+  const HIGH_TF = (tf) => (TF_MINUTES[String(tf)] || 0) >= 15;
+  const filtered = results.filter((r) => {
+    if (!HIGH_TF(r.timeframe)) {
+      log.throttled(`tf-drop-${r.strategy}`, 60_000, () =>
+        log.debug('dropping sub-15m setup', { strategy: r.strategy, tf: r.timeframe, setupId: r.setupId })
+      );
+      return false;
+    }
+    return true;
+  });
+
+  // === News blackout — neutralize triggered setups, leave others intact ===
+  if (blackout.blocked) {
+    for (const r of filtered) {
+      if (r.status === 'triggered') {
+        r.status = 'invalidated';
+        r.invalidReason = `news blackout: ${blackout.event?.title || 'high-impact event'} ±30m`;
+      }
+    }
+  }
+  return filtered;
 }

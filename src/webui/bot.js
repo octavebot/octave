@@ -46,9 +46,27 @@ const ENV_FILE_CANDIDATES = [
   process.env.HOME ? `${process.env.HOME}/.config/trading-alerts/.env` : null,
 ].filter(Boolean);
 
-const STRATEGY_KEYS = ['USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY', 'AMN', 'TORI', 'WARRIOR'];
-const STRATEGY_NUM = { USLS: 1, 'ICT-SMC': 2, 'ALGO-SMC': 3, ADAPTIVE: 4, ICT: 5, SMT: 6, TRINITY: 7, AMN: 8, TORI: 9, WARRIOR: 10 };
-const NUM_TO_KEY = Object.fromEntries(Object.entries(STRATEGY_NUM).map(([k, v]) => [v, k]));
+const STRATEGY_KEYS = [
+  'USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY', 'AMN', 'TORI', 'WARRIOR',
+  // ChatGPT Strategies folder
+  'CGT-EMA', 'CGT-HTFSD', 'CGT-LONDON', 'CGT-NYREV', 'CGT-VWAP',
+  // Gemini Strategies folder
+  'GEM-ASIA', 'GEM-EMA', 'GEM-FIB', 'GEM-SMC', 'GEM-VWAP',
+];
+const STRATEGY_NUM = {
+  USLS: '1', 'ICT-SMC': '2', 'ALGO-SMC': '3', ADAPTIVE: '4',
+  ICT: '5', SMT: '6', TRINITY: '7', AMN: '8', TORI: '9', WARRIOR: '10',
+  'CGT-EMA': 'C1', 'CGT-HTFSD': 'C2', 'CGT-LONDON': 'C3', 'CGT-NYREV': 'C4', 'CGT-VWAP': 'C5',
+  'GEM-ASIA': 'G1', 'GEM-EMA': 'G2', 'GEM-FIB': 'G3', 'GEM-SMC': 'G4', 'GEM-VWAP': 'G5',
+};
+// Group strategies by folder for /strategies output
+const STRATEGY_GROUPS = [
+  { name: 'Core (10)', keys: ['USLS', 'ICT-SMC', 'ALGO-SMC', 'ADAPTIVE', 'ICT', 'SMT', 'TRINITY', 'AMN', 'TORI', 'WARRIOR'] },
+  { name: 'Chatgpt Strategies', keys: ['CGT-EMA', 'CGT-HTFSD', 'CGT-LONDON', 'CGT-NYREV', 'CGT-VWAP'] },
+  { name: 'Gemini Strategies', keys: ['GEM-ASIA', 'GEM-EMA', 'GEM-FIB', 'GEM-SMC', 'GEM-VWAP'] },
+];
+// /enable and /disable accept both the number form (1..10) and the letter-prefix form (C1, G3)
+const NUM_TO_KEY = Object.fromEntries(Object.entries(STRATEGY_NUM).map(([k, v]) => [String(v).toUpperCase(), k]));
 
 let TOKEN = '', CHAT_ID = '';
 function loadCreds() {
@@ -240,7 +258,8 @@ const HELP_TEXT = `🎵 *Octave Bot — Commands*
 📊 *Market*
 \`/bias\` — current market bias (BUY/SELL) from all strategies
 \`/setup <num>\` — what's forming on a strategy + chart
-\`/price\` — spot + futures gold
+\`/price\` — micro gold (MGC1!) live price
+\`/news [hours]\` — upcoming high-impact USD events + blackout state
 
 📊 *Status*
 \`/status\` — overall health
@@ -284,20 +303,59 @@ async function cmdHelp() {
   await send(HELP_TEXT);
 }
 
+// Human-readable nicknames for /status. Source of truth for the names the
+// user sees; the strategy KEY (USLS, ICT, etc.) is the internal id.
+const STRATEGY_NICKNAME = {
+  USLS: 'USLS',
+  'ICT-SMC': 'ICT/SMC',
+  'ALGO-SMC': 'Algo SMC',
+  ADAPTIVE: 'Adaptive Matrix',
+  ICT: 'ICT Killzone',
+  SMT: 'Gold/Silver SMT',
+  TRINITY: 'Trinity Model',
+  AMN: 'AMN Dual-Model',
+  TORI: 'TORI 4H Trendline',
+  WARRIOR: 'Warrior Momentum',
+  // ChatGPT pack
+  'CGT-EMA': 'CGT · EMA Trend',
+  'CGT-HTFSD': 'CGT · HTF S/D Sniper',
+  'CGT-LONDON': 'CGT · London Breakout',
+  'CGT-NYREV': 'CGT · NY Reversal Trap',
+  'CGT-VWAP': 'CGT · VWAP Reversion',
+  // Gemini pack
+  'GEM-ASIA': 'GEM · Asian Range Breakout',
+  'GEM-EMA': 'GEM · Golden River EMA',
+  'GEM-FIB': 'GEM · Golden Fibonacci',
+  'GEM-SMC': 'GEM · Institutional Order Blocks',
+  'GEM-VWAP': 'GEM · VWAP Rubber Band',
+};
+
 async function cmdStatus() {
   const cfg = loadConfig();
   const drawings = readJson(DRAWINGS_FILE, { setups: {} });
   const session = readJson(SESSION_FILE, { lastSession: null });
   const pid = await servicePid();
 
-  const onNums = cfg?.strategies
-    ? Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => `#${STRATEGY_NUM[k]}`).sort().join(' ')
-    : '(none)';
-
+  const enabled = cfg?.strategies
+    ? Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => k)
+    : [];
   const muteMin = cfg?.mute?.untilMs && cfg.mute.untilMs > Date.now()
     ? Math.round((cfg.mute.untilMs - Date.now()) / 60000) : 0;
 
-  // Lead with what matters: are we alerting? Then context.
+  // News awareness — lifted into status so the user always knows if a
+  // blackout is in effect.
+  let newsLine = '';
+  try {
+    const { checkBlackout, nextEvent } = await import('../lib/news.js');
+    const bo = checkBlackout(Date.now() / 1000, 30);
+    if (bo.blocked && bo.event) {
+      newsLine = `📰 *NEWS BLACKOUT* — ${tgEscape(bo.event.title || bo.event.name || 'high-impact event')} (${bo.minutesAway}m away)`;
+    } else if (typeof nextEvent === 'function') {
+      const nxt = nextEvent(Date.now() / 1000);
+      if (nxt) newsLine = `📰 Next high-impact: ${tgEscape(nxt.title || nxt.name || '')} in ${nxt.minutesAway}m`;
+    }
+  } catch {}
+
   const alerting = !muteMin && pid;
   const headline = alerting
     ? '🟢 *Octave is live and watching*'
@@ -305,15 +363,24 @@ async function cmdStatus() {
       ? `🔕 *Muted for ${muteMin}m*`
       : '🔴 *Octave is offline*';
 
+  const sessLabel = (session.lastSession || 'closed').toUpperCase();
+  const setupCount = Object.keys(drawings.setups || {}).length;
+
+  const stratLines = enabled.length === 0
+    ? ['_(no strategies enabled)_']
+    : enabled.map((k) => `  • ${tgEscape(STRATEGY_NICKNAME[k] || k)}`);
+
   await send([
     headline,
     '',
-    `Active strategies: ${onNums}`,
-    `Mode: \`${cfg?.mode || 'auto'}\`  ·  Session: *${(session.lastSession || 'closed').toUpperCase()}*`,
-    `${Object.keys(drawings.setups || {}).length} setups being tracked`,
+    `🕒 Session: *${sessLabel}*  ·  📡 Setups tracked: *${setupCount}*`,
+    newsLine,
     '',
-    `Send /bias for current direction · /health for service detail`,
-  ].join('\n'));
+    `🎚 *Active strategies (${enabled.length})*`,
+    ...stratLines,
+    '',
+    `Send /bias for direction · /news for upcoming events · /health for service detail`,
+  ].filter((l) => l !== '').join('\n'));
 }
 
 async function cmdSession() {
@@ -352,48 +419,32 @@ async function cmd24h(arg) {
 }
 
 async function cmdPrice() {
-  // Fetch BOTH spot (XAUUSD=X, matches TradingView OANDA:XAUUSD ~$1-2 diff)
-  // AND futures (GC=F, what most strategies actually evaluate on). The user
-  // sees both with delta — no more "your price doesn't match my chart."
-  let spot = null, futures = null;
+  // Strategies are now anchored to MGC1! (Micro Gold) per user directive
+  // 2026-05-21. MGC tracks the standard GC contract tick-for-tick, so the
+  // price you see here is identical to what your TradingView MGC chart shows.
+  let mgc = null;
   try {
-    const [spotRes, futRes] = await Promise.all([
-      fetch('https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD%3DX?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
-      fetch('https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
-    ]);
-    const spotData = await spotRes.json().catch(() => null);
-    const futData = await futRes.json().catch(() => null);
-    const spotMeta = spotData?.chart?.result?.[0]?.meta;
-    const futMeta = futData?.chart?.result?.[0]?.meta;
-    if (spotMeta) spot = { price: spotMeta.regularMarketPrice, change: spotMeta.regularMarketPrice - spotMeta.chartPreviousClose, time: spotMeta.regularMarketTime };
-    if (futMeta)  futures = { price: futMeta.regularMarketPrice, change: futMeta.regularMarketPrice - futMeta.chartPreviousClose, time: futMeta.regularMarketTime };
+    const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/MGC%3DF?interval=1m&range=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const data = await res.json().catch(() => null);
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (meta) mgc = { price: meta.regularMarketPrice, change: meta.regularMarketPrice - meta.chartPreviousClose, time: meta.regularMarketTime };
   } catch {}
 
-  if (!spot && !futures) {
-    // Fall back to the heartbeat snapshot
+  if (!mgc) {
     const hb = readJson(HEARTBEAT_FILE, null);
     if (!hb?.anchor) { await send('💰 No price data available.'); return; }
-    await send(`💰 *Gold* (futures, cached)\n*$${hb.anchor.close}* · ${hb.anchor.tf}m bar`);
+    await send(`💰 *Micro Gold* (cached)\n*$${hb.anchor.close}* · ${hb.anchor.tf}m bar`);
     return;
   }
 
   const sign = (n) => n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2);
-  const lines = ['💰 *Gold*', ''];
-  if (spot) {
-    lines.push(`*Spot (XAU/USD)*: *$${spot.price.toFixed(2)}*  _${sign(spot.change)} today_`);
-    lines.push('  → matches TradingView \\`OANDA:XAUUSD\\`');
-  }
-  if (futures) {
-    lines.push('');
-    lines.push(`*Futures (GC1!)*: *$${futures.price.toFixed(2)}*  _${sign(futures.change)} today_`);
-    lines.push('  → matches TradingView \\`COMEX:GC1!\\` (strategies use this)');
-  }
-  if (spot && futures) {
-    const basis = futures.price - spot.price;
-    lines.push('');
-    lines.push(`Basis (futures − spot): *${sign(basis)}*`);
-  }
-  await send(lines.join('\n'));
+  await send([
+    '💰 *Micro Gold (MGC1!)*',
+    '',
+    `*$${mgc.price.toFixed(2)}*  _${sign(mgc.change)} today_`,
+    '',
+    '→ matches TradingView `COMEX:MGC1!`',
+  ].join('\n'));
 }
 
 async function cmdHistory(arg) {
@@ -468,21 +519,26 @@ async function cmdLast() {
 async function cmdStrategies() {
   const cfg = loadConfig() || { strategies: {} };
   const lines = ['🎚 *Strategies*', ''];
-  for (const k of STRATEGY_KEYS) {
-    const on = !!cfg.strategies[k];
-    const icon = on ? '🟢' : '⚫';
-    lines.push(`${icon} \`#${STRATEGY_NUM[k]}\` ${k}`);
+  for (const group of STRATEGY_GROUPS) {
+    lines.push(`📁 *${group.name}*`);
+    for (const k of group.keys) {
+      const on = !!cfg.strategies[k];
+      const icon = on ? '🟢' : '⚫';
+      const name = STRATEGY_NICKNAME[k] || k;
+      lines.push(`  ${icon} \`#${STRATEGY_NUM[k]}\` ${tgEscape(name)}`);
+    }
+    lines.push('');
   }
-  lines.push('', 'Use `/enable <num>` or `/disable <num>` to toggle.');
+  lines.push('Toggle: `/enable <num>` · `/disable <num>` (e.g. `/enable C3` or `/enable 5`)');
   await send(lines.join('\n'));
 }
 
 function resolveStrategy(arg) {
   if (!arg) return null;
   const trimmed = String(arg).trim().toUpperCase().replace(/^#/, '');
-  const num = parseInt(trimmed, 10);
-  if (Number.isFinite(num) && NUM_TO_KEY[num]) return NUM_TO_KEY[num];
-  // Try name match
+  // Try as letter-prefixed (C1/G3) or numeric (1..10) lookup
+  if (NUM_TO_KEY[trimmed]) return NUM_TO_KEY[trimmed];
+  // Try as full key (USLS / CGT-EMA)
   if (STRATEGY_KEYS.includes(trimmed)) return trimmed;
   return null;
 }
@@ -1212,15 +1268,22 @@ function buildStrategiesView() {
   const text = [
     '🎛 *Strategies*',
     '',
-    'Tap any strategy to toggle on/off.',
+    'Tap any strategy to toggle on/off. Grouped by source folder.',
   ].join('\n');
-  const keyboard = STRATEGY_KEYS.map((k) => {
-    const on = !!cfg.strategies[k];
-    return [{
-      text: `${on ? '🟢' : '⚫'} #${STRATEGY_NUM[k]} ${k}`,
-      callback_data: `strat:${k}`,
-    }];
-  });
+  const keyboard = [];
+  for (const group of STRATEGY_GROUPS) {
+    // Section header as a non-callable row (Telegram requires callback_data;
+    // use a no-op placeholder).
+    keyboard.push([{ text: `── 📁 ${group.name} ──`, callback_data: 'view:strategies' }]);
+    for (const k of group.keys) {
+      const on = !!cfg.strategies[k];
+      const name = STRATEGY_NICKNAME[k] || k;
+      keyboard.push([{
+        text: `${on ? '🟢' : '⚫'} #${STRATEGY_NUM[k]} ${name}`,
+        callback_data: `strat:${k}`,
+      }]);
+    }
+  }
   keyboard.push([{ text: '« Back', callback_data: 'view:main' }]);
   return { text, keyboard };
 }
@@ -1471,7 +1534,51 @@ const COMMANDS = {
   '/summary': cmdSummary,
   '/digest': cmdSummary,
   '/perf': cmdPerf,
+  '/news': cmdNews,
 };
+
+/**
+ * /news — show the next ~24h of high-impact USD events and the current
+ * blackout state. Sources merge ForexFactory + the manual data/news.json.
+ */
+async function cmdNews(arg) {
+  const { upcomingEvents, checkBlackout, refreshForexFactory } = await import('../lib/news.js');
+  await refreshForexFactory().catch(() => {});
+  const hours = Math.max(1, Math.min(168, parseInt((arg || '').trim(), 10) || 24));
+  const now = Date.now() / 1000;
+  const bo = checkBlackout(now, 30);
+  const evs = upcomingEvents(now, hours);
+
+  const lines = [`📰 *News watch* — next ${hours}h`, ''];
+  if (bo.blocked && bo.event) {
+    lines.push(`🚫 *BLACKOUT ACTIVE* — ${tgEscape(bo.event.title || 'high-impact event')}`);
+    lines.push(`   ${bo.minutesAway}m away, ±30m window`);
+    lines.push('');
+  } else {
+    lines.push('✅ No active blackout — strategies allowed to fire');
+    lines.push('');
+  }
+
+  if (evs.length === 0) {
+    lines.push('_No upcoming high-impact USD events in window._');
+  } else {
+    lines.push(`*Upcoming (${evs.length}):*`);
+    for (const ev of evs.slice(0, 12)) {
+      const t = new Date(ev.unix * 1000);
+      const nyT = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+      }).format(t);
+      const mins = Math.round((ev.unix - now) / 60);
+      const away = mins < 60 ? `${mins}m` : mins < 1440 ? `${(mins / 60).toFixed(1)}h` : `${(mins / 1440).toFixed(1)}d`;
+      lines.push(`  • \`${nyT}\` EST · ${tgEscape(ev.title || ev.name || '?')} _(${away})_`);
+    }
+    if (evs.length > 12) lines.push(`  …and ${evs.length - 12} more`);
+  }
+  lines.push('');
+  lines.push('_Source: ForexFactory + manual list. Strategies auto-pause ±30m around each event._');
+  await send(lines.join('\n'));
+}
 
 async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
