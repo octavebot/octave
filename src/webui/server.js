@@ -244,6 +244,34 @@ async function readBody(req) {
   });
 }
 
+// 50MB cap so a stray upload can't exhaust memory. PDFs are typically <5MB,
+// images <10MB, short videos <30MB. Videos > cap will be rejected.
+const UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
+async function readMultipart(req) {
+  const { default: Busboy } = await import('busboy');
+  const files = [];
+  return new Promise((resolve, reject) => {
+    const bb = Busboy({ headers: req.headers, limits: { fileSize: UPLOAD_LIMIT_BYTES, files: 8 } });
+    bb.on('file', (fieldname, stream, info) => {
+      const chunks = [];
+      let truncated = false;
+      stream.on('data', (c) => chunks.push(c));
+      stream.on('limit', () => { truncated = true; });
+      stream.on('end', () => {
+        if (truncated) return; // skip oversize files
+        files.push({
+          buffer: Buffer.concat(chunks),
+          filename: info.filename || 'upload',
+          mimetype: info.mimeType || info.mimetype || 'application/octet-stream',
+        });
+      });
+    });
+    bb.on('finish', () => resolve(files));
+    bb.on('error', reject);
+    req.pipe(bb);
+  });
+}
+
 // Accept hosts: loopback, plus Cloudflare Tunnel patterns, plus anything the
 // user explicitly allowlists via OCTAVE_ALLOWED_HOSTS (comma-separated).
 const EXTRA_HOSTS = (process.env.OCTAVE_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -282,6 +310,35 @@ const server = createServer(async (req, res) => {
       if (!body) return sendJson(res, 400, { error: 'bad json' });
       const next = await saveConfig(body);
       return sendJson(res, 200, { config: next });
+    }
+
+    // ─── Strategy file upload → AI extraction ───
+    if (req.method === 'POST' && url.pathname === '/api/user-strategies/upload') {
+      try {
+        const files = await readMultipart(req);
+        if (files.length === 0) return sendJson(res, 400, { error: 'no file uploaded' });
+        const { extractStrategy } = await import('../lib/strategy_extractor.js');
+        const us = await import('../lib/user_strategies.js');
+        const results = [];
+        for (const file of files) {
+          try {
+            const { spec, source, notes } = await extractStrategy(file);
+            // Ensure unique id — append a suffix if it collides
+            let candidate = { ...spec };
+            const existing = new Set(us.list().map((s) => s.id));
+            let n = 1;
+            while (existing.has(candidate.id)) candidate.id = `${spec.id}-${++n}`;
+            const created = us.create(candidate);
+            await saveConfig({ strategies: { [created.id]: true } });
+            results.push({ ok: true, filename: file.filename, source, notes, strategy: created });
+          } catch (err) {
+            results.push({ ok: false, filename: file.filename, error: err.message });
+          }
+        }
+        return sendJson(res, 200, { results });
+      } catch (err) {
+        return sendJson(res, 500, { error: err.message });
+      }
     }
 
     // ─── User-editable strategies CRUD ───
@@ -327,6 +384,20 @@ const server = createServer(async (req, res) => {
         catch (err) { return sendJson(res, 404, { error: err.message }); }
         return sendJson(res, 200, { ok: true });
       }
+    }
+
+    // ─── Self-heal endpoints ───
+    if (req.method === 'GET' && url.pathname === '/api/diagnose') {
+      const sh = await import('../lib/self_heal.js');
+      return sendJson(res, 200, { report: await sh.diagnoseAll(), components: sh.listComponents() });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/fix') {
+      const body = await readBody(req).catch(() => ({}));
+      const sh = await import('../lib/self_heal.js');
+      if (!body?.component || body.component === 'all') {
+        return sendJson(res, 200, { log: await sh.fixAll() });
+      }
+      return sendJson(res, 200, { result: await sh.fixOne(body.component) });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/open-logs') {

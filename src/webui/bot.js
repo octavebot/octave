@@ -302,6 +302,8 @@ Auto-runs Sunday 8pm NY.
 \`/restart bot\` / \`/restart signals\` / \`/restart webui\` — single
 \`/version\` — current git commit
 \`/shutdown confirm\` — stop everything
+\`/diagnose\` — health check all components
+\`/fix [name]\` — auto-heal (e.g. \`/fix all\`, \`/fix backtest\`, \`/fix signals\`)
 
 Tip: send \`/help\` anytime.`;
 
@@ -546,11 +548,22 @@ async function cmdStrategies() {
 
 function resolveStrategy(arg) {
   if (!arg) return null;
-  const trimmed = String(arg).trim().toUpperCase().replace(/^#/, '');
-  // Try as letter-prefixed (C1/G3) or numeric (1..10) lookup
-  if (NUM_TO_KEY[trimmed]) return NUM_TO_KEY[trimmed];
-  // Try as full key (USLS / CGT-EMA)
-  if (STRATEGY_KEYS.includes(trimmed)) return trimmed;
+  const trimmedUpper = String(arg).trim().toUpperCase().replace(/^#/, '');
+  const trimmedOrig = String(arg).trim().replace(/^#/, '');
+  // Built-in: numeric (1..10), letter-prefixed (C1/G3), or full key (CGT-EMA)
+  if (NUM_TO_KEY[trimmedUpper]) return NUM_TO_KEY[trimmedUpper];
+  if (STRATEGY_KEYS.includes(trimmedUpper)) return trimmedUpper;
+  // User strategy id (case-sensitive — kebab-case typically). Look up live.
+  try {
+    // Synchronous file read keeps this cheap and avoids making every caller async.
+    const usPath = join(REPO_DIR, 'src', 'state', 'user-strategies.json');
+    if (existsSync(usPath)) {
+      const raw = JSON.parse(readFileSync(usPath, 'utf8'));
+      const items = Array.isArray(raw?.items) ? raw.items : [];
+      const hit = items.find((s) => s.id === trimmedOrig || s.id.toLowerCase() === trimmedOrig.toLowerCase());
+      if (hit) return hit.id;
+    }
+  } catch {}
   return null;
 }
 
@@ -1558,7 +1571,65 @@ const COMMANDS = {
   '/editstrategy': cmdEditStrategy,
   '/delstrategy': cmdDelStrategy,
   '/mystrategies': cmdMyStrategies,
+  '/fix': cmdFix,
+  '/diagnose': cmdDiagnose,
 };
+
+/**
+ * /fix [component]   /fix all   /fix backtest   /fix signal-engine
+ * Diagnose then auto-restart the failing service(s).
+ */
+async function cmdFix(arg) {
+  const sh = await import('../lib/self_heal.js');
+  const a = (arg || '').trim().toLowerCase();
+  if (!a || a === 'all') {
+    await send('🩹 Running full self-heal across all services…');
+    const log = await sh.fixAll();
+    const lines = ['🩹 *Self-heal report*', ''];
+    for (const [key, entry] of Object.entries(log)) {
+      const icon = entry.wasHealthy ? '🟢' : entry.ok ? '✅' : '❌';
+      const issues = entry.issues?.length ? ` _(${entry.issues.join('; ').slice(0, 120)})_` : '';
+      lines.push(`${icon} *${key}*${issues}`);
+      for (const act of (entry.actions || [])) lines.push(`  · ${tgEscape(act)}`);
+      if (entry.message) lines.push(`  · ${tgEscape(entry.message)}`);
+    }
+    await send(lines.join('\n'));
+    return;
+  }
+  // Single-component fix — accept either the registry key or a friendly alias
+  const aliases = { signals: 'signal-engine', dashboard: 'webui', telegram: 'bot',
+                    sync: 'git-sync', data: 'market-data' };
+  const key = aliases[a] || a;
+  const valid = sh.listComponents().some((c) => c.key === key);
+  if (!valid) {
+    await send(['Unknown component. Available:', '', ...sh.listComponents().map((c) => `\`${c.key}\` — ${tgEscape(c.label)}`),
+      '', 'Or send `/fix all` to fix everything.'].join('\n'));
+    return;
+  }
+  await send(`🩹 Diagnosing + fixing *${key}*…`);
+  const r = await sh.fixOne(key);
+  const icon = r.wasHealthy ? '🟢' : r.ok ? '✅' : '❌';
+  const lines = [
+    `${icon} *${key}*: ${r.ok ? 'OK' : 'still failing'}`,
+    r.issues?.length ? `Issues: ${r.issues.join('; ')}` : '',
+    r.actions?.length ? `Actions:\n${r.actions.map((a) => '  · ' + a).join('\n')}` : '',
+    r.message ? `_${tgEscape(r.message)}_` : '',
+  ].filter(Boolean);
+  await send(lines.join('\n'));
+}
+
+/** /diagnose — read-only health check. */
+async function cmdDiagnose() {
+  const sh = await import('../lib/self_heal.js');
+  const report = await sh.diagnoseAll();
+  const lines = ['🩺 *Health check*', ''];
+  for (const [key, r] of Object.entries(report)) {
+    lines.push(`${r.ok ? '🟢' : '🔴'} *${key}*${r.ok ? '' : ' — ' + r.issues.join('; ')}`);
+  }
+  lines.push('');
+  lines.push('Send `/fix <name>` or `/fix all` to repair.');
+  await send(lines.join('\n'));
+}
 
 /**
  * /mystrategies — list user-defined strategies with status.
@@ -1674,6 +1745,61 @@ async function cmdDelStrategy(arg) {
   }
 }
 
+/**
+ * User sent a doc/photo/video → fetch it from Telegram CDN, run AI extraction,
+ * save as a user strategy, reply with what was created.
+ */
+async function handleStrategyUpload(fileObj, caption) {
+  await send(`📎 Got it — pulling file from Telegram and running AI extraction…`);
+  try {
+    // 1) Resolve file_id → file path on Telegram CDN
+    const meta = await (await fetch(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileObj.file_id}`)).json();
+    if (!meta?.ok) throw new Error('getFile failed');
+    const filePath = meta.result.file_path;
+    // 2) Download bytes
+    const fileResp = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`);
+    if (!fileResp.ok) throw new Error('download failed');
+    const buf = Buffer.from(await fileResp.arrayBuffer());
+    const filename = (fileObj.file_name || filePath.split('/').pop() || 'upload').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const mime = fileObj.mime_type || guessMimeByExt(filename);
+    // 3) Extract + create
+    const { extractStrategy } = await import('../lib/strategy_extractor.js');
+    const us = await import('../lib/user_strategies.js');
+    const { spec, source, notes } = await extractStrategy({ buffer: buf, mimetype: mime, filename });
+    // Caption can pre-fill the description
+    if (caption) spec.description = caption + (spec.description ? ' — ' + spec.description : '');
+    // Avoid id collision
+    let candidate = { ...spec };
+    const existing = new Set(us.list().map((s) => s.id));
+    let n = 1;
+    while (existing.has(candidate.id)) candidate.id = `${spec.id}-${++n}`;
+    const created = us.create(candidate);
+    await saveConfigAndPush((c) => { c.strategies = c.strategies || {}; c.strategies[created.id] = true; return c; });
+    await send([
+      `✅ *Strategy created* via ${source === 'claude' ? 'Claude API' : 'heuristic fallback'}`,
+      `id: \`${tgEscape(created.id)}\``,
+      `name: *${tgEscape(created.name)}*`,
+      `entry: \`${created.entry}\` · tf: \`${created.timeframe}m\``,
+      `EMAs: ${created.fast}/${created.slow} · stop: ${created.stop_atr_mult}× ATR · TP: ${created.tp_r}R`,
+      notes ? `_${tgEscape(notes)}_` : '',
+      '',
+      `Send \`/editstrategy ${created.id} key=value\` to tune.`,
+    ].filter(Boolean).join('\n'));
+  } catch (err) {
+    await send(`⚠️ Upload failed: ${err.message}`);
+  }
+}
+
+function guessMimeByExt(name) {
+  const ext = (name.match(/\.([^.]+)$/) || ['', ''])[1].toLowerCase();
+  return {
+    pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    mp4: 'video/mp4', mov: 'video/quicktime',
+    js: 'text/plain', py: 'text/plain', json: 'application/json',
+  }[ext] || 'application/octet-stream';
+}
+
 /** Tokenize a Telegram arg string, honoring "double-quoted phrases". */
 function parseArgs(s) {
   const out = [];
@@ -1755,12 +1881,21 @@ async function cmdNews(arg) {
 
 async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
-  if (!msg || !msg.text) return;
+  if (!msg) return;
   // Security: only respond to the configured chat
   if (String(msg.chat?.id) !== String(CHAT_ID)) {
     console.log('[bot] ignored msg from chat', msg.chat?.id);
     return;
   }
+  // ── File upload path: any document/photo/video → AI strategy extraction ──
+  const fileObj = msg.document
+    || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null)  // largest photo size
+    || msg.video || msg.audio;
+  if (fileObj?.file_id) {
+    await handleStrategyUpload(fileObj, msg.caption || '');
+    return;
+  }
+  if (!msg.text) return;
   const text = msg.text.trim();
   // Match leading command + optional argument (handles "/help" and "/help@octavebot" and "/range 09:30-11:00")
   const m = /^\/([a-z]+)(?:@\w+)?(?:\s+(.+))?$/i.exec(text);

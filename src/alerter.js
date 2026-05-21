@@ -69,12 +69,33 @@ const STRATEGY_DISPLAY = {
   'GEM-VWAP': 'VWAP Rubber Band',
 };
 
+// Resolve the badge/number for any strategy, including user-defined ones.
+// User strategies show as "#U" so they're visually distinct from built-ins.
 function strategyNum(name) {
-  return STRATEGY_NUM[name] || `(${name})`;
+  return STRATEGY_NUM[name] || '#U';
 }
 
 function strategyDisplay(name) {
-  return STRATEGY_DISPLAY[name] || name;
+  if (STRATEGY_DISPLAY[name]) return STRATEGY_DISPLAY[name];
+  // Try the live user-strategies registry — gives the human-readable name
+  // the user typed when creating the strategy.
+  try {
+    // require-style synchronous import is fine here because user_strategies
+    // has no top-level side effects and we already imported it elsewhere.
+    const fileURL = new URL('./lib/user_strategies.js', import.meta.url);
+    // ESM doesn't allow sync import; cache the lookup once per process.
+    if (!strategyDisplay._cache) strategyDisplay._cache = new Map();
+    if (strategyDisplay._cache.has(name)) return strategyDisplay._cache.get(name);
+    // Best-effort fire-and-forget warmup — until it resolves, return the raw id.
+    import('./lib/user_strategies.js').then((m) => {
+      for (const s of m.list()) {
+        strategyDisplay._cache.set(s.id, s.name || s.id);
+      }
+    }).catch(() => {});
+    return name;
+  } catch {
+    return name;
+  }
 }
 
 function tgEscape(s) {

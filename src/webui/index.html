@@ -357,7 +357,8 @@
   <div class="card">
     <h2>Actions</h2>
     <div class="actions">
-      <button class="btn" onclick="window.location.href='/code'">💻 View Code</button>
+      <button class="btn" onclick="runDiagnose()">🩺 Diagnose</button>
+      <button class="btn" onclick="runAutoHeal()">🩹 Auto-heal All</button>
       <button class="btn" onclick="openLogs()">📂 Logs</button>
       <button class="btn danger" onclick="confirmShutdown()">⏸ Shut Down All</button>
     </div>
@@ -603,7 +604,13 @@ function renderState(s) {
             <div class="toggle" data-strategy="${m.key}" role="switch"></div>
           </div>`).join('');
       const newBtn = g.isUser
-        ? `<div class="strategy" style="justify-content:center"><button class="icon-btn" id="new-user-strategy">＋ New strategy</button></div>`
+        ? `<div class="strategy" style="justify-content:center; gap:8px">
+             <button class="icon-btn" id="new-user-strategy">＋ New strategy</button>
+             <button class="icon-btn" id="upload-strategy">📎 Upload file → AI extract</button>
+             <input type="file" id="upload-strategy-input" multiple
+               accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.js,.py,.json"
+               style="display:none" />
+           </div>`
         : '';
       return `
         <div class="folder ${isCollapsed ? 'collapsed' : ''}" data-folder="${g.folder}">
@@ -659,6 +666,11 @@ document.addEventListener('click', async (e) => {
     openStrategyEditor(null);
     return;
   }
+  // Upload file → AI extract
+  if (e.target.id === 'upload-strategy') {
+    document.getElementById('upload-strategy-input').click();
+    return;
+  }
   // Edit strategy
   const editBtn = e.target.closest('[data-edit-strategy]');
   if (editBtn) {
@@ -696,6 +708,31 @@ document.addEventListener('click', async (e) => {
     } finally {
       t.classList.remove('saving');
     }
+  }
+});
+
+// File upload listener (delegated since the input is re-rendered with the folder)
+document.addEventListener('change', async (e) => {
+  if (e.target?.id !== 'upload-strategy-input') return;
+  const files = [...(e.target.files || [])];
+  if (files.length === 0) return;
+  toast(`📎 Uploading ${files.length} file(s) for AI extraction…`);
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f, f.name);
+  try {
+    const r = await fetch('/api/user-strategies/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    const ok = data.results.filter((x) => x.ok).length;
+    const failed = data.results.filter((x) => !x.ok);
+    if (ok > 0) toast(`✅ Created ${ok} strategy${ok > 1 ? 'ies' : ''} from upload`);
+    for (const f of failed) toast(`✗ ${f.filename}: ${f.error}`);
+    delete document.getElementById('strategies').dataset.fingerprint;
+    fetchState();
+  } catch (err) {
+    toast('✗ Upload failed: ' + err.message);
+  } finally {
+    e.target.value = '';
   }
 });
 
@@ -782,6 +819,35 @@ async function saveStrategy() {
   } catch (err) {
     toast('✗ Save failed: ' + (err.message || ''));
   }
+}
+
+async function runDiagnose() {
+  toast('🩺 Diagnosing…');
+  try {
+    const r = await fetch('/api/diagnose', { cache: 'no-store' });
+    const data = await r.json();
+    const lines = [];
+    for (const [key, entry] of Object.entries(data.report || {})) {
+      lines.push(`${entry.ok ? '🟢' : '🔴'} ${key}${entry.ok ? '' : ' — ' + (entry.issues || []).join('; ')}`);
+    }
+    alert(lines.join('\n'));
+  } catch (e) { toast('✗ Diagnose failed: ' + e.message); }
+}
+
+async function runAutoHeal() {
+  if (!confirm('Run auto-heal across every service?\n\nUnhealthy services will be restarted. Healthy ones are left alone.')) return;
+  toast('🩹 Healing…');
+  try {
+    const r = await fetch('/api/fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ component: 'all' }) });
+    const data = await r.json();
+    const lines = [];
+    for (const [key, entry] of Object.entries(data.log || {})) {
+      const icon = entry.wasHealthy ? '🟢' : entry.ok ? '✅' : '❌';
+      lines.push(`${icon} ${key}${entry.actions?.length ? '\n   · ' + entry.actions.join('\n   · ') : ''}`);
+    }
+    alert(lines.join('\n'));
+    fetchState();
+  } catch (e) { toast('✗ Heal failed: ' + e.message); }
 }
 
 function confirmShutdown() {

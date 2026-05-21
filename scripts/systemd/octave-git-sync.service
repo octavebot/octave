@@ -1,0 +1,15 @@
+[Unit]
+Description=Octave VPS auto-update — pull latest code from origin/main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+# git-sync.sh fetches, fast-forwards if possible, runs npm ci only if package.json
+# changed, then restarts whichever services have updated files. Idempotent — no-op
+# when nothing changed.
+ExecStart=/home/octave/trading-alerts/scripts/git-sync.sh
+StandardOutput=append:/home/octave/.octave-logs/git-sync.log
+StandardError=append:/home/octave/.octave-logs/git-sync.log

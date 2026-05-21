@@ -43,14 +43,37 @@ import { evaluate as gemEma } from './strategies/gemini/golden_river_ema.js';
 import { evaluate as gemFib } from './strategies/gemini/golden_fibonacci.js';
 import { evaluate as gemSmc } from './strategies/gemini/institutional_order_blocks.js';
 import { evaluate as gemVwap } from './strategies/gemini/vwap_rubber_band.js';
+import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_strategies.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
 
+/**
+ * Build the per-tick adapter for one user strategy so the backtest harness
+ * can treat it identically to a built-in. Returns null if the strategy spec
+ * doesn't yield anything (e.g. timeframe pane missing in the trimmed window).
+ */
+function userStrategyEntry(spec) {
+  return {
+    name: spec.id,
+    num: 'U',
+    label: spec.name || spec.id,
+    fn: (ctx) => evaluateUserStrategies(ctx, (k) => k === spec.id),
+  };
+}
+
+/**
+ * Full strategy registry for the backtest. Re-reads user strategies each call
+ * so freshly added/edited ones show up without a process restart.
+ */
+export function getAllStrategies() {
+  return [...BUILTIN_STRATEGIES, ...listUserStrategies().map(userStrategyEntry)];
+}
+
 // Backtest registry — order matters for display; the `num` field is shown in
 // /backtest output and can be either a number (1..10) or a letter-prefixed id
-// (C1..C5 for ChatGPT, G1..G5 for Gemini).
-export const STRATEGIES = [
+// (C1..C5 for ChatGPT, G1..G5 for Gemini). User strategies get `num: 'U'`.
+export const BUILTIN_STRATEGIES = [
   { name: 'USLS',       num: 1,   fn: evaluateUSLS,     label: 'USLS' },
   { name: 'ICT-SMC',    num: 2,   fn: evaluateICTSMC,   label: 'ICT/SMC' },
   { name: 'ALGO-SMC',   num: 3,   fn: evaluateAlgoSMC,  label: 'ALGO/SMC' },
@@ -178,7 +201,8 @@ export async function runBacktest(opts = {}) {
   // Accept multiple identifiers per strategy: full key (CGT-EMA), display num
   // ('C1' or 1), or any case variant. Normalize before matching.
   const requested = new Set(enabledNames.map((n) => String(n).toUpperCase()));
-  const selected = STRATEGIES.filter((s) =>
+  const ALL = getAllStrategies();
+  const selected = ALL.filter((s) =>
     requested.has(String(s.name).toUpperCase()) || requested.has(String(s.num).toUpperCase())
   );
   if (selected.length === 0) {
