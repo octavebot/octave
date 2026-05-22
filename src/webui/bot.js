@@ -902,9 +902,22 @@ async function cmdBacktest(arg) {
 
 // ── Bias / setup / news ──
 
+/**
+ * Get the latest detect() results. Reads the signal-engine's live snapshot
+ * (refreshed every 3s) — instant, no spawn. Only falls back to a child
+ * process if the snapshot is missing or stale (signal-engine down).
+ */
 async function runDetectChild() {
+  const snap = readJson(join(STATE_DIR, 'last-detect.json'), null);
+  if (snap && Array.isArray(snap.results) && (Date.now() - (snap.at || 0)) < 120_000) {
+    return { results: snap.results, fromSnapshot: true };
+  }
+  // Fallback — signal-engine snapshot missing/stale. Spawn a fresh detect
+  // with a generous timeout (the VPS can be slow under load).
   const script = join(REPO_DIR, 'scripts', 'run-detect-child.js');
-  if (!existsSync(script)) return { error: 'detect runner script not found' };
+  if (!existsSync(script)) {
+    return { error: 'signal engine has no recent data and the detect runner is missing' };
+  }
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script], { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '', stderr = '', result = null;
@@ -918,12 +931,11 @@ async function runDetectChild() {
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); console.error('[detect-child]', d.toString().trim()); });
-    const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 30_000);
+    const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 75_000);
     child.on('exit', (code) => {
       clearTimeout(kill);
       if (result) return resolve(result);
-      const tail = (stderr || '(no stderr)').split('\n').slice(-6).join(' / ').slice(0, 400);
-      resolve({ error: `detect crashed (exit ${code}): ${tail}` });
+      resolve({ error: 'detect is busy — the signal engine is catching up. Try again in a few seconds.' });
     });
     child.on('error', (e) => { clearTimeout(kill); resolve({ error: e.message }); });
   });

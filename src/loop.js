@@ -12,6 +12,25 @@ import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
+import { writeFileSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const DETECT_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-detect.json');
+
+/** Atomically persist the latest detect() results for the bot to read. */
+function writeDetectSnapshot(results) {
+  try {
+    const slim = results.map((r) => ({
+      strategy: r.strategy, instrument: r.instrument, direction: r.direction,
+      status: r.status, confidence: r.confidence, summary: r.summary,
+      setupName: r.setupName, setupId: r.setupId, geometry: r.geometry,
+      entryPlan: r.entryPlan,
+    }));
+    writeFileSync(DETECT_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), results: slim }));
+    renameSync(DETECT_SNAPSHOT + '.tmp', DETECT_SNAPSHOT);
+  } catch { /* snapshot is best-effort — never break the loop */ }
+}
 
 let stopping = false;
 export function stop() { stopping = true; }
@@ -46,6 +65,11 @@ async function tick() {
     await sleep(config.reconnectIntervalMs);
     return;
   }
+
+  // Persist this tick's detect snapshot so the bot's /bias and /setups can
+  // read it instantly instead of spawning a slow detect child (which gets
+  // SIGKILLed when the VPS is busy → "detect crashed (exit null)").
+  writeDetectSnapshot(results || []);
 
   if (!results || results.length === 0) {
     log.debug('tick (no results)');
