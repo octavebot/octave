@@ -996,33 +996,45 @@ async function cmdBias() {
 }
 
 async function cmdActiveSetups() {
-  await send('🎯 Checking all strategies…');
-  const r = await runDetectChild();
-  if (r.error) return send(`⚠️ ${r.error}`);
-  const directional = (r.results || []).filter((x) => x.direction === 'LONG' || x.direction === 'SHORT');
-  if (directional.length === 0) {
-    return send([
-      header('🎯', 'No active setups'),
-      '',
-      'No strategy showing directional development right now.',
-      'Could be outside killzones, no sweep yet, or chop. Try `/24h on`.',
-    ].join('\n'));
+  // Show what's PERSISTENT, not a flickering live-detect snapshot: open
+  // positions (the follow-up tracker) + the signals fired so far today.
+  // A triggered setup only shows in live-detect for a few minutes, which is
+  // why /bias and a live /setups could disagree — this view doesn't drift.
+  let open = [];
+  try { const fu = await import('../lib/follow_up.js'); open = fu.active(); } catch {}
+
+  const todayKey = nyDateKey(Date.now());
+  const fired = readAlerts({ limit: 200 })
+    .filter((a) => a.status === 'triggered' && nyDateKey(a.time) === todayKey);
+
+  const lines = [header('🎯', 'Setups')];
+
+  if (open.length) {
+    lines.push('', section(`Open positions (${open.length})`));
+    for (const s of open) {
+      const dir = s.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+      const inst = (s.instrument || '').toUpperCase();
+      const done = Object.keys(s.milestonesFired || {}).filter((m) => m !== 'be');
+      const stage = done.length ? done[done.length - 1].toUpperCase()
+        : (s.milestonesFired?.be ? 'at breakeven' : 'running');
+      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* · ${inst} · entry \`${s.entry}\` · _${stage}_`);
+    }
   }
-  const PRI = { triggered: 0, near_trigger: 1, forming: 2, invalidated: 3 };
-  const byStrategy = {};
-  for (const x of directional) {
-    const cur = byStrategy[x.strategy];
-    if (!cur || (PRI[x.status] ?? 9) < (PRI[cur.status] ?? 9)) byStrategy[x.strategy] = x;
+
+  if (fired.length) {
+    lines.push('', section(`Signals fired today (${fired.length})`));
+    for (const a of fired.slice(0, 12)) {
+      lines.push(`\`${nyHHmm(a.time)}\` · #${KEY_TO_NUM[a.strategy] || '?'} ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
+    }
   }
-  const sorted = Object.values(byStrategy).sort((a, b) => (PRI[a.status] ?? 9) - (PRI[b.status] ?? 9));
-  const STAGE = { triggered: '🟢 TRIGGERED', near_trigger: '🟠 NEAR', forming: '🟡 FORMING' };
-  const lines = [header('🎯', 'Active setups'), ''];
-  for (const s of sorted) {
-    const dir = s.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
-    lines.push(`*#${KEY_TO_NUM[s.strategy] || 'U'} ${s.strategy}* · ${dir} · ${STAGE[s.status] || s.status} · ${Math.round((s.confidence||0)*100)}%`);
-    if (s.summary) lines.push(`  _${s.summary.slice(0, 100)}_`);
+
+  if (!open.length && !fired.length) {
+    lines.push('',
+      'No open positions and nothing fired today yet.',
+      '_`/bias` shows the current directional lean across all instruments._');
+  } else {
+    lines.push('', '_`/setup <num>` for a strategy\'s live detail · `/bias` for direction._');
   }
-  lines.push('', '_`/setup <num>` for full detail + chart._');
   await send(lines.join('\n'));
 }
 
