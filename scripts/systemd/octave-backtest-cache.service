@@ -1,0 +1,17 @@
+[Unit]
+Description=Octave nightly backtest — refresh the cached 30-day result
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=octave
+WorkingDirectory=/home/octave/trading-alerts
+EnvironmentFile=/home/octave/.config/trading-alerts/.env
+# Runs the full 30-day all-strategy backtest and writes src/state/backtest-cache.json,
+# which the Telegram /backtest command serves instantly. Heap-capped so it can
+# never thrash the 1GB VPS into swap.
+ExecStart=/usr/bin/node --max-old-space-size=320 /home/octave/trading-alerts/scripts/run-backtest-child.js --days 30
+StandardOutput=append:/home/octave/.octave-logs/backtest-cache.log
+StandardError=append:/home/octave/.octave-logs/backtest-cache.log
+TimeoutStartSec=2400

@@ -16,6 +16,12 @@
  */
 
 import { runBacktest, suggestionsFor, formatTelegramSummary } from '../src/backtest.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+const CACHE_FILE = join(REPO, 'src', 'state', 'backtest-cache.json');
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -36,6 +42,19 @@ async function main() {
   }
   const suggestions = suggestionsFor(result.stats);
   const tg = formatTelegramSummary(result, suggestions);
+
+  // A full all-strategies run (no --strategy) updates the cache that the
+  // Telegram /backtest command serves instantly — the VPS is too slow to run
+  // a 30-day backtest live within the command timeout.
+  if (!strategy) {
+    try {
+      mkdirSync(dirname(CACHE_FILE), { recursive: true });
+      writeFileSync(CACHE_FILE, JSON.stringify({ generatedAt: Date.now(), days, durationMs, tg }, null, 2));
+    } catch (err) {
+      console.error('cache write failed:', err.message);
+    }
+  }
+
   // Emit both — the parent reads RESULT for telemetry and TG for the message.
   // We base64-encode TG to avoid newline parsing issues in the IPC.
   const tgB64 = Buffer.from(tg, 'utf8').toString('base64');

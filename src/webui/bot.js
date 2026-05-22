@@ -838,6 +838,18 @@ async function cmdUnmute() {
 
 async function cmdBacktest(arg) {
   const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
+
+  // Bare `/backtest` → serve the nightly-cached 30-day result instantly. The
+  // VPS is too slow to run a 30-day backtest live within the command window.
+  if (parts.length === 0 || (parts.length === 1 && /^(latest|cached)$/i.test(parts[0]))) {
+    const cache = readJson(join(STATE_DIR, 'backtest-cache.json'), null);
+    if (cache?.tg) {
+      const ageH = Math.round((Date.now() - cache.generatedAt) / 3_600_000);
+      return send(`${cache.tg}\n\n_Cached ${cache.days}-day result · refreshed ${ageH}h ago. For a live run: \`/backtest <days>\` or \`/backtest <strategy>\`._`);
+    }
+    return send('📊 No cached backtest yet — the nightly run hasn\'t produced one. Use `/backtest 14` for a live run.');
+  }
+
   let strategyArg = null, days = 30;
   for (const p of parts) {
     const n = parseInt(p, 10);
@@ -847,6 +859,10 @@ async function cmdBacktest(arg) {
   const strategy = strategyArg ? resolveStrategy(strategyArg) : null;
   if (strategyArg && !strategy) {
     return send(`Unknown strategy: \`${strategyArg}\`. Use \`/strategies\` to see names.`);
+  }
+  // A live full run of >14 days won't finish within the timeout on the VPS.
+  if (!strategy && days > 14) {
+    return send(`⏳ A live ${days}-day all-strategy backtest is too slow for the VPS (it would time out).\n\nUse \`/backtest\` (no number) for the cached 30-day result, or \`/backtest ${days} <strategy>\` for one strategy.`);
   }
   await send(`⏳ Running ${days}-day backtest${strategy ? ` for *${strategy}*` : ' for all enabled strategies'}…\n_Runs in isolated process; bot stays responsive._`);
 

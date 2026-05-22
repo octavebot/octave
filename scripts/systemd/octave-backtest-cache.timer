@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh the Octave backtest cache nightly
+Requires=octave-backtest-cache.service
+
+[Timer]
+# Daily at 08:00 UTC (~03:00-04:00 ET) — quiet hours, market thin.
+OnCalendar=*-*-* 08:00:00
+# Also run ~10 min after boot if the scheduled run was missed while powered off.
+OnBootSec=10min
+Unit=octave-backtest-cache.service
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
