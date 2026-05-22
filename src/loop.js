@@ -12,9 +12,10 @@ import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
-import { writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { nyParts } from './lib/time.js';
 
 const DETECT_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-detect.json');
 
@@ -266,9 +267,38 @@ async function tick() {
     }
   }
 
+  // End-of-day report — fire once when the clock first enters the 18:00 NY hour.
+  try { await maybeDailyReport(suppressTelegram); }
+  catch (err) { log.warn('daily report threw', { err: err.message }); }
+
   // End-of-tick heartbeat with a count of results so dashboards see activity
   heartbeat('signal-engine', { phase: 'tick-end', last_result_count: results?.length || 0 });
   await sleep(config.pollIntervalMs);
+}
+
+// ─── End-of-day report ──────────────────────────────────────────────────
+// At 18:00 NY (market close) send a summary of the day. The last-sent date
+// is persisted so a restart inside the 18:00 hour doesn't re-send.
+const DAILY_REPORT_FILE = join(dirname(fileURLToPath(import.meta.url)), 'state', 'daily-report.json');
+let lastReportDate = (() => {
+  try { return JSON.parse(readFileSync(DAILY_REPORT_FILE, 'utf8')).lastSentDate || ''; }
+  catch { return ''; }
+})();
+
+async function maybeDailyReport(suppressTelegram) {
+  const np = nyParts(Date.now() / 1000);
+  if (np.h !== 18) return;                 // only during the 18:00-18:59 NY hour
+  if (lastReportDate === np.dateKey) return; // already sent today
+  lastReportDate = np.dateKey;
+  try { writeFileSync(DAILY_REPORT_FILE, JSON.stringify({ lastSentDate: np.dateKey })); } catch {}
+
+  const { buildDailyReport } = await import('./lib/daily_report.js');
+  const { text } = buildDailyReport();
+  log.info('daily report', { date: np.dateKey });
+  if (!suppressTelegram) {
+    try { await alerter.sendDailyReport(text); }
+    catch (err) { log.warn('daily report send threw', { err: err.message }); }
+  }
 }
 
 export async function run() {

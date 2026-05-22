@@ -303,6 +303,11 @@ export async function sendDown(reason) {
   return postRaw(`⚠️ *OCTAVE STOPPING*\n${tgEscape(reason || '')}`);
 }
 
+/** End-of-day report — pre-formatted text from lib/daily_report.js. */
+export async function sendDailyReport(text) {
+  return postRaw(text);
+}
+
 // ─── Session-change banner ───────────────────────────────────────────────
 
 export async function sendSessionChange({ fromSession, toSession, nowLabel, hint }) {
