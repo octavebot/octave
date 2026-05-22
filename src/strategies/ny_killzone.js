@@ -72,7 +72,7 @@ export function evaluate(ctx) {
     const risk  = entry - stop;
     const sessHi = Math.max(...tf.bars.slice(-20).map((b) => b.high));
     if (risk > 0) out.push(buildTriggered({
-      strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', `fvg-${gap.idx}`),
+      strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', `fvg-${gap.time}`),
       direction: 'LONG', timeframe: '15', confidence: 0.73,
       setupName: 'NY killzone FVG retrace',
       summary: `Bullish FVG ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} retraced into`,
@@ -84,7 +84,7 @@ export function evaluate(ctx) {
     const risk  = stop - entry;
     const sessLo = Math.min(...tf.bars.slice(-20).map((b) => b.low));
     if (risk > 0) out.push(buildTriggered({
-      strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', `fvg-${gap.idx}`),
+      strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', `fvg-${gap.time}`),
       direction: 'SHORT', timeframe: '15', confidence: 0.73,
       setupName: 'NY killzone FVG retrace',
       summary: `Bearish FVG ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} retraced into`,

@@ -1022,9 +1022,14 @@ async function cmdActiveSetups() {
   }
 
   if (fired.length) {
-    lines.push('', section(`Signals fired today (${fired.length})`));
-    for (const a of fired.slice(0, 12)) {
-      lines.push(`\`${nyHHmm(a.time)}\` · #${KEY_TO_NUM[a.strategy] || '?'} ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
+    // Dedupe by setupId — collapse any same-setup re-fires into one line.
+    const seen = new Set();
+    const uniq = fired.filter((a) => { if (seen.has(a.setupId)) return false; seen.add(a.setupId); return true; });
+    const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
+    lines.push('', section(`Signals fired today (${uniq.length})`));
+    for (const a of uniq.slice(0, 12)) {
+      const inst = INST[String(a.setupId || '').split('|')[0]] || '?';
+      lines.push(`\`${nyHHmm(a.time)}\` · *${inst}* · #${KEY_TO_NUM[a.strategy] || '?'} ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
     }
   }
 
