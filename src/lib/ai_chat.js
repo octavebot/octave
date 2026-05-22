@@ -35,7 +35,7 @@ const MAX_TOOL_ROUNDS = 6;
 
 const SYSTEM_PROMPT = `You are Octave's in-bot assistant. The user runs a Telegram trading bot that
 monitors Gold (MGC1!), Nasdaq (MNQ1!), and S&P (MES1!) micro-futures across
-20+ strategies. Be concise, direct, and proactive.
+6 strategies. Be concise, direct, and proactive.
 
 ROLE
 - Answer questions about the bot's state (prices, bias, news, active setups).
@@ -49,7 +49,9 @@ ROLE
 STYLE
 - Telegram. Use Markdown sparingly: *bold* for emphasis, \`code\` for ids/prices.
 - Short. 3-5 lines is usually enough.
-- Never invent prices or stats — call the right tool first.
+- NEVER invent prices, counts, or stats. Call the right tool first. If asked
+  "how many signals" / "how many alerts", you MUST call get_signal_history —
+  do not estimate. If a tool fails, say so plainly; do not make up a number.
 - When you log a journal event, confirm what you wrote.
 - The user's local time zone is America/New_York.
 
@@ -60,9 +62,9 @@ INSTRUMENTS
 
 KNOWN COMMANDS (for context, you don't have to invoke them via tools — you
 can just mention them to the user):
-/menu /status /price /bias /news /strategies /enable <id> /disable <id>
-/mystrategies /addstrategy /editstrategy /delstrategy
-/backtest [id] [days] /fix [component] /diagnose
+/menu /status /price /bias /setups /news /strategies /killzones /playbook
+/enable <num> /disable <num> /mystrategies /addstrategy /delstrategy
+/backtest [days|strategy] /fix [component] /diagnose /regime /coach
 /in /out /be /journal — trade journal`;
 
 const TOOLS = [
@@ -100,6 +102,17 @@ const TOOLS = [
     name: 'list_active_setups',
     description: 'Open follow-up setups (triggered, not yet TP/SL).',
     input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_signal_history',
+    description: 'How many trade signals the bot actually SENT to Telegram, and the list. Use this for ANY "how many signals" question — never guess the count.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: '"today" (default) or "all" for the last 50 sent signals.' },
+      },
+      required: [],
+    },
   },
   // ─── State changes ───
   {
@@ -365,6 +378,44 @@ const toolHandlers = {
     }));
   },
 
+  async get_signal_history({ scope = 'today' } = {}) {
+    const { readFileSync, existsSync } = await import('node:fs');
+    // Same log the bot reads — first existing path wins (VPS vs Mac).
+    const candidates = [
+      '/home/octave/.octave-logs/signal-engine.log',
+      '/Users/jqvier/Library/Logs/trading-alerts/stdout.log',
+      process.env.HOME ? `${process.env.HOME}/.octave-logs/signal-engine.log` : null,
+    ].filter(Boolean);
+    const logPath = candidates.find((p) => existsSync(p));
+    if (!logPath) return { error: 'signal log not found', sentCount: 0, signals: [] };
+
+    const todayKey = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date()).replace(/(\d+)\/(\d+)\/(\d+)/, '$3-$1-$2');
+
+    const sent = [];
+    const lines = readFileSync(logPath, 'utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0 && sent.length < 50; i--) {
+      if (!lines[i].includes('"alert fired"')) continue;
+      try {
+        const e = JSON.parse(lines[i]);
+        // A real signal delivered to the user = triggered AND telegram "sent".
+        if (e.status !== 'triggered' || e.telegram !== 'sent') continue;
+        const t = Date.parse(e.ts);
+        const dayKey = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date(t)).replace(/(\d+)\/(\d+)\/(\d+)/, '$3-$1-$2');
+        if (scope === 'today' && dayKey !== todayKey) continue;
+        sent.push({ ts: e.ts, strategy: e.strategy, setupId: e.setupId, confidence: e.confidence });
+      } catch {}
+    }
+    return {
+      scope, sentCount: sent.length,
+      note: scope === 'today' ? `${sent.length} signal(s) sent today (NY date ${todayKey})` : `last ${sent.length} signals sent`,
+      signals: sent,
+    };
+  },
+
   async enable_strategy({ id }) {
     const cfg = loadCfg(); cfg.strategies = cfg.strategies || {}; cfg.strategies[id] = true; saveCfg(cfg);
     return { ok: true, id, enabled: true };
@@ -527,14 +578,19 @@ export async function chat(chatId, userText) {
   session.push({ role: 'user', content: userText });
   while (session.length > 24) session.shift();
   try {
-    return await chatWithTools({
+    const reply = await chatWithTools({
       system: SYSTEM_PROMPT,
       messages: session,
       tools: TOOLS,
       toolHandlers,
       maxRounds: MAX_TOOL_ROUNDS,
     });
+    session.push({ role: 'assistant', content: reply });
+    return reply;
   } catch (err) {
-    return `⚠️ ${providerLabel()} error: ${err.message}`;
+    // A failed turn must not poison the session — a dangling user/tool_use
+    // message would make every following turn fail too. Reset to clean state.
+    sessions.set(chatId, []);
+    return `⚠️ AI hit an error and reset the chat. Try again.\n_(${err.message})_`;
   }
 }
