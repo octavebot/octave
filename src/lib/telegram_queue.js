@@ -77,8 +77,21 @@ async function tryTelegramCall(call) {
  * @returns {Promise<boolean>}  true if delivered immediately, false if queued
  */
 export async function send(token, method, body) {
-  const res = await tryTelegramCall({ token, method, body });
+  let res = await tryTelegramCall({ token, method, body });
   if (res.ok) return true;
+
+  // Markdown parse failure — Telegram's legacy Markdown is fragile and a
+  // stray * / _ / ` in dynamic text (AI commentary, summaries) breaks the
+  // whole message. Rather than drop it, resend as plain text so the content
+  // still reaches the user; only the bold/italic formatting is lost.
+  if (res.status === 400 && /can't parse entities/i.test(res.body || '') && body?.parse_mode) {
+    const { parse_mode, ...plain } = body;
+    res = await tryTelegramCall({ token, method, body: plain });
+    if (res.ok) {
+      console.warn('[tg-queue] markdown failed — delivered as plain text');
+      return true;
+    }
+  }
 
   // Some failures are permanent — don't queue those (would loop forever).
   // 400 = bad request (invalid markdown, blocked user, etc.)

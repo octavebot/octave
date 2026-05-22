@@ -311,9 +311,12 @@ export async function sendDailyReport(text) {
 // ─── Session-change banner ───────────────────────────────────────────────
 
 export async function sendSessionChange({ fromSession, toSession, nowLabel, hint }) {
+  // Session keys contain underscores (ny_am, ny_pm) — render them as spaces
+  // so they don't open stray Markdown italic entities and break the message.
+  const fmtSess = (s) => String(s || '').toUpperCase().replace(/_/g, ' ');
   const text = [
     '🌍 *SESSION CHANGE*',
-    `${(toSession || '').toUpperCase()}${fromSession ? ` _(was ${String(fromSession).toUpperCase()})_` : ''}`,
+    `${fmtSess(toSession)}${fromSession ? ` _(was ${fmtSess(fromSession)})_` : ''}`,
     nowLabel ? `⏰ ${tgEscape(nowLabel)}` : '',
     hint ? `ℹ️ ${tgEscape(hint)}` : '',
   ].filter(Boolean).join('\n');
