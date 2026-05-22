@@ -153,7 +153,7 @@ function simulateTrade(bars, trade, opts = {}) {
  * @param {string[]} [opts.strategies]  Names to include; default: enabled in config
  * @param {number} [opts.days]          Lookback window in days (default 7)
  * @param {number} [opts.step]          Anchor step in bars (default 1)
- * @param {number} [opts.confMin]       Quality filter on triggered confidence (default 0.7)
+ * @param {number} [opts.confMin]       Optional confidence floor (default 0 — count every setup)
  * @returns {Promise<{ stats, panesSummary, window }>}
  */
 export async function runBacktest(opts = {}) {
@@ -163,7 +163,13 @@ export async function runBacktest(opts = {}) {
   // so a coarser step shifts them and under-reports). The 200-bar context cap
   // keeps step=1 fast enough.
   const step = opts.step ?? 1;
-  const confMin = opts.confMin ?? 0.7;
+  // confMin defaults to 0 — the backtest measures a strategy's RAW performance
+  // over every setup it produces. It must NOT filter on the strategy's own
+  // confidence: confidence is now derived from the win rate, so filtering by it
+  // would be circular (a low-win-rate strategy would be filtered to zero trades
+  // and could never be measured). The live path gates on the AI-adjusted score,
+  // not this number, so counting everything also matches live behaviour.
+  const confMin = opts.confMin ?? 0;
   const cfg = getRuntimeConfig();
   const enabledNames = opts.strategies?.length
     ? opts.strategies
