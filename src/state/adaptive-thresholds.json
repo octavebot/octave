@@ -1,5 +1,23 @@
 {
   "byStrategy": {
+    "AMN": {
+      "wins": 1,
+      "losses": 1,
+      "breakevens": 0,
+      "n": 2,
+      "winRate": 0.5,
+      "recommendedFloor": 0.5,
+      "recommendation": "Not enough data (2/5). Holding static floor 0.5."
+    },
+    "CGT-VWAP": {
+      "wins": 1,
+      "losses": 0,
+      "breakevens": 0,
+      "n": 1,
+      "winRate": 1,
+      "recommendedFloor": 0.5,
+      "recommendation": "Not enough data (1/5). Holding static floor 0.5."
+    },
     "TRINITY": {
       "wins": 1,
       "losses": 0,
@@ -9,7 +27,16 @@
       "recommendedFloor": 0.5,
       "recommendation": "Not enough data (1/5). Holding static floor 0.5."
     },
-    "AMN": {
+    "GEM-FIB": {
+      "wins": 0,
+      "losses": 1,
+      "breakevens": 0,
+      "n": 1,
+      "winRate": 0,
+      "recommendedFloor": 0.5,
+      "recommendation": "Not enough data (1/5). Holding static floor 0.5."
+    },
+    "GEM-ASIA": {
       "wins": 1,
       "losses": 0,
       "breakevens": 0,
@@ -19,5 +46,5 @@
       "recommendation": "Not enough data (1/5). Holding static floor 0.5."
     }
   },
-  "updatedAt": 1779419466079
+  "updatedAt": 1779457708999
 }

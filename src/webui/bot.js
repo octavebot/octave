@@ -90,7 +90,7 @@ let ALLOWED_CHATS = new Set();
 // Commands that change state — restricted to the owner. Everyone else in the
 // group gets signals + read-only info commands.
 const OWNER_ONLY = new Set([
-  '/enable', '/disable', '/mute', '/unmute', '/24h', '/ai-engine', '/aiengine',
+  '/enable', '/disable', '/mute', '/unmute', '/ai-engine', '/aiengine',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy', '/clearchat',
   '/ai', '/backtest',
 ]);
@@ -807,26 +807,6 @@ async function cmdDelStrategy(arg) {
 
 // ── Settings ──
 
-async function cmd24h(arg) {
-  const a = (arg || '').trim().toLowerCase();
-  if (a !== 'on' && a !== 'off' && a !== '') return send('Usage: `/24h on` or `/24h off`');
-  if (a === '') {
-    const on = !!loadConfig()?.bypassKillzones;
-    return send([
-      header('🌐', `24/7 mode · ${on ? 'ON' : 'OFF'}`),
-      '',
-      on ? 'Strategies fire any hour (killzones disabled).' : 'Strategies require killzones (London 02-05 ET, NY 07-10 ET, Trinity 09:30-11 ET).',
-      '',
-      `Toggle: \`/24h ${on ? 'off' : 'on'}\``,
-    ].join('\n'));
-  }
-  const on = a === 'on';
-  await updateConfig((c) => { c.bypassKillzones = on; return c; });
-  await send(on
-    ? '🌐 *24/7 mode ON*\n\nStrategies fire any hour. Expect ~3-5× more alerts, lower average quality.'
-    : '🎯 *24/7 mode OFF*\n\nKillzones enforced — higher quality, fewer alerts.');
-}
-
 async function cmdMute(arg) {
   const minutes = Math.min(1440, Math.max(1, parseInt(arg, 10) || 0));
   if (!minutes) return send('Usage: `/mute <minutes>` (1-1440)');
@@ -974,8 +954,8 @@ async function cmdBias() {
     return send([
       header('⚪', 'NEUTRAL — no signals'),
       '',
-      'Markets in chop, outside killzones, or waiting for sweep.',
-      'Try `/24h on` for any-hour signals (lower quality).',
+      'No directional development right now — markets in chop, outside',
+      'killzone windows, or waiting for a sweep. Check back later.',
     ].join('\n'));
   }
 
@@ -1458,7 +1438,7 @@ const HELP_INDEX = [
   bullet('`/help market`   — bias, setups, price, news'),
   bullet('`/help history`  — today, yesterday, history, range, summary'),
   bullet('`/help strats`   — list, enable/disable, custom strategies'),
-  bullet('`/help settings` — mute, 24/7 mode, backtest'),
+  bullet('`/help settings` — mute, backtest'),
   bullet('`/help journal`  — log entries, exits, stats'),
   bullet('`/help system`   — health, perf, restart, diagnose, fix'),
   bullet('`/help ai`       — free-form chat, file uploads'),
@@ -1507,15 +1487,14 @@ const HELP_TOPICS = {
   settings: [
     header('⚙️', 'Settings commands'),
     '',
-    kv('/24h on|off', 'bypass killzones (any-hour alerts)'),
     kv('/mute <minutes>', 'pause alerts (1-1440)'),
     kv('/unmute', 'resume'),
     '',
     section('Backtest'),
-    kv('/backtest', '30d backtest of enabled strategies'),
-    kv('/backtest <num>', 'single strategy'),
-    kv('/backtest <num> <days>', 'custom window'),
-    '_Auto-runs Sunday 8pm NY._',
+    kv('/backtest', 'cached 30-day result (instant)'),
+    kv('/backtest <num>', 'single strategy, live'),
+    kv('/backtest <days>', 'custom window, live (≤14d)'),
+    '_Cache refreshes nightly at 08:00 UTC._',
   ].join('\n'),
   journal: [
     header('📓', 'Trade journal'),
@@ -1600,7 +1579,6 @@ async function buildMainMenu() {
     header('🎵', 'Octave'),
     '',
     `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/${total} strategies · ${(session.lastSession || 'closed').toUpperCase()} session`,
-    cfg.bypassKillzones ? '🌐 24/7 mode ON' : '',
   ].filter(Boolean).join('\n');
 
   const keyboard = [
@@ -1660,12 +1638,10 @@ function buildSettingsView() {
   const text = [
     header('⚙️', 'Settings'),
     '',
-    `24/7 mode    · ${cfg.bypassKillzones ? '🟢 ON (any hour)' : '⚫ OFF (killzones only)'}`,
     `Chart images · ${cfg.alertChartImages !== false ? '🟢 ON' : '⚫ OFF'}`,
     `Holy AI      · ${aiOn ? '🟢 ON' : '⚫ OFF'} · gate ${aiThr}%`,
   ].join('\n');
   const keyboard = [
-    [{ text: cfg.bypassKillzones ? '⚫ Turn 24/7 OFF' : '🌐 Turn 24/7 ON', callback_data: `set:24h:${cfg.bypassKillzones ? 'off' : 'on'}` }],
     [{ text: cfg.alertChartImages !== false ? '⚫ Disable chart images' : '🟢 Enable chart images', callback_data: `set:charts:${cfg.alertChartImages !== false ? 'off' : 'on'}` }],
     [{ text: aiOn ? '⚫ Disable Holy AI' : '✨ Enable Holy AI', callback_data: `set:ai:${aiOn ? 'off' : 'on'}` }],
     [{ text: '🌡 Regime', callback_data: 'act:regime' }, { text: '🧠 Coach', callback_data: 'act:coach' }],
@@ -1763,8 +1739,7 @@ async function handleCallback(cq) {
 
     if (kind === 'set') {
       const [what, val] = arg.split(':');
-      if (what === '24h')    await updateConfig((c) => { c.bypassKillzones = (val === 'on'); return c; });
-      else if (what === 'charts') await updateConfig((c) => { c.alertChartImages = (val === 'on'); return c; });
+      if (what === 'charts') await updateConfig((c) => { c.alertChartImages = (val === 'on'); return c; });
       else if (what === 'ai') await updateConfig((c) => { c.aiEngine = c.aiEngine || {}; c.aiEngine.enabled = (val === 'on'); return c; });
       else return ackCallback(cq.id, 'unknown setting');
       const v = buildSettingsView();
@@ -1877,7 +1852,7 @@ const COMMANDS = {
   '/playbook': cmdPlaybook, '/killzones': cmdKillzones,
   '/mystrategies': cmdMyStrategies, '/addstrategy': cmdAddStrategy,
   '/delstrategy': cmdDelStrategy,
-  '/24h': cmd24h, '/mute': cmdMute, '/unmute': cmdUnmute,
+  '/mute': cmdMute, '/unmute': cmdUnmute,
   '/backtest': cmdBacktest,
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
   '/note': cmdJournalNote, '/journal': cmdJournal,

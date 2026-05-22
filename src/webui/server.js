@@ -236,7 +236,6 @@ async function saveConfig(updates) {
       if (valid.has(k)) next.strategies[k] = !!v;
     }
   }
-  if (typeof updates.bypassKillzones === 'boolean') next.bypassKillzones = updates.bypassKillzones;
   if (updates.mute && typeof updates.mute === 'object') next.mute = updates.mute;
   next.lastUpdated = Date.now();
   writeJsonAtomic(CONFIG_FILE, next);

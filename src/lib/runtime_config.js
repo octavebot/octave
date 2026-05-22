@@ -3,7 +3,7 @@
  *
  * The file at src/state/runtime-config.json is committed to the repo so both
  * sides read identical settings. Edited via the dashboard, /enable, /disable,
- * /mute, /24h, /ai-engine commands.
+ * /mute, /ai-engine commands.
  *
  * Strategy enable/disable flags are flat: { strategies: { 'STRAT-ID': boolean } }.
  * The known set of strategy IDs is derived at runtime from
@@ -25,7 +25,6 @@ const DEFAULTS = Object.freeze({
   strategies: {},  // populated by registry on first run
   mute: { untilMs: 0, reason: null },
   alertChartImages: false,  // chart images disabled — text-only signal cards
-  bypassKillzones: true,
   aiEngine: { enabled: true, threshold: 0.55 },
   lastUpdated: 0,
 });
@@ -42,7 +41,6 @@ export function load() {
       strategies: { ...(raw.strategies || {}) },
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
       alertChartImages: raw.alertChartImages === true,  // default off
-      bypassKillzones: raw.bypassKillzones === true,
       aiEngine: {
         enabled: raw.aiEngine?.enabled !== false,
         threshold: Number(raw.aiEngine?.threshold) || 0.55,
@@ -87,7 +85,6 @@ export function isStrategyEnabled(key) {
   return cfg.strategies[key] === true;
 }
 
-export function is24x7() { return get().bypassKillzones === true; }
 export function isMuted() { return (get().mute?.untilMs || 0) > Date.now(); }
 export function muteRemainingSec() {
   const until = get().mute?.untilMs || 0;

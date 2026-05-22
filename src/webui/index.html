@@ -525,7 +525,7 @@ function renderState(s) {
   const totalBuiltIn = STRATEGY_META.length;
   const userStrategies = s.user_strategies || [];
   const totalStrategies = totalBuiltIn + userStrategies.length;
-  subEl.textContent = `${enabledCount}/${totalStrategies} strategies enabled${s.config?.bypassKillzones ? ' · 24/7 mode ON' : ''}`;
+  subEl.textContent = `${enabledCount}/${totalStrategies} strategies enabled`;
 
   // Session
   document.getElementById('session-status').textContent =

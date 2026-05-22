@@ -305,7 +305,6 @@ const toolHandlers = {
       enabledStrategies: enabled,
       totalStrategies: Object.keys(cfg.strategies || {}).length,
       muted: cfg.mute?.untilMs > Date.now(),
-      bypassKillzones: !!cfg.bypassKillzones,
       newsBlackout: bo.blocked ? { event: bo.event?.title, minutesAway: bo.minutesAway } : null,
       activeSetups: fu.active().length,
     };
