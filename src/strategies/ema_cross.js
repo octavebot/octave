@@ -7,7 +7,7 @@
 
 import { ema } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'EMA-CROSS',
@@ -87,7 +87,11 @@ export function evaluate(ctx) {
       direction: 'LONG',
       setupName: '9/21 EMA cross in uptrend',
       summary: `H1 above 50-EMA · 9/21 EMA bullish cross on 15m · ATR-sized stop`,
-      confidence: 0.72,
+      confidence: qualityConfidence(meta.id, [
+        Math.abs(e9now - e21now) / a15,                                 // cross separation
+        Math.abs(last.close - last.open) / (last.high - last.low || 1), // cross-bar body
+        Math.abs(lastH1.close - ema50last) / (a60 * 2),                 // H1 trend strength
+      ]),
       timeframe: '15',
       entry, stop,
       t1: entry + 1.2 * risk,
@@ -103,7 +107,11 @@ export function evaluate(ctx) {
       direction: 'SHORT',
       setupName: '9/21 EMA cross in downtrend',
       summary: `H1 below 50-EMA · 9/21 EMA bearish cross on 15m · ATR-sized stop`,
-      confidence: 0.72,
+      confidence: qualityConfidence(meta.id, [
+        Math.abs(e9now - e21now) / a15,                                 // cross separation
+        Math.abs(last.close - last.open) / (last.high - last.low || 1), // cross-bar body
+        Math.abs(lastH1.close - ema50last) / (a60 * 2),                 // H1 trend strength
+      ]),
       timeframe: '15',
       entry, stop,
       t1: entry - 1.2 * risk,

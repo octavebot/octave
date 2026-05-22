@@ -8,7 +8,7 @@
 import { findFVGs, atr } from '../lib/structure.js';
 import { ema } from '../lib/indicators.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'NY-FVG',
@@ -71,9 +71,15 @@ export function evaluate(ctx) {
     const stop  = gap.bottom - 0.5 * a;
     const risk  = entry - stop;
     const sessHi = Math.max(...tf.bars.slice(-20).map((b) => b.high));
+    const gapSize = gap.top - gap.bottom;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', `fvg-${gap.time}`),
-      direction: 'LONG', timeframe: '15', confidence: 0.73,
+      direction: 'LONG', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        gapSize / a,                                        // gap displacement
+        Math.abs(h1.close - e50last) / (e50last * 0.004),   // H1 trend strength
+        1 - Math.abs(last.low - entry) / (gapSize / 2 || 1), // retrace centring
+      ]),
       setupName: 'NY killzone FVG retrace',
       summary: `Bullish FVG ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} retraced into`,
       entry, stop, t1: entry + 1.2 * risk, t2: sessHi,
@@ -83,9 +89,15 @@ export function evaluate(ctx) {
     const stop  = gap.top + 0.5 * a;
     const risk  = stop - entry;
     const sessLo = Math.min(...tf.bars.slice(-20).map((b) => b.low));
+    const gapSize = gap.top - gap.bottom;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', `fvg-${gap.time}`),
-      direction: 'SHORT', timeframe: '15', confidence: 0.73,
+      direction: 'SHORT', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        gapSize / a,                                         // gap displacement
+        Math.abs(h1.close - e50last) / (e50last * 0.004),    // H1 trend strength
+        1 - Math.abs(last.high - entry) / (gapSize / 2 || 1), // retrace centring
+      ]),
       setupName: 'NY killzone FVG retrace',
       summary: `Bearish FVG ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} retraced into`,
       entry, stop, t1: entry - 1.2 * risk, t2: sessLo,

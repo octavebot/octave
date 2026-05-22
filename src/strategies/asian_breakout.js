@@ -8,7 +8,7 @@
 import { ema } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'ASIAN-BREAKOUT',
@@ -83,7 +83,12 @@ export function evaluate(ctx) {
     const entry = last.close, stop = asianMid, risk = entry - stop;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', 'asian-bo'),
-      direction: 'LONG', timeframe: '15', confidence: 0.71,
+      direction: 'LONG', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (body / range - 0.62) / 0.38,                   // breakout bar body
+        (last.close - asianHi - margin) / a15,          // close beyond range
+        Math.abs(h1.close - e50last) / (a15 * 2),       // H1 trend strength
+      ]),
       setupName: 'Asian range bullish breakout',
       summary: `Asian range $${asianRange.toFixed(2)} · close above $${asianHi.toFixed(2)}`,
       entry, stop, t1: entry + 1.2 * asianRange, t2: entry + 1.8 * asianRange,
@@ -92,7 +97,12 @@ export function evaluate(ctx) {
     const entry = last.close, stop = asianMid, risk = stop - entry;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', 'asian-bo'),
-      direction: 'SHORT', timeframe: '15', confidence: 0.71,
+      direction: 'SHORT', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (body / range - 0.62) / 0.38,                   // breakout bar body
+        (asianLo - margin - last.close) / a15,          // close beyond range
+        Math.abs(h1.close - e50last) / (a15 * 2),       // H1 trend strength
+      ]),
       setupName: 'Asian range bearish breakout',
       summary: `Asian range $${asianRange.toFixed(2)} · close below $${asianLo.toFixed(2)}`,
       entry, stop,

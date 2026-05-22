@@ -9,7 +9,7 @@
 import { isPinBar, isEngulfing } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyDayStartUnix } from '../lib/time.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'VPOC-RETEST',
@@ -76,7 +76,12 @@ export function evaluate(ctx) {
     const entry = last.close, stop = last.high + a, risk = stop - entry;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', 'poc'),
-      direction: 'SHORT', timeframe: '15', confidence: 0.71,
+      direction: 'SHORT', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        1 - Math.abs(last.high - poc) / (tol || 1),                                 // wick precision at POC
+        (last.high - Math.max(last.open, last.close)) / (last.high - last.low || 1), // upper-wick rejection
+        (poc - last.close) / a,                                                     // close-back below POC
+      ]),
       setupName: 'POC retest from above', summary: `Prior-day POC ${poc.toFixed(2)} rejected from above`,
       entry, stop, t1: entry - 1.2 * risk, t2: sessLo,
     }));
@@ -85,7 +90,12 @@ export function evaluate(ctx) {
     const entry = last.close, stop = last.low - a, risk = entry - stop;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', 'poc'),
-      direction: 'LONG', timeframe: '15', confidence: 0.71,
+      direction: 'LONG', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        1 - Math.abs(last.low - poc) / (tol || 1),                                 // wick precision at POC
+        (Math.min(last.open, last.close) - last.low) / (last.high - last.low || 1), // lower-wick rejection
+        (last.close - poc) / a,                                                    // close-back above POC
+      ]),
       setupName: 'POC retest from below', summary: `Prior-day POC ${poc.toFixed(2)} bounced from below`,
       entry, stop, t1: entry + 1.2 * risk, t2: sessHi,
     }));

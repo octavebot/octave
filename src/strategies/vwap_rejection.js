@@ -8,7 +8,7 @@
 import { vwap } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyDayStartUnix } from '../lib/time.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'VWAP-REJ',
@@ -64,7 +64,12 @@ export function evaluate(ctx) {
     const risk  = entry - stop;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', 'vwap'),
-      direction: 'LONG', timeframe: '15', confidence: 0.7,
+      direction: 'LONG', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (last.close - vwapVal) / (a * 1.5),    // body holds above VWAP
+        (vwapVal - last.low) / a,              // wick depth into VWAP
+        (last.close - sessOpen) / (a * 3),     // day trend strength
+      ]),
       setupName: 'VWAP rejection · long', summary: `Day bullish · wick into VWAP $${vwapVal.toFixed(2)} · body holds above`,
       entry, stop, t1: entry + 1.2 * risk, t2: sessHi,
     }));
@@ -74,7 +79,12 @@ export function evaluate(ctx) {
     const risk  = stop - entry;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', 'vwap'),
-      direction: 'SHORT', timeframe: '15', confidence: 0.7,
+      direction: 'SHORT', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (vwapVal - last.close) / (a * 1.5),    // body holds below VWAP
+        (last.high - vwapVal) / a,             // wick depth into VWAP
+        (sessOpen - last.close) / (a * 3),     // day trend strength
+      ]),
       setupName: 'VWAP rejection · short', summary: `Day bearish · wick into VWAP $${vwapVal.toFixed(2)} · body holds below`,
       entry, stop, t1: entry - 1.2 * risk, t2: sessLo,
     }));

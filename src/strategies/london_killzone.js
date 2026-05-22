@@ -7,7 +7,7 @@
 
 import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
   id: 'LONDON-SWEEP',
@@ -72,7 +72,12 @@ export function evaluate(ctx) {
     const risk  = stop - entry;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', 'asian-hi'),
-      direction: 'SHORT', timeframe: '15', confidence: 0.74,
+      direction: 'SHORT', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (last.high - asianHi) / a,                                                  // sweep depth
+        (asianHi - last.close) / a,                                                 // body closed back inside
+        (last.high - Math.max(last.open, last.close)) / (last.high - last.low || 1), // upper-wick rejection
+      ]),
       setupName: 'London sweep of Asian high',
       summary: `Asian high $${asianHi.toFixed(2)} swept · body closed inside`,
       entry, stop, t1: entry - 1.3 * risk, t2: asianLo,
@@ -84,7 +89,12 @@ export function evaluate(ctx) {
     const risk  = entry - stop;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', 'asian-lo'),
-      direction: 'LONG', timeframe: '15', confidence: 0.74,
+      direction: 'LONG', timeframe: '15',
+      confidence: qualityConfidence(meta.id, [
+        (asianLo - last.low) / a,                                                    // sweep depth
+        (last.close - asianLo) / a,                                                  // body closed back inside
+        (Math.min(last.open, last.close) - last.low) / (last.high - last.low || 1),   // lower-wick rejection
+      ]),
       setupName: 'London sweep of Asian low',
       summary: `Asian low $${asianLo.toFixed(2)} swept · body closed inside`,
       entry, stop, t1: entry + 1.3 * risk, t2: asianHi,
