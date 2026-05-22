@@ -17,12 +17,12 @@ systemctl restart octave-tunnel
 sleep 12
 
 echo "→ Restarting services…"
-systemctl restart octave-webui octave-telegram octave-signal-engine octave-watchdog 2>/dev/null || true
+systemctl restart octave-webui octave-telegram octave-signal-engine octave-watchdog octave-tunnel-watcher 2>/dev/null || true
 sleep 3
 
 echo
 echo "=== Status ==="
-for svc in octave-webui octave-telegram octave-signal-engine octave-watchdog octave-tunnel; do
+for svc in octave-webui octave-telegram octave-signal-engine octave-watchdog octave-tunnel octave-tunnel-watcher; do
   state=$(systemctl is-active "$svc" 2>&1 | head -1)
   echo "  $svc: $state"
 done

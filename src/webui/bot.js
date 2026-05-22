@@ -73,30 +73,71 @@ async function loadStrategies() {
   }
 }
 
-// ─── CREDENTIALS ─────────────────────────────────────────────────────────
+// ─── CREDENTIALS + ACCESS CONTROL ────────────────────────────────────────
+//
+//   TOKEN          — bot token.
+//   CHAT_ID        — primary signal destination (the shared group, or the
+//                    owner's DM before a group is set up).
+//   OWNER_ID       — the owner's personal Telegram USER id. Owner-only
+//                    commands (enable/disable/mute/restart/…) check this so
+//                    friends in the group stay read-only.
+//   ALLOWED_CHATS  — every chat the bot accepts commands from (signal group
+//                    + owner DM + anything in OCTAVE_ALLOWED_CHATS).
 
-let TOKEN = '', CHAT_ID = '';
-function loadCreds() {
-  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-    TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-    CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-    return true;
-  }
+let TOKEN = '', CHAT_ID = '', OWNER_ID = '';
+let ALLOWED_CHATS = new Set();
+
+// Commands that change state — restricted to the owner. Everyone else in the
+// group gets signals + read-only info commands.
+const OWNER_ONLY = new Set([
+  '/enable', '/disable', '/mute', '/unmute', '/24h', '/ai-engine', '/aiengine',
+  '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy', '/clearchat',
+  '/ai', '/backtest',
+]);
+
+function mergedEnv() {
+  const env = { ...process.env };
   for (const p of ENV_FILE_CANDIDATES) {
     if (!existsSync(p)) continue;
     try {
-      const env = Object.fromEntries(
-        readFileSync(p, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
-      );
-      if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-        TOKEN = env.TELEGRAM_BOT_TOKEN; CHAT_ID = env.TELEGRAM_CHAT_ID; return true;
+      for (const l of readFileSync(p, 'utf8').split('\n')) {
+        if (!l.includes('=') || l.trim().startsWith('#')) continue;
+        const [k, v] = l.split('=', 2);
+        if (env[k.trim()] == null) env[k.trim()] = v.trim();
       }
     } catch {}
   }
-  return false;
+  return env;
 }
 
+function loadCreds() {
+  const env = mergedEnv();
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return false;
+  TOKEN = env.TELEGRAM_BOT_TOKEN;
+  CHAT_ID = env.TELEGRAM_CHAT_ID;
+  // Owner = explicit OCTAVE_OWNER_ID, else the original chat id (a DM chat id
+  // equals the user's own Telegram user id).
+  OWNER_ID = env.OCTAVE_OWNER_ID || CHAT_ID;
+  ALLOWED_CHATS = new Set([String(CHAT_ID), String(OWNER_ID)]);
+  for (const c of String(env.OCTAVE_ALLOWED_CHATS || '').split(',')) {
+    const t = c.trim();
+    if (t) ALLOWED_CHATS.add(t);
+  }
+  return true;
+}
+
+/** True if this Telegram user id is the owner. */
+function isOwner(userId) { return String(userId) === String(OWNER_ID); }
+/** True if the bot should accept commands from this chat. */
+function isAllowedChat(chatId) { return ALLOWED_CHATS.has(String(chatId)); }
+
 // ─── TELEGRAM TRANSPORT ──────────────────────────────────────────────────
+
+// Where command replies go. Set per-update to the originating chat so an
+// owner command in a private DM doesn't leak its reply into the group.
+// Defaults to CHAT_ID (the signal group).
+let replyChat = '';
+function replyTarget() { return replyChat || CHAT_ID; }
 
 function tgEscape(s) {
   return String(s).replace(/([_*`\[])/g, '\\$1');
@@ -104,7 +145,7 @@ function tgEscape(s) {
 
 async function send(text, opts = {}) {
   const body = {
-    chat_id: CHAT_ID, text,
+    chat_id: replyTarget(), text,
     parse_mode: opts.html ? 'HTML' : 'Markdown',
     disable_web_page_preview: true,
   };
@@ -149,7 +190,7 @@ async function sendDocument(filePath, caption = '') {
   try {
     const bytes = readFileSync(filePath);
     const form = new FormData();
-    form.append('chat_id', String(CHAT_ID));
+    form.append('chat_id', String(replyTarget()));
     if (caption) { form.append('caption', caption); form.append('parse_mode', 'Markdown'); }
     form.append('document', new Blob([bytes], { type: 'application/pdf' }), filePath.split('/').pop());
     const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, { method: 'POST', body: form });
@@ -1004,7 +1045,7 @@ async function cmdSetup(arg) {
     const caption = text.length <= 1024 ? text : text.slice(0, 980) + '…';
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHAT_ID, photo: chartUrl, caption, parse_mode: 'Markdown' }),
+      body: JSON.stringify({ chat_id: replyTarget(), photo: chartUrl, caption, parse_mode: 'Markdown' }),
     }).catch(() => {});
     if (text.length > 1024) await send(text);
   } else await send(lines.join('\n'));
@@ -1204,20 +1245,21 @@ async function cmdAi(arg) {
 
 async function cmdClearChat() {
   const ai = await import('../lib/ai_chat.js');
-  ai.clearSession(CHAT_ID);
+  ai.clearSession(replyTarget());
   await send('🧹 Chat memory cleared. Next message starts a fresh thread.');
 }
 
 async function runAiChat(userText) {
+  const chat = replyTarget();
   try {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendChatAction`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHAT_ID, action: 'typing' }),
+      body: JSON.stringify({ chat_id: chat, action: 'typing' }),
     });
   } catch {}
   try {
     const ai = await import('../lib/ai_chat.js');
-    const reply = await ai.chat(CHAT_ID, userText);
+    const reply = await ai.chat(chat, userText);
     await send(reply);
   } catch (err) {
     await send(`⚠️ AI error: ${err.message}\n\nFalls back to commands — send \`/help\`.`);
@@ -1603,15 +1645,26 @@ async function cmdMenu() {
 
 // ─── CALLBACK DISPATCHER ─────────────────────────────────────────────────
 
+// Inline-button kinds that change state — owner only. 'view' (navigation),
+// and 'act' verbs that just display info, are open to everyone in the group.
+const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt']);
+const OWNER_ONLY_ACTS = new Set(['restart', 'shutdown-confirm', 'shutdown-do']);
+
 async function handleCallback(cq) {
-  if (String(cq.from?.id) !== String(CHAT_ID) && String(cq.message?.chat?.id) !== String(CHAT_ID)) {
-    return ackCallback(cq.id, 'unauthorized');
-  }
-  const data = cq.data || '';
   const chatId = cq.message?.chat?.id;
+  if (!isAllowedChat(chatId)) return ackCallback(cq.id, 'unauthorized');
+  replyChat = chatId;
+  const data = cq.data || '';
   const messageId = cq.message?.message_id;
   const [kind, ...rest] = data.split(':');
   const arg = rest.join(':');
+  const owner = isOwner(cq.from?.id);
+
+  // Gate state-changing taps to the owner.
+  const actVerb = kind === 'act' ? arg.split(':')[0] : '';
+  if ((OWNER_ONLY_CALLBACKS.has(kind) || (kind === 'act' && OWNER_ONLY_ACTS.has(actVerb))) && !owner) {
+    return ackCallback(cq.id, '🔒 Owner only');
+  }
 
   try {
     if (kind === 'view') {
@@ -1786,23 +1839,65 @@ const COMMANDS = {
 async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
   if (!msg) return;
-  if (String(msg.chat?.id) !== String(CHAT_ID)) {
-    console.log('[bot] ignored msg from chat', msg.chat?.id);
+  const chatId = msg.chat?.id;
+  replyChat = chatId; // route this turn's replies to the originating chat
+
+  // Bot added to a group → announce the chat id so it can be wired up.
+  if (Array.isArray(msg.new_chat_members) && msg.new_chat_members.some((u) => u.is_bot)) {
+    await send([
+      header('🎵', 'Octave added to this group'),
+      '',
+      'Group chat id:',
+      `\`${chatId}\``,
+      '',
+      'Send that id to the admin to start receiving signals here.',
+    ].join('\n'));
     return;
   }
+
+  const rawText = (msg.text || '').trim();
+
+  // /chatid works from ANY chat — the discovery tool for wiring up a new group.
+  if (/^\/(chatid|id)(@\w+)?$/i.test(rawText)) {
+    const kind = msg.chat?.type === 'private' ? 'your DM' : 'this group';
+    await send(`Chat id: \`${chatId}\`  _(${kind})_`);
+    return;
+  }
+
+  // Access gate — signal group + owner DM + OCTAVE_ALLOWED_CHATS only.
+  if (!isAllowedChat(chatId)) {
+    console.log('[bot] ignored msg from unauthorized chat', chatId);
+    return;
+  }
+
+  const owner = isOwner(msg.from?.id);
+
+  // File upload → AI strategy extraction. Owner only — it changes the set.
   const fileObj = msg.document
     || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null)
     || msg.video || msg.audio;
-  if (fileObj?.file_id) return handleStrategyUpload(fileObj, msg.caption || '');
-  if (!msg.text) return;
+  if (fileObj?.file_id) {
+    if (!owner) return send('🔒 Only the owner can add strategies.');
+    return handleStrategyUpload(fileObj, msg.caption || '');
+  }
+  if (!rawText) return;
 
-  const text = msg.text.trim();
-  const m = /^\/([a-z0-9_-]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i.exec(text);
-  if (!m) return runAiChat(text);
+  const m = /^\/([a-z0-9_-]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i.exec(rawText);
+  if (!m) {
+    // Free-form text → AI chat, but ONLY in the owner's private DM. In a group
+    // the bot must stay quiet during ordinary conversation (use /ai there).
+    if (msg.chat?.type === 'private' && owner) return runAiChat(rawText);
+    return;
+  }
   const cmd = '/' + m[1].toLowerCase();
   const arg = m[2] ? m[2].trim() : '';
   const handler = COMMANDS[cmd];
   if (!handler) return send(`Unknown command: \`${cmd}\`\n\nSend \`/help\` for the list.`);
+
+  // Owner-only gate for state-changing / heavy commands.
+  if (OWNER_ONLY.has(cmd) && !owner) {
+    return send('🔒 *Owner only.* This command changes settings for everyone — ask the admin.');
+  }
   try { await handler(arg); }
   catch (err) {
     console.error(`[bot] handler ${cmd} threw:`, err.message);

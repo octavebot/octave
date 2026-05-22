@@ -27,15 +27,21 @@ let lastUrl = '';
 try { lastUrl = readFileSync(URL_FILE, 'utf8').trim(); } catch {}
 
 function loadCreds() {
-  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-    return { token: process.env.TELEGRAM_BOT_TOKEN, chat: process.env.TELEGRAM_CHAT_ID };
-  }
+  // Read the .env FILE first — it is the live source of truth. process.env
+  // can hold a stale token from a systemd EnvironmentFile loaded at an old
+  // start time (this is exactly what sent URLs to the retired bot).
   try {
     const env = Object.fromEntries(
       readFileSync(ENV_FILE, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
     );
-    return { token: env.TELEGRAM_BOT_TOKEN, chat: env.TELEGRAM_CHAT_ID };
-  } catch { return { token: null, chat: null }; }
+    const token = (env.TELEGRAM_BOT_TOKEN || '').trim();
+    const chat = (env.TELEGRAM_CHAT_ID || '').trim();
+    if (token && chat) return { token, chat };
+  } catch {}
+  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+    return { token: process.env.TELEGRAM_BOT_TOKEN, chat: process.env.TELEGRAM_CHAT_ID };
+  }
+  return { token: null, chat: null };
 }
 
 async function notify(newUrl) {
