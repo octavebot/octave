@@ -482,61 +482,85 @@ export async function runBacktest(opts = {}) {
 }
 
 // ---------- Suggestion engine ----------
-// Heuristic refinements based on observed stats. Output suggestions only;
-// user opts in by editing strategy code or /apply (TBD). Never auto-modify.
+// One accurate, data-grounded read per strategy. Every line cites the real
+// numbers from this run; nothing references a mechanic a strategy doesn't
+// have. A low sample is reported honestly rather than "loosen something".
+// Output only — never auto-modifies code.
 
 export function suggestionsFor(stats) {
   const out = [];
+  const pct = (x) => (x * 100).toFixed(0);
+  const r = (n) => (n >= 0 ? '+' : '') + n.toFixed(2);
+
   for (const s of Object.values(stats)) {
-    const tc = s.tradeCount;
-    if (tc === 0) {
+    const tc = s.tradeCount || 0;
+    const wr = s.winRate || 0;
+    const pf = s.profitFactor || 0;
+    const avgR = s.avgR || 0;
+
+    // ── Too few trades to judge — say so plainly ──
+    if (tc < 8) {
       out.push({
-        strategy: s.name, num: s.num,
-        suggestion: 'No trades fired this week. Consider widening proximity thresholds or relaxing required confluences. May also indicate quiet market — re-check next week.',
-        kind: 'no-trades',
+        strategy: s.name, num: s.num, kind: 'low-sample',
+        suggestion: tc === 0
+          ? 'No setups in this window — a quiet stretch for this strategy, not necessarily a fault. Judge it over a full 30-day window.'
+          : `Only ${tc} setup${tc === 1 ? '' : 's'} in this window — too thin to draw a conclusion. Re-check over 30 days before changing anything.`,
       });
       continue;
     }
-    // 1) Win rate too low
-    if (s.winRate < 0.33 && tc >= 5) {
-      out.push({
-        strategy: s.name, num: s.num,
-        suggestion: `Win rate ${(s.winRate*100).toFixed(0)}% on ${tc} trades. Try tightening MSS displacement threshold (1.0→1.3 ATR) or requiring confidence ≥ 0.80 to filter weak setups.`,
-        kind: 'low-winrate',
+
+    // ── Primary verdict — grounded in profit factor, win rate, expectancy ──
+    let kind, verdict;
+    if (avgR <= 0 || pf < 1) {
+      kind = 'losing';
+      verdict = `Losing — ${pct(wr)}% win · PF ${pf.toFixed(2)} · ${r(avgR)}R/trade over ${tc} trades. Weak setups are getting through; tighten the entry trigger or raise the confidence floor before any live use.`;
+    } else if (pf < 1.3) {
+      kind = 'marginal';
+      verdict = `Marginal — ${pct(wr)}% win · PF ${pf.toFixed(2)} · ${r(avgR)}R/trade over ${tc} trades. Profitable but the edge is thin; tighten entry quality before sizing up.`;
+    } else if (pf >= 2 && wr >= 0.6) {
+      kind = 'healthy';
+      verdict = `Strong — ${pct(wr)}% win · PF ${pf.toFixed(2)} · ${r(avgR)}R/trade over ${tc} trades. Hold the settings — a candidate for larger size or live trading.`;
+    } else {
+      kind = 'healthy';
+      verdict = `Solid — ${pct(wr)}% win · PF ${pf.toFixed(2)} · ${r(avgR)}R/trade over ${tc} trades. Profitable and stable; hold current settings.`;
+    }
+
+    // ── Best secondary insight — at most one, only when material ──
+    const insights = [];
+    if (s.longCount >= 6 && s.shortCount >= 6) {
+      const gap = Math.abs((s.longWinRate || 0) - (s.shortWinRate || 0));
+      if (gap >= 0.20) {
+        const longBetter = s.longWinRate > s.shortWinRate;
+        insights.push({
+          w: gap,
+          text: `Directional skew — longs ${pct(s.longWinRate)}%, shorts ${pct(s.shortWinRate)}%. The ${longBetter ? 'short' : 'long'} side drags it; a ${longBetter ? 'long' : 'short'}-only variant would score higher.`,
+        });
+      }
+    }
+    const insts = Object.entries(s.byInstrument || {}).filter(([, v]) => (v.tradeCount || 0) >= 5);
+    if (insts.length >= 2) {
+      insts.sort((a, b) => b[1].winRate - a[1].winRate);
+      const best = insts[0], worst = insts[insts.length - 1];
+      const gap = best[1].winRate - worst[1].winRate;
+      if (gap >= 0.25) {
+        insights.push({
+          w: gap,
+          text: `Instrument skew — ${best[0]} ${pct(best[1].winRate)}% vs ${worst[0]} ${pct(worst[1].winRate)}%. ${worst[0]} is the weak market for this setup.`,
+        });
+      }
+    }
+    if (s.aPlusCount >= 4 && s.aPlusWinRate > wr + 0.12) {
+      insights.push({
+        w: s.aPlusWinRate - wr,
+        text: `Confidence edge — the ${s.aPlusCount} top-confidence setups won ${pct(s.aPlusWinRate)}% vs ${pct(wr)}% overall. Acting only on the highest-confidence signals lifts quality.`,
       });
     }
-    // 2) Negative expectancy
-    if (s.avgR < 0 && tc >= 5) {
-      out.push({
-        strategy: s.name, num: s.num,
-        suggestion: `Avg ${s.avgR.toFixed(2)}R/trade is negative. Most exits hit SL — widen stop buffer (e.g. 0.1→0.3 ATR) so normal noise doesn't blow up trades.`,
-        kind: 'negative-expectancy',
-      });
-    }
-    // 3) Few setups
-    if (tc < 3) {
-      out.push({
-        strategy: s.name, num: s.num,
-        suggestion: `Only ${tc} setup${tc === 1 ? '' : 's'} fired. Loosen sweep-detection lookback or accept lower confidence (0.7→0.6) for more action — but watch win rate.`,
-        kind: 'few-setups',
-      });
-    }
-    // 4) A+ subset materially better
-    if (s.aPlusCount >= 3 && s.aPlusWinRate > s.winRate + 0.15) {
-      out.push({
-        strategy: s.name, num: s.num,
-        suggestion: `A+ subset (conf≥0.85): ${s.aPlusCount} trades at ${(s.aPlusWinRate*100).toFixed(0)}% win rate vs ${(s.winRate*100).toFixed(0)}% overall. Consider raising confMin to 0.85 — fewer trades but materially higher quality.`,
-        kind: 'a-plus-edge',
-      });
-    }
-    // 5) Excellent: net + and decent win rate
-    if (s.avgR >= 0.3 && s.winRate >= 0.4 && tc >= 5) {
-      out.push({
-        strategy: s.name, num: s.num,
-        suggestion: `Performing well: ${(s.winRate*100).toFixed(0)}% wins, ${s.avgR.toFixed(2)}R/trade. Hold current settings; consider increasing position size or applying to live.`,
-        kind: 'healthy',
-      });
-    }
+    insights.sort((a, b) => b.w - a.w);
+
+    out.push({
+      strategy: s.name, num: s.num, kind,
+      suggestion: insights.length ? `${verdict}\n↳ ${insights[0].text}` : verdict,
+    });
   }
   return out;
 }
