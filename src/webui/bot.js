@@ -850,7 +850,10 @@ async function cmdBacktest(arg) {
   }
   await send(`⏳ Running ${days}-day backtest${strategy ? ` for *${strategy}*` : ' for all enabled strategies'}…\n_Runs in isolated process; bot stays responsive._`);
 
-  const args = ['scripts/run-backtest-child.js', '--days', String(days)];
+  // Hard heap cap so the backtest can never exhaust RAM and thrash the VPS
+  // into swap. If a run genuinely needs more it crashes cleanly (the bot is a
+  // separate process and survives) instead of taking the box down.
+  const args = ['--max-old-space-size=320', 'scripts/run-backtest-child.js', '--days', String(days)];
   if (strategy) args.push('--strategy', strategy);
   const child = spawn(process.execPath, args, { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
 
