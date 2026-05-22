@@ -132,8 +132,20 @@ async function buildSignalCard(r, ctx) {
   lines.push(`${dirIcon} *${r.direction}*   ·   *${inst.label.toUpperCase()}*`);
   lines.push(`\`${inst.symbol}\``);
   lines.push('');
+  // Limit vs market: a LONG fills on a dip to entry, a SHORT on a rally to
+  // entry. If the current price is already at/through the entry it's a market
+  // fill; otherwise it's a resting limit and you wait for the FILLED alert.
+  const last = ctx.lastClose;
+  let entryMode = '';
+  if (last != null) {
+    const fillsNow = r.direction === 'LONG' ? last <= ep.entry : last >= ep.entry;
+    entryMode = fillsNow
+      ? '  🟢 Market — fillable now'
+      : '  ⏳ Limit — wait for price to reach the zone';
+  }
   lines.push('┌ *Entry Zone* ──────────');
   lines.push(`  \`${fmtPrice(zLo)}\` — \`${fmtPrice(zHi)}\``);
+  if (entryMode) lines.push(entryMode);
   lines.push('');
   lines.push('├ *Take Profit* ─────────');
   if (ep.t1 != null) lines.push(`  🎯 TP1  →  \`${fmtPrice(ep.t1)}\``);
@@ -203,6 +215,22 @@ export async function sendFollowUp({ setup, milestone, currentPrice }) {
   const dir = setup.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
   let head, body;
   switch (milestone) {
+    case 'filled':
+      head = '✅ *LIMIT FILLED — TRADE LIVE*';
+      body = `Entered at \`${fmt(setup.entry)}\`.\n🛑 SL \`${fmt(setup.stop)}\`  ·  🎯 TP1 \`${fmt(setup.t1)}\`  ·  🎯 TP2 \`${fmt(setup.t2)}\``;
+      break;
+    case 'invalidated':
+      head = '❌ *SETUP INVALIDATED*';
+      body = `Price blew past the entry to the stop without a clean fill. *Cancel the limit* — no trade.`;
+      break;
+    case 'missed':
+      head = '⏭ *SETUP MISSED*';
+      body = `Price ran to the first target without pulling back to fill. *Cancel the limit* — don't chase.`;
+      break;
+    case 'unfilled':
+      head = '⌛ *LIMIT EXPIRED — UNFILLED*';
+      body = `The limit at \`${fmt(setup.entry)}\` never triggered within the window. *Cancel the order* — no trade.`;
+      break;
     case 'be':
       head = '🟡 *MOVE TO BREAKEVEN*';
       body = `+1R reached. Drag SL to entry \`${fmt(setup.entry)}\` — trade is now risk-free.`;

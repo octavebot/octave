@@ -1,18 +1,24 @@
 /**
- * Follow-up tracker for triggered setups.
+ * Follow-up tracker — full limit-order lifecycle.
  *
- * When a setup is triggered, we register it here. On each detector tick the
- * tracker is given the latest gold price; it walks every active setup and
- * fires one Telegram follow-up message per milestone:
+ * A triggered setup is a LIMIT order, not an instant fill. Each setup moves
+ * through phases, and the tracker fires one Telegram follow-up per transition:
  *
- *   - "Move SL to breakeven" when price reaches +1R (favorable)
- *   - "TP1 hit"  when price crosses TP1
- *   - "TP2 hit"  when price crosses TP2
- *   - "SL hit"   when price retraces past the stop
- *   - "Expired"  when more than EXPIRY_HOURS pass without resolution
+ *   PENDING (limit placed, waiting for price to reach the entry)
+ *     → filled        price reached the entry → trade is now live
+ *     → invalidated   price blew through the entry to the stop — no clean fill
+ *     → missed        price ran to TP1 without ever pulling back to fill
+ *     → unfilled      the fill window elapsed — limit never triggered
  *
- * Each milestone is recorded so the same one can't fire twice. State persists
- * to src/state/follow-ups.json across restarts.
+ *   LIVE (filled, trade active)
+ *     → be    +1R reached — move stop to breakeven
+ *     → tp1   first target hit
+ *     → tp2   second target hit
+ *     → runner / sl / expired
+ *
+ * Setups registered before this lifecycle existed (no `phase` field) are
+ * treated as already-live, preserving the old behaviour. State persists to
+ * src/state/follow-ups.json across restarts.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
@@ -24,7 +30,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STATE_FILE = join(__dirname, '..', 'state', 'follow-ups.json');
 
-const EXPIRY_HOURS = 24;
+const EXPIRY_HOURS = 24;          // a LIVE trade auto-expires this long after fill
+const FILL_WINDOW_HOURS = 4;      // a PENDING limit is cancelled if unfilled this long
 
 function load() {
   if (!existsSync(STATE_FILE)) {
@@ -75,8 +82,11 @@ export function register(r) {
     t2: ep.t2 ?? null,
     runner: ep.runner ?? null,
     risk,
+    phase: 'pending',      // pending → live → (closed)
+    placedAt: Date.now(),
+    filledAt: null,
     createdAt: Date.now(),
-    milestonesFired: {},   // be | tp1 | tp2 | runner | sl | expired -> true
+    milestonesFired: {},   // filled | be | tp1 | tp2 | runner | sl | expired -> true
     closedAt: null,
     closedReason: null,
   };
@@ -90,7 +100,7 @@ export function register(r) {
  * @param {number|object} priceOrPriceMap  Either a single price (legacy: assumed
  *   gold) or a map keyed by instrument: `{ gold: 4520.0, nasdaq: 29380, sp: 7430 }`.
  *   Setups are matched against the price for their own instrument.
- * @returns {Array<{setup: object, milestone: 'be'|'tp1'|'tp2'|'runner'|'sl'|'expired'}>}
+ * @returns {Array<{setup: object, milestone: 'filled'|'invalidated'|'missed'|'unfilled'|'be'|'tp1'|'tp2'|'runner'|'sl'|'expired'}>}
  */
 export function step(priceOrPriceMap) {
   const priceMap = (typeof priceOrPriceMap === 'object' && priceOrPriceMap)
@@ -106,8 +116,49 @@ export function step(priceOrPriceMap) {
     const price = priceMap[s.instrument || 'gold'];
     if (price == null || !Number.isFinite(price)) continue;
 
-    // Expiry check first — a setup we never reached BE on but it's been 24h
-    if (now - s.createdAt > EXPIRY_HOURS * 3600 * 1000) {
+    const long = s.direction === 'LONG';
+    const fav = (level) => long ? price >= level : price <= level;
+    const adv = (level) => long ? price <= level : price >= level;
+    const bePrice = long ? s.entry + s.risk : s.entry - s.risk;
+
+    // ─── PENDING phase — limit order not yet filled ──────────────────────
+    // (Setups from before the lifecycle existed have no `phase` → treated as
+    //  already live, so this block is skipped for them.)
+    if (s.phase === 'pending') {
+      // Fill: price reached the limit entry (LONG fills on a dip to entry,
+      // SHORT on a rally to entry). A setup whose entry is at the current
+      // price fills on the very first tick — that is the "market" case.
+      const reachedEntry = long ? price <= s.entry : price >= s.entry;
+      // Blown through: price gapped past the entry all the way to the stop.
+      const pastStop = adv(s.stop);
+      // Missed: price ran to the first target without ever filling.
+      const ranToTarget = s.t1 != null && fav(s.t1);
+      const unfilledExpired = now - (s.placedAt || s.createdAt) > FILL_WINDOW_HOURS * 3600 * 1000;
+
+      if (pastStop) {
+        s.phase = 'closed'; s.closedAt = now; s.closedReason = 'invalidated';
+        events.push({ setup: { ...s }, milestone: 'invalidated' });
+        dirty = true;
+      } else if (reachedEntry) {
+        s.phase = 'live'; s.filledAt = now; s.milestonesFired.filled = true;
+        events.push({ setup: { ...s }, milestone: 'filled' });
+        dirty = true;
+      } else if (ranToTarget) {
+        s.phase = 'closed'; s.closedAt = now; s.closedReason = 'missed';
+        events.push({ setup: { ...s }, milestone: 'missed' });
+        dirty = true;
+      } else if (unfilledExpired) {
+        s.phase = 'closed'; s.closedAt = now; s.closedReason = 'unfilled';
+        events.push({ setup: { ...s }, milestone: 'unfilled' });
+        dirty = true;
+      }
+      continue; // never run live-trade checks on the same tick as a fill
+    }
+
+    // ─── LIVE phase — trade is open ──────────────────────────────────────
+    // A live trade auto-expires EXPIRY_HOURS after the fill (or after
+    // creation for legacy setups with no filledAt).
+    if (now - (s.filledAt || s.createdAt) > EXPIRY_HOURS * 3600 * 1000) {
       if (!s.milestonesFired.expired) {
         s.milestonesFired.expired = true;
         s.closedAt = now;
@@ -117,11 +168,6 @@ export function step(priceOrPriceMap) {
       }
       continue;
     }
-
-    const long = s.direction === 'LONG';
-    const fav = (level) => long ? price >= level : price <= level;
-    const adv = (level) => long ? price <= level : price >= level;
-    const bePrice = long ? s.entry + s.risk : s.entry - s.risk;
 
     // SL hit closes the trade entirely
     if (adv(s.stop)) {
