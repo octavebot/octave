@@ -868,11 +868,11 @@ async function cmdBacktest(arg) {
   });
   child.stderr.on('data', (d) => { stderrBuf += d.toString(); console.error('[backtest-child]', d.toString().trim()); });
 
-  const killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 8 * 60 * 1000);
+  const killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 12 * 60 * 1000);
 
   child.on('exit', async (code, signal) => {
     clearTimeout(killTimer);
-    if (signal === 'SIGKILL' && !resultRow) return send('⚠️ Backtest timed out (>8min) — killed. Bot is fine; try smaller window.');
+    if (signal === 'SIGKILL' && !resultRow) return send('⚠️ Backtest timed out (>12min) — killed. Bot is fine; try a smaller window.');
     if (resultRow?.error) return send(`⚠️ Backtest failed: \`${resultRow.error}\``);
     if (tgMessage) return send(tgMessage);
     if (resultRow?.ok) return send(`✅ Backtest done (${Math.round((resultRow.durationMs || 0) / 1000)}s) — no summary produced.`);

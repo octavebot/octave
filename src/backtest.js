@@ -92,7 +92,7 @@ function buildCtxFromMaps(panesByTf, lastBarIdxByKey, instrument = 'gold') {
   // Strategies need at most ~120 bars of history; cap the slice at 400 so the
   // walk-forward doesn't copy 11k-bar panes on every tick. Keeps the backtest
   // fast without changing any signal (all indicators converge well under 400).
-  const MAX_CTX_BARS = 400;
+  const MAX_CTX_BARS = 200;
   for (const [key, p] of panesByTf) {
     const idx = lastBarIdxByKey.get(key) ?? p.bars.length - 1;
     if (idx < 30) continue;
@@ -158,6 +158,10 @@ function simulateTrade(bars, trade, opts = {}) {
  */
 export async function runBacktest(opts = {}) {
   const days = opts.days ?? 7;
+  // step=1 — evaluate every bar so a strategy's entry price is captured at the
+  // exact moment the trigger appears (entries are computed live at detection,
+  // so a coarser step shifts them and under-reports). The 200-bar context cap
+  // keeps step=1 fast enough.
   const step = opts.step ?? 1;
   const confMin = opts.confMin ?? 0.7;
   const cfg = getRuntimeConfig();
@@ -270,31 +274,40 @@ export async function runBacktest(opts = {}) {
         }
       }
 
-      // Process pending limits against this anchor bar
+      // Process pending limits — scan EVERY bar in this step window so fill
+      // detection is bar-accurate even though evaluate() only runs every
+      // `step` bars. This is what makes step>1 a pure speed knob with no
+      // effect on results.
+      const windowEnd = Math.min(i + step, total);
       for (const s of selected) {
         const arr = pendingLimits[s.name];
         const st = stats[s.name];
         const remaining = [];
         for (const lim of arr) {
-          if (i >= lim.expiresIdx) { st.limitsExpired++; continue; }
-          const bar = anchorPane.bars[i];
-          const fill = (lim.direction === 'LONG' && bar.low <= lim.entry) ||
-                       (lim.direction === 'SHORT' && bar.high >= lim.entry);
-          if (!fill) {
-            const stopFirst = (lim.direction === 'LONG' && bar.low <= lim.stop) ||
-                              (lim.direction === 'SHORT' && bar.high >= lim.stop);
-            if (stopFirst) { st.limitsExpired++; continue; }
-            remaining.push(lim);
-            continue;
+          let resolved = false;
+          for (let j = i; j < windowEnd; j++) {
+            if (j >= lim.expiresIdx) { st.limitsExpired++; resolved = true; break; }
+            const bar = anchorPane.bars[j];
+            const fill = (lim.direction === 'LONG' && bar.low <= lim.entry) ||
+                         (lim.direction === 'SHORT' && bar.high >= lim.entry);
+            if (!fill) {
+              const stopFirst = (lim.direction === 'LONG' && bar.low <= lim.stop) ||
+                                (lim.direction === 'SHORT' && bar.high >= lim.stop);
+              if (stopFirst) { st.limitsExpired++; resolved = true; break; }
+              continue; // not filled on this bar — keep scanning
+            }
+            const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: j });
+            if (outcome) {
+              st.trades.push({
+                ...lim, openIdx: j, openTime: bar.time,
+                exit: outcome.exit, exitIdx: outcome.exitIdx, exitReason: outcome.reason,
+                R: outcome.R, win: outcome.R > 0,
+              });
+            }
+            resolved = true;
+            break;
           }
-          const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: i });
-          if (outcome) {
-            st.trades.push({
-              ...lim, openIdx: i, openTime: bar.time,
-              exit: outcome.exit, exitIdx: outcome.exitIdx, exitReason: outcome.reason,
-              R: outcome.R, win: outcome.R > 0,
-            });
-          }
+          if (!resolved) remaining.push(lim);
         }
         pendingLimits[s.name] = remaining;
       }
