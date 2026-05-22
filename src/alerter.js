@@ -253,18 +253,21 @@ export async function sendStartup() {
   } catch {}
   const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
     ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
+  // No closed box — emoji render wider than the border glyphs in Telegram's
+  // font, so a boxed title never lines up. Heavy rules + a centred title read
+  // clean because there is no right edge to misalign.
   const text = [
-    '╭───────────────────────╮',
-    '│   🎵 *OCTAVE ONLINE* 🎵   │',
-    '╰───────────────────────╯',
+    '━━━━━━━━━━━━━━━━━━━━',
+    '🎵   *O C T A V E   O N L I N E*',
+    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    `📡 Watching MGC1! · MNQ1! · MES1!`,
-    `🎚 Strategies: *${enabled}/${total}* active`,
-    cfg.aiEngine?.enabled !== false ? '🤖 Holy AI Engine: ON' : '🤖 Holy AI Engine: off',
-    muteSec > 0 ? `🔕 Muted ${Math.round(muteSec / 60)}m` : '🔔 Alerts live',
+    `📡  *Watching*   MGC1! · MNQ1! · MES1!`,
+    `🎚  *Strategies*   ${enabled}/${total} active`,
+    `🤖  *Holy AI*   ${cfg.aiEngine?.enabled !== false ? 'on' : 'off'}`,
+    `${muteSec > 0 ? '🔕' : '🔔'}  *Alerts*   ${muteSec > 0 ? `muted ${Math.round(muteSec / 60)}m` : 'live'}`,
     '',
-    '_Send /menu in Telegram for the control panel._',
-  ].filter(Boolean).join('\n');
+    '_Send /menu for the control panel._',
+  ].join('\n');
   return postRaw(text);
 }
 
