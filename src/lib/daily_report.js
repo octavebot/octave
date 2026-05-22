@@ -59,7 +59,9 @@ export function buildDailyReport(nowUnix = Date.now() / 1000) {
   }
 
   // ── Outcomes today (trades.jsonl, live rows only) ──
-  let wins = 0, losses = 0, cancelled = 0, expired = 0, sumR = 0;
+  let tp1 = 0, tp2 = 0, runner = 0, sl = 0, expired = 0;
+  let invalidated = 0, missed = 0, unfilled = 0;
+  let sumR = 0, bestR = null, worstR = null;
   if (existsSync(TRADE_LOG)) {
     for (const line of readFileSync(TRADE_LOG, 'utf8').split('\n')) {
       if (!line.trim()) continue;
@@ -68,16 +70,44 @@ export function buildDailyReport(nowUnix = Date.now() / 1000) {
         if (r.source !== 'live') continue;
         const t = Date.parse(r.ts) / 1000;
         if (!Number.isFinite(t) || nyParts(t).dateKey !== todayKey) continue;
-        if (r.outcome === 'WIN') wins++;
-        else if (r.outcome === 'LOSS') losses++;
-        else if (r.outcome === 'CANCELLED') cancelled++;
-        else if (r.outcome === 'EXPIRED') expired++;
-        if (typeof r.risk_reward === 'number') sumR += r.risk_reward;
+        const reason = r.exit_reason;
+        if (r.outcome === 'WIN') {
+          if (reason === 'tp2') tp2++;
+          else if (reason === 'runner') runner++;
+          else tp1++;
+        } else if (r.outcome === 'LOSS') {
+          sl++;
+        } else if (r.outcome === 'EXPIRED') {
+          expired++;
+        } else if (r.outcome === 'CANCELLED') {
+          if (reason === 'invalidated') invalidated++;
+          else if (reason === 'missed') missed++;
+          else unfilled++;
+        }
+        if (r.outcome !== 'CANCELLED' && typeof r.risk_reward === 'number') {
+          sumR += r.risk_reward;
+          if (bestR == null || r.risk_reward > bestR) bestR = r.risk_reward;
+          if (worstR == null || r.risk_reward < worstR) worstR = r.risk_reward;
+        }
       } catch {}
     }
   }
+  const wins = tp1 + tp2 + runner;
+  const losses = sl;
+  const cancelled = invalidated + missed + unfilled;
+  const resolved = wins + losses;
 
-  const hasActivity = uniq.length > 0 || wins + losses + cancelled + expired > 0;
+  // ── Open positions carried into the next session ──
+  let stillLive = 0, stillPending = 0;
+  try {
+    const fu = await import('./follow_up.js');
+    for (const s of fu.active()) {
+      if (s.phase === 'pending') stillPending++;
+      else stillLive++;
+    }
+  } catch {}
+
+  const hasActivity = uniq.length > 0 || resolved + cancelled + expired > 0;
 
   const lines = [
     '━━━━━━━━━━━━━━━━━━━━',
@@ -92,36 +122,59 @@ export function buildDailyReport(nowUnix = Date.now() / 1000) {
     return { text: lines.join('\n'), hasActivity: false };
   }
 
-  // Signals
-  lines.push(`📡 *Signals sent*   ${uniq.length}`);
-  const instParts = Object.entries(byInst)
-    .sort((a, b) => b[1] - a[1])
+  // ── Signals ──
+  lines.push(`📡 *Signals fired*   ${uniq.length}`);
+  const instParts = Object.entries(byInst).sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${INST[k] || k} ${n}`);
   if (instParts.length) lines.push(`   ${instParts.join('  ·  ')}`);
   lines.push('');
 
-  // Outcomes
-  const resolved = wins + losses;
-  lines.push('📋 *Outcomes*');
-  if (resolved > 0) {
-    const wr = Math.round((wins / resolved) * 100);
-    lines.push(`   ✅ ${wins}W   ❌ ${losses}L   →   *${wr}%* win`);
-    lines.push(`   💰 *${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R* on the day`);
-  } else {
-    lines.push('   _No trades resolved yet — still running or none filled._');
+  // ── Fills ──
+  lines.push('⚙️ *Fills*');
+  lines.push(`   ✅ Filled      ${resolved + stillLive}`);
+  lines.push(`   ⏳ Pending     ${stillPending}`);
+  lines.push(`   ⌛ Cancelled   ${cancelled}`);
+  if (cancelled > 0) {
+    const cp = [];
+    if (invalidated) cp.push(`${invalidated} invalidated`);
+    if (missed) cp.push(`${missed} missed`);
+    if (unfilled) cp.push(`${unfilled} unfilled`);
+    lines.push(`      ↳ ${cp.join(' · ')}`);
   }
-  if (cancelled > 0) lines.push(`   ⌛ ${cancelled} cancelled — limit never filled _(not W/L)_`);
-  if (expired > 0) lines.push(`   ⏳ ${expired} expired open`);
   lines.push('');
 
-  // By strategy
+  // ── Results ──
+  lines.push(`🎯 *Results*  (${resolved} closed)`);
+  if (resolved > 0) {
+    lines.push(`   🟢 TP1 hit    ${tp1}`);
+    lines.push(`   🏆 TP2 hit    ${tp2}`);
+    if (runner) lines.push(`   🚀 Runner     ${runner}`);
+    lines.push(`   🛑 SL hit     ${sl}`);
+    if (expired) lines.push(`   ⏳ Expired    ${expired}`);
+    const wr = Math.round((wins / resolved) * 100);
+    lines.push('   ──────────────');
+    lines.push(`   📈 Win rate   *${wr}%*   (${wins}W / ${losses}L)`);
+    lines.push(`   💰 Net        *${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R*`);
+    if (bestR != null) lines.push(`   Best ${bestR >= 0 ? '+' : ''}${bestR.toFixed(2)}R · Worst ${worstR >= 0 ? '+' : ''}${worstR.toFixed(2)}R`);
+  } else {
+    lines.push('   _No trades closed yet — filled trades still running._');
+  }
+  lines.push('');
+
+  // ── By strategy ──
   const ranked = Object.entries(byStrategy).sort((a, b) => b[1] - a[1]);
   if (ranked.length) {
-    lines.push('🎚 *By strategy*');
+    lines.push('🎚 *Signals by strategy*');
     for (const [name, n] of ranked) lines.push(`   ${name} · ${n}`);
     lines.push('');
   }
 
-  lines.push('_Send /summary anytime · /backtest for the 30-day picture._');
+  // ── Carry-over ──
+  if (stillLive + stillPending > 0) {
+    lines.push(`📂 *Into next session:* ${stillLive} open · ${stillPending} pending limit${stillPending === 1 ? '' : 's'}`);
+    lines.push('');
+  }
+
+  lines.push('_/summary anytime · /backtest for the 30-day picture._');
   return { text: lines.join('\n'), hasActivity: true };
 }

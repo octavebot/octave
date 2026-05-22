@@ -259,6 +259,7 @@ async function tick() {
             duration_minutes: s.filledAt ? Math.round((Date.now() - s.filledAt) / 60000) : null,
             session: sessionLabel(Date.now() / 1000),
             outcome: isWin ? 'WIN' : isLoss ? 'LOSS' : m.milestone === 'expired' ? 'EXPIRED' : 'OTHER',
+            exit_reason: m.milestone,   // tp1 | tp2 | runner | sl | expired
           }, 'live');
         }
       } catch (err) {
