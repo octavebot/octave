@@ -48,17 +48,26 @@ async function main() {
   // a 30-day backtest live within the command timeout.
   if (!strategy) {
     try {
-      // Per-strategy win rates feed the confidence model — a signal's
-      // confidence is anchored to its strategy's real win rate. Only
-      // strategies with a meaningful sample (>=10 trades) are published.
-      const winRates = {};
-      for (const [id, s] of Object.entries(result.stats || {})) {
-        if (s && typeof s.winRate === 'number' && (s.tradeCount || 0) >= 10) {
-          winRates[id] = Math.round(s.winRate * 1000) / 1000;
+      // Yahoo sometimes throttles the VPS and serves only a few days of
+      // intraday history. A backtest run on a truncated feed gives an
+      // unreliable, thin-sample result — never let it overwrite a good
+      // cache or feed garbage win rates into the confidence model.
+      const w = result.window || {};
+      const actualDays = (w.fromUnix && w.toUnix) ? (w.toUnix - w.fromUnix) / 86400 : days;
+      if (actualDays < 0.6 * days) {
+        console.error(`cache skipped: backtest covered only ${actualDays.toFixed(1)}d of ${days}d requested (Yahoo truncated the feed) — last good cache kept`);
+      } else {
+        // Per-strategy win rates feed the confidence model. Only strategies
+        // with a meaningful sample (>=20 trades) are published.
+        const winRates = {};
+        for (const [id, s] of Object.entries(result.stats || {})) {
+          if (s && typeof s.winRate === 'number' && (s.tradeCount || 0) >= 20) {
+            winRates[id] = Math.round(s.winRate * 1000) / 1000;
+          }
         }
+        mkdirSync(dirname(CACHE_FILE), { recursive: true });
+        writeFileSync(CACHE_FILE, JSON.stringify({ generatedAt: Date.now(), days, durationMs, winRates, tg }, null, 2));
       }
-      mkdirSync(dirname(CACHE_FILE), { recursive: true });
-      writeFileSync(CACHE_FILE, JSON.stringify({ generatedAt: Date.now(), days, durationMs, winRates, tg }, null, 2));
     } catch (err) {
       console.error('cache write failed:', err.message);
     }
