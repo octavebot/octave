@@ -428,48 +428,29 @@
 </div>
 
 <script>
-// Source of truth for built-in strategies in the dashboard. Grouped by
-// folder; the renderer collapses each group below its header.
-const STRATEGY_GROUPS = [
-  {
-    folder: 'Core (10)',
-    items: [
-      { key: 'USLS',      num: '#1',  name: 'USLS',            desc: 'Universal Session Liquidity Sweep' },
-      { key: 'ICT-SMC',   num: '#2',  name: 'ICT/SMC',         desc: 'HTF judas + MSS + PD array entry' },
-      { key: 'ALGO-SMC',  num: '#3',  name: 'ALGO/SMC',        desc: '5-state HTF sweep + Silver SMT + 71% Fib' },
-      { key: 'ADAPTIVE',  num: '#4',  name: 'Adaptive Matrix', desc: 'Regime-aware (ADX) trend/range/breakout' },
-      { key: 'ICT',       num: '#5',  name: 'ICT',             desc: 'M15 killzone sweep + MSS + FVG' },
-      { key: 'SMT',       num: '#6',  name: 'SMT',             desc: 'M15 Gold/Silver cross-asset divergence' },
-      { key: 'TRINITY',   num: '#7',  name: 'Trinity',         desc: 'HTF gap → SMT → LTF inverse FVG' },
-      { key: 'AMN',       num: '#8',  name: 'AMN',             desc: '5M demand zone + 1M CHoCH or 5M IFVG' },
-      { key: 'TORI',      num: '#9',  name: 'TORI',            desc: '4H trendline body-close breakout (1:2R)' },
-      { key: 'WARRIOR',   num: '#10', name: 'Warrior',         desc: '5m bull flag + RSI extreme reversal' },
-    ],
-  },
-  {
-    folder: 'ChatGPT Strategies',
-    items: [
-      { key: 'CGT-EMA',    num: '#C1', name: 'EMA Trend',           desc: '20/50 EMA pullback + engulfing (2R)' },
-      { key: 'CGT-HTFSD',  num: '#C2', name: 'HTF Supply/Demand',   desc: '4H zone tap + 5m displacement' },
-      { key: 'CGT-LONDON', num: '#C3', name: 'London Breakout',     desc: 'Asian range break + pullback + retest' },
-      { key: 'CGT-NYREV',  num: '#C4', name: 'NY Reversal Trap',    desc: 'PDH/PDL sweep + rejection back inside' },
-      { key: 'CGT-VWAP',   num: '#C5', name: 'VWAP Mean Reversion', desc: '2× ATR from VWAP + RSI div + exhaustion' },
-    ],
-  },
-  {
-    folder: 'Gemini Strategies',
-    items: [
-      { key: 'GEM-ASIA',  num: '#G1', name: 'Asian Range Breakout',    desc: 'Asian high/low complete close-outside (1.5R)' },
-      { key: 'GEM-EMA',   num: '#G2', name: 'Golden River EMA',        desc: '9/21/50 EMA + RSI confluence (2R)' },
-      { key: 'GEM-FIB',   num: '#G3', name: 'Golden Fibonacci',        desc: '0.618-0.786 retracement entry to 0% TP' },
-      { key: 'GEM-SMC',   num: '#G4', name: 'Institutional OBs',       desc: '1H OB mitigation + 15m CHoCH + LTF OB entry' },
-      { key: 'GEM-VWAP',  num: '#G5', name: 'VWAP Rubber Band',        desc: '1H ADX<25 + 2.5σ BB pierce + reversal' },
-    ],
-  },
-];
+// Strategy list is loaded live from /api/strategies (auto-discovered from
+// the registry). Populated once at startup before the first render.
+let STRATEGY_GROUPS = [];
+let STRATEGY_META = [];
 
-// Flat list helper for any code path that still wants a single sequence.
-const STRATEGY_META = STRATEGY_GROUPS.flatMap((g) => g.items);
+async function loadStrategyList() {
+  try {
+    const r = await fetch('/api/strategies', { cache: 'no-store' });
+    const data = await r.json();
+    const all = data.strategies || [];
+    const builtins = all.filter((s) => s.kind === 'builtin');
+    STRATEGY_GROUPS = [{
+      folder: `Strategies (${builtins.length})`,
+      items: builtins.map((s) => ({
+        key: s.id, num: '#' + s.num, name: s.name,
+        desc: s.concept || '', hasPlaybook: s.hasPlaybook,
+      })),
+    }];
+    STRATEGY_META = STRATEGY_GROUPS.flatMap((g) => g.items);
+  } catch (err) {
+    console.error('strategy list load failed', err);
+  }
+}
 
 // Folder collapse state — persisted in localStorage so it survives reloads.
 const COLLAPSE_STATE_KEY = 'octave_folder_collapse';
@@ -613,16 +594,15 @@ function renderState(s) {
               <div><span class="num">${m.num}</span><span class="name">${m.name}</span></div>
               <div class="desc">${m.desc}</div>
             </div>
-            ${m.custom ? `<div class="strategy-row-actions">
-              <button class="icon-btn" data-edit-strategy="${m.key}">edit</button>
-              <button class="icon-btn danger" data-delete-strategy="${m.key}">del</button>
-            </div>` : ''}
+            <div class="strategy-row-actions">
+              ${m.hasPlaybook ? `<a class="icon-btn" href="/api/playbook/${m.key}" target="_blank">PDF</a>` : ''}
+              ${m.custom ? `<button class="icon-btn danger" data-delete-strategy="${m.key}">del</button>` : ''}
+            </div>
             <div class="toggle" data-strategy="${m.key}" role="switch"></div>
           </div>`).join('');
       const newBtn = g.isUser
         ? `<div class="strategy" style="justify-content:center; gap:8px">
-             <button class="icon-btn" id="new-user-strategy">＋ New strategy</button>
-             <button class="icon-btn" id="upload-strategy">📎 Upload file → AI extract</button>
+             <button class="icon-btn" id="upload-strategy">📎 Add strategy — upload file → AI extracts it</button>
              <input type="file" id="upload-strategy-input" multiple
                accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.js,.py,.json"
                style="display:none" />
@@ -948,8 +928,11 @@ async function launchTV() {
   } catch (e) { toast('✗ Could not launch TV'); }
 }
 
-fetchState();
-fetchServices();
+// Load the strategy list first so the first render has accurate folders.
+loadStrategyList().then(() => {
+  fetchState();
+  fetchServices();
+});
 setInterval(fetchState, 5000);
 setInterval(fetchServices, 5000);
 </script>

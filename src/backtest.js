@@ -21,26 +21,12 @@
  */
 
 import { fetchBars as fetchYahoo } from './cloud/yahoo.js';
-import { evaluateUSLS } from './strategies/usls.js';
-import { evaluateICTSMC } from './strategies/ict_smc.js';
-import { evaluateAlgoSMC } from './strategies/algo_smc.js';
-import { evaluateAdaptive } from './strategies/adaptive.js';
-import { evaluateICTM15 } from './strategies/ict_m15.js';
-import { evaluateSMTM15 } from './strategies/smt_m15.js';
-import { evaluateTrinity } from './strategies/trinity.js';
-import { evaluateAMN } from './strategies/amn.js';
-import { evaluateTORI } from './strategies/tori.js';
-import { evaluateWARRIOR } from './strategies/warrior.js';
 import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_strategies.js';
+import { loadRegistry } from './lib/strategy_registry.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
 
-/**
- * Build the per-tick adapter for one user strategy so the backtest harness
- * can treat it identically to a built-in. Returns null if the strategy spec
- * doesn't yield anything (e.g. timeframe pane missing in the trimmed window).
- */
 function userStrategyEntry(spec) {
   return {
     name: spec.id,
@@ -51,26 +37,16 @@ function userStrategyEntry(spec) {
 }
 
 /**
- * Full strategy registry for the backtest. Re-reads user strategies each call
- * so freshly added/edited ones show up without a process restart.
+ * Full strategy registry for the backtest. Async because it loads from
+ * the file-based strategy_registry. Re-reads user strategies each call.
  */
-export function getAllStrategies() {
-  return [...BUILTIN_STRATEGIES, ...listUserStrategies().map(userStrategyEntry)];
+export async function getAllStrategies() {
+  const reg = await loadRegistry();
+  const builtins = reg.map((s, i) => ({
+    name: s.id, num: i + 1, fn: s.evaluate, label: s.name,
+  }));
+  return [...builtins, ...listUserStrategies().map(userStrategyEntry)];
 }
-
-// Backtest registry — order matches display order. User strategies get `num: 'U'`.
-export const BUILTIN_STRATEGIES = [
-  { name: 'USLS',       num: 1,   fn: evaluateUSLS,     label: 'USLS' },
-  { name: 'ICT-SMC',    num: 2,   fn: evaluateICTSMC,   label: 'ICT/SMC' },
-  { name: 'ALGO-SMC',   num: 3,   fn: evaluateAlgoSMC,  label: 'ALGO/SMC' },
-  { name: 'ADAPTIVE',   num: 4,   fn: evaluateAdaptive, label: 'Adaptive Matrix' },
-  { name: 'ICT',        num: 5,   fn: evaluateICTM15,   label: 'ICT M15' },
-  { name: 'SMT',        num: 6,   fn: evaluateSMTM15,   label: 'SMT M15' },
-  { name: 'TRINITY',    num: 7,   fn: evaluateTrinity,  label: 'Trinity' },
-  { name: 'AMN',        num: 8,   fn: evaluateAMN,      label: 'AMN Dual-Model' },
-  { name: 'TORI',       num: 9,   fn: evaluateTORI,     label: 'TORI Trendline' },
-  { name: 'WARRIOR',    num: 10,  fn: evaluateWARRIOR,  label: 'Warrior Momentum' },
-];
 
 // All three primary instruments are fetched. Gold-only strategies (Gold/Silver
 // SMT, DXY-driven gold bias, Trinity, etc.) simply produce no triggered results
@@ -113,10 +89,15 @@ function trimToWindow(panesByTf, sinceUnix) {
 function buildCtxFromMaps(panesByTf, lastBarIdxByKey, instrument = 'gold') {
   const ctxPanes = new Map();
   let anchor = null;
+  // Strategies need at most ~120 bars of history; cap the slice at 400 so the
+  // walk-forward doesn't copy 11k-bar panes on every tick. Keeps the backtest
+  // fast without changing any signal (all indicators converge well under 400).
+  const MAX_CTX_BARS = 400;
   for (const [key, p] of panesByTf) {
     const idx = lastBarIdxByKey.get(key) ?? p.bars.length - 1;
     if (idx < 30) continue;
-    const slice = p.bars.slice(0, idx + 1);
+    const sliceStart = Math.max(0, idx + 1 - MAX_CTX_BARS);
+    const slice = p.bars.slice(sliceStart, idx + 1);
     ctxPanes.set(key, { ...p, bars: slice });
     if (!anchor && (key === `${instrument}|5` || key === `${instrument}|15`)) {
       anchor = ctxPanes.get(key);
@@ -186,7 +167,7 @@ export async function runBacktest(opts = {}) {
   // Accept multiple identifiers per strategy: full key (TRINITY), display num
   // (1..10), or any case variant. Normalize before matching.
   const requested = new Set(enabledNames.map((n) => String(n).toUpperCase()));
-  const ALL = getAllStrategies();
+  const ALL = await getAllStrategies();
   const selected = ALL.filter((s) =>
     requested.has(String(s.name).toUpperCase()) || requested.has(String(s.num).toUpperCase())
   );

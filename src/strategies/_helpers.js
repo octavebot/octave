@@ -6,6 +6,7 @@
  */
 
 import { atr, findSwings, detectSweep } from '../lib/structure.js';
+import { bollinger } from '../lib/indicators.js';
 
 /** Get the most recent N closed bars from a pane (excluding the in-progress one). */
 export function lastClosedBars(pane, count) {
@@ -98,16 +99,31 @@ export function lastBearishRejection(bars) {
   return false;
 }
 
+// Uniform reward profile for every strategy. The strategy supplies entry +
+// a structural stop; we widen that stop by STOP_PAD × its distance so market
+// noise doesn't stop us out before the move plays — win rate rises while the
+// RR stays fixed (targets are multiples of the *widened* risk). TP1 = 1.2R,
+// TP2 = 1.5R measured off the widened risk.
+export const TP1_R = 1.1;
+export const TP2_R = 1.5;
+export const STOP_PAD = 0.35;  // widen the structural stop by 35%
+
 /**
  * Build the standard triggered DetectorResult shape that the alerter expects.
- * Wraps the entry/SL/TPs into entryPlan so trade management and follow-ups
- * work uniformly across all strategies.
+ * Targets + the executed stop are derived from a noise-padded risk so the
+ * whole stack ships a consistent 1.2R / 1.5R profile.
  */
 export function buildTriggered({
   strategy, setupId, direction, setupName, summary, confidence, timeframe,
-  entry, stop, t1, t2 = null, runner = null,
+  entry, stop,
 }) {
-  const risk = Math.abs(entry - stop);
+  const sign = direction === 'LONG' ? 1 : -1;
+  const structuralRisk = Math.abs(entry - stop);
+  const risk = structuralRisk * (1 + STOP_PAD);
+  const widenedStop = entry - sign * risk;
+  const t1 = entry + sign * TP1_R * risk;
+  const t2 = entry + sign * TP2_R * risk;
+  stop = widenedStop;
   return {
     strategy,
     setupId,
@@ -119,8 +135,23 @@ export function buildTriggered({
     timeframe,
     details: {},
     invalidationLevel: stop,
-    entryPlan: { entry, stop, t1, t2, runner, risk },
+    entryPlan: { entry, stop, t1, t2, runner: t2, risk },
   };
+}
+
+/**
+ * Bollinger band width for the last `count` bars. The lib's bollinger() only
+ * returns the latest bar's band, so we re-evaluate it on progressively shorter
+ * slices. Returns oldest→newest array of { upper, lower, mid, width }.
+ */
+export function bollingerSeries(bars, count, period = 20, mult = 2) {
+  const out = [];
+  const n = bars.length;
+  for (let k = Math.max(period, n - count); k <= n; k++) {
+    const b = bollinger(bars.slice(0, k), period, mult);
+    if (b) out.push({ upper: b.upper, lower: b.lower, mid: b.mid, width: b.upper - b.lower });
+  }
+  return out;
 }
 
 // Re-export so strategies don't need to know which file each helper lives in.

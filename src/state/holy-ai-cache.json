@@ -8,11 +8,11 @@
     }
   },
   "regime": {
-    "at": 1779420866542,
+    "at": 1779422673871,
     "value": {
       "regime": "range",
       "confidence": 0.8,
-      "summary": "low vol, narrow ranges",
+      "summary": "low volatility",
       "aiEnabled": true
     }
   },

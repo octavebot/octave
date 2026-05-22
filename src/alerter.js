@@ -1,3 +1,13 @@
+/**
+ * Alerter — builds and sends Telegram trade-signal cards.
+ *
+ * The triggered-setup card is a clean box-drawing layout designed for fast
+ * execution on a live account: direction, instrument, entry zone, TP1/TP2,
+ * SL, trade data, the strategy + its confirmations, and the Holy AI opinion.
+ *
+ * Exports: send, sendFollowUp, sendStartup, sendSessionChange, sendDown.
+ */
+
 import { config } from './config.js';
 import { log } from './logger.js';
 import { buildAlertChartUrl } from './lib/chart_image.js';
@@ -5,98 +15,59 @@ import { get as getRuntimeConfig } from './lib/runtime_config.js';
 import { send as sendViaQueue, startDrain } from './lib/telegram_queue.js';
 import { register as registerFollowUp } from './lib/follow_up.js';
 import { INSTRUMENT_META } from './detector.js';
-startDrain(); // re-attempt any queued sends on startup
+import { loadRegistry } from './lib/strategy_registry.js';
 
-const API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
-const API_PHOTO = `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`;
+startDrain();
+
 const MIN_GAP_MS = 1000;
-const BAR = '══════════════════';
-const TG_CAPTION_MAX = 1024; // Telegram's caption limit
+const TG_CAPTION_MAX = 1024;
 let lastSendAt = 0;
 
-const STATUS_GLYPH = {
-  forming: { head: '👀', verb: 'forming', dir_word: (d) => d || 'NEUTRAL' },
-  near_trigger: { head: '⚠️', verb: 'near trigger', dir_word: (d) => d },
-  triggered: { head: '🚀', verb: 'TRIGGERED', dir_word: (d) => d },
-  invalidated: { head: '❌', verb: 'INVALIDATED', dir_word: (d) => d || 'NONE' },
-};
+// ─── Strategy name cache ─────────────────────────────────────────────────
+// The detector result carries the strategy id; we want the human name in
+// the card. Load the registry once, cache id→name. Falls back to the id.
 
-const STRATEGY_NUM = {
-  USLS: '#1',
-  'ICT-SMC': '#2',
-  'ALGO-SMC': '#3',
-  ADAPTIVE: '#4',
-  ICT: '#5',
-  SMT: '#6',
-  TRINITY: '#7',
-  AMN: '#8',
-  TORI: '#9',
-  WARRIOR: '#10',
-};
-
-// Pretty name used in the alert header — what the user actually wants to see.
-const STRATEGY_DISPLAY = {
-  USLS: 'USLS · Session Sweep',
-  'ICT-SMC': 'ICT/SMC · HTF Judas',
-  'ALGO-SMC': 'Algo SMC · 71% Fib',
-  ADAPTIVE: 'Adaptive Matrix',
-  ICT: 'ICT Killzone',
-  SMT: 'Gold/Silver SMT',
-  TRINITY: 'Trinity Model',
-  AMN: 'AMN Dual-Model',
-  TORI: 'TORI · 4H Trendline',
-  WARRIOR: 'Warrior Momentum',
-};
-
-// Resolve the badge/number for any strategy, including user-defined ones.
-// User strategies show as "#U" so they're visually distinct from built-ins.
-function strategyNum(name) {
-  return STRATEGY_NUM[name] || '#U';
-}
-
-function strategyDisplay(name) {
-  if (STRATEGY_DISPLAY[name]) return STRATEGY_DISPLAY[name];
-  // Try the live user-strategies registry — gives the human-readable name
-  // the user typed when creating the strategy.
-  try {
-    // require-style synchronous import is fine here because user_strategies
-    // has no top-level side effects and we already imported it elsewhere.
-    const fileURL = new URL('./lib/user_strategies.js', import.meta.url);
-    // ESM doesn't allow sync import; cache the lookup once per process.
-    if (!strategyDisplay._cache) strategyDisplay._cache = new Map();
-    if (strategyDisplay._cache.has(name)) return strategyDisplay._cache.get(name);
-    // Best-effort fire-and-forget warmup — until it resolves, return the raw id.
-    import('./lib/user_strategies.js').then((m) => {
-      for (const s of m.list()) {
-        strategyDisplay._cache.set(s.id, s.name || s.id);
-      }
-    }).catch(() => {});
-    return name;
-  } catch {
-    return name;
+let _nameCache = null;
+async function strategyName(id) {
+  if (!_nameCache) {
+    _nameCache = {};
+    try {
+      for (const s of await loadRegistry()) _nameCache[s.id] = s.name;
+    } catch {}
   }
+  return _nameCache[id] || id;
 }
+
+// ─── Formatting helpers ──────────────────────────────────────────────────
 
 function tgEscape(s) {
   return String(s).replace(/([_*`\[])/g, '\\$1');
 }
 
-function fmtPrice(p) {
-  if (p == null || !Number.isFinite(+p)) return '—';
-  return Number(p).toFixed(2);
+function fmtPrice(v) {
+  if (v == null || !Number.isFinite(+v)) return '—';
+  const n = Number(v);
+  // Thousands separator, 2 decimals. Nasdaq ~20000 looks better with commas.
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function fmtPct(c) {
-  if (c == null) return '—';
-  return `${Math.round(c * 100)}%`;
+function tfLabel(tf) {
+  const map = { '1': '1M', '3': '3M', '5': '5M', '15': '15M', '30': '30M', '60': '1H', '240': '4H', '1D': '1D', 'D': '1D' };
+  return map[String(tf)] || `${tf}M`;
 }
+
+function riskLabel(conf) {
+  if (conf >= 0.78) return 'Low';
+  if (conf >= 0.68) return 'Medium';
+  return 'High';
+}
+
+// ─── Transport ───────────────────────────────────────────────────────────
 
 async function postRaw(text) {
   const gap = Date.now() - lastSendAt;
   if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
   lastSendAt = Date.now();
-  // Routes through the queue: succeeds immediately on a good network, or
-  // gets persisted to disk + retried with backoff when Telegram is down.
   return sendViaQueue(config.telegramBotToken, 'sendMessage', {
     chat_id: config.telegramChatId,
     text,
@@ -105,317 +76,210 @@ async function postRaw(text) {
   });
 }
 
-/**
- * Post a photo with a caption. If the caption exceeds Telegram's 1024-char
- * cap we send the photo with a short caption and then post the full text
- * as a follow-up message.
- */
 async function postPhoto(photoUrl, caption) {
   const gap = Date.now() - lastSendAt;
   if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
   lastSendAt = Date.now();
-
-  const fullText = caption || '';
-  const fitsInCaption = fullText.length <= TG_CAPTION_MAX;
-  const shortCaption = fitsInCaption ? fullText : (fullText.slice(0, TG_CAPTION_MAX - 40) + '…\n_(full detail below)_');
-
+  const full = caption || '';
+  const fits = full.length <= TG_CAPTION_MAX;
+  const shortCaption = fits ? full : full.slice(0, TG_CAPTION_MAX - 30) + '…';
   const ok = await sendViaQueue(config.telegramBotToken, 'sendPhoto', {
     chat_id: config.telegramChatId,
     photo: photoUrl,
     caption: shortCaption,
     parse_mode: 'Markdown',
   });
-  if (ok && !fitsInCaption) {
-    await postRaw(fullText);
-  }
+  if (ok && !fits) await postRaw(full);
   return ok;
 }
 
-// Strategy nicknames keyed by config field name. Source of truth for the
-// startup banner; mirrors STRATEGY_DISPLAY but trimmed for compactness.
-const STRATEGY_INFO = [
-  { key: 'USLS',       short: 'USLS' },
-  { key: 'ICT-SMC',    short: 'ICT/SMC' },
-  { key: 'ALGO-SMC',   short: 'ALGO/SMC' },
-  { key: 'ADAPTIVE',   short: 'Adaptive' },
-  { key: 'ICT',        short: 'ICT' },
-  { key: 'SMT',        short: 'SMT' },
-  { key: 'TRINITY',    short: 'Trinity' },
-  { key: 'AMN',        short: 'AMN' },
-  { key: 'TORI',       short: 'TORI' },
-  { key: 'WARRIOR',    short: 'Warrior' },
-];
+// ─── Signal card ─────────────────────────────────────────────────────────
 
-export async function sendStartup({ symbol, timeframe }) {
-  const sym = symbol || '(no chart)';
-  const tf = timeframe || '?';
+/**
+ * Build the box-drawing signal card for a triggered setup.
+ * @param {object} r    detector result (triggered, with entryPlan)
+ * @param {object} ctx  { symbol, timeframe, lastClose }
+ */
+async function buildSignalCard(r, ctx) {
+  const ep = r.entryPlan;
+  const inst = INSTRUMENT_META[r.instrument] || { label: r.instrument || '?', symbol: r.symbol || '?' };
+  const dirIcon = r.direction === 'LONG' ? '🟢' : '🔴';
+  const risk = ep.risk ?? Math.abs(ep.entry - ep.stop);
 
-  // Read live runtime-config — actually reflects what the user has enabled
-  // RIGHT NOW, not what was the case at code-write time.
+  // Entry zone — a small execution band around the limit price (±6% of risk).
+  const band = 0.06 * risk;
+  const zLo = ep.entry - band;
+  const zHi = ep.entry + band;
+
+  // Confidence: prefer the AI-adjusted figure (what actually gated the send).
+  const conf = r.adjustedConfidence ?? r.confidence ?? 0;
+  const confPct = Math.round(conf * 100);
+
+  // RR — to the furthest target.
+  const farTarget = ep.t2 ?? ep.t1;
+  const rr = (farTarget != null && risk > 0) ? Math.abs(farTarget - ep.entry) / risk : null;
+
+  const name = await strategyName(r.strategy);
+  const confirmations = Array.isArray(r.confirmations) && r.confirmations.length
+    ? r.confirmations
+    : [r.setupName || 'Strategy trigger'];
+
+  const lines = [];
+  lines.push('╭───────────────────────╮');
+  lines.push('│   ⚡ *OCTAVE SIGNAL* ⚡   │');
+  lines.push('╰───────────────────────╯');
+  lines.push('');
+  lines.push(`${dirIcon} *${r.direction}*   ·   *${inst.label.toUpperCase()}*`);
+  lines.push(`\`${inst.symbol}\``);
+  lines.push('');
+  lines.push('┌ *Entry Zone* ──────────');
+  lines.push(`  \`${fmtPrice(zLo)}\` — \`${fmtPrice(zHi)}\``);
+  lines.push('');
+  lines.push('├ *Take Profit* ─────────');
+  if (ep.t1 != null) lines.push(`  🎯 TP1  →  \`${fmtPrice(ep.t1)}\``);
+  if (ep.t2 != null) lines.push(`  🎯 TP2  →  \`${fmtPrice(ep.t2)}\``);
+  lines.push('');
+  lines.push('├ *Stop Loss* ───────────');
+  lines.push(`  ❌  \`${fmtPrice(ep.stop)}\``);
+  lines.push('');
+  lines.push('├ *Trade Data* ──────────');
+  lines.push(`  ⏰ TF     →  ${tfLabel(r.timeframe || ctx.timeframe)}`);
+  lines.push(`  📊 Conf   →  ${confPct}%`);
+  lines.push(`  ⚠️ Risk   →  ${riskLabel(conf)}`);
+  if (rr != null) lines.push(`  💎 RR     →  1:${rr.toFixed(1)}`);
+  lines.push('');
+  lines.push('├ *Confirmation* ────────');
+  lines.push(`  _${tgEscape(name)}_`);
+  for (const c of confirmations.slice(0, 4)) lines.push(`  ✓ ${tgEscape(c)}`);
+  lines.push('╰───────────────────────╯');
+
+  if (r.aiCommentary) {
+    lines.push('');
+    lines.push('🤖 *Holy AI*');
+    lines.push(`_${tgEscape(r.aiCommentary)}_`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Main entry: send a detector result as a Telegram alert.
+ * Only 'triggered' setups get the full card; others get a one-liner.
+ */
+export async function send(r, ctx = {}) {
+  if (r.status !== 'triggered' || !r.entryPlan) {
+    // Non-triggered states don't normally reach here (loop.js gates on
+    // triggered) but keep a minimal fallback.
+    const name = await strategyName(r.strategy);
+    return postRaw(`👀 *${tgEscape(name)}* — ${r.status}\n${tgEscape(r.setupName || '')}`);
+  }
+
+  // Register for follow-up milestone pings (BE/TP1/TP2/SL).
+  try { registerFollowUp(r); }
+  catch (err) { log.warn('registerFollowUp threw', { err: err.message }); }
+
+  const card = await buildSignalCard(r, ctx);
+
+  // Chart image path — overlay entry/SL/TP on recent bars when enabled.
+  const cfg = getRuntimeConfig();
+  if (cfg?.alertChartImages !== false) {
+    try {
+      const photoUrl = await buildAlertChartUrl(r);
+      if (photoUrl) {
+        const ok = await postPhoto(photoUrl, card);
+        if (ok) return true;
+        log.warn('sendPhoto failed, falling back to text', {});
+      }
+    } catch (err) {
+      log.warn('chart image build threw', { err: err.message });
+    }
+  }
+  return postRaw(card);
+}
+
+// ─── Follow-up milestone alerts ──────────────────────────────────────────
+
+export async function sendFollowUp({ setup, milestone, currentPrice }) {
+  const fmt = (v) => fmtPrice(v);
+  const dir = setup.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+  let head, body;
+  switch (milestone) {
+    case 'be':
+      head = '🟡 *MOVE TO BREAKEVEN*';
+      body = `+1R reached. Drag SL to entry \`${fmt(setup.entry)}\` — trade is now risk-free.`;
+      break;
+    case 'tp1':
+      head = '🎯 *TP1 HIT*';
+      body = `Close 50% at \`${fmt(setup.t1)}\`. SL should be at BE; leave the runner.`;
+      break;
+    case 'tp2':
+      head = '🏆 *TP2 HIT — FULL TARGET*';
+      body = `Target reached at \`${fmt(setup.t2)}\`. Trade complete.`;
+      break;
+    case 'runner':
+      head = '🚀 *RUNNER HIT*';
+      body = `Extended past TP2 to \`${fmt(setup.runner)}\`. Banner trade — close it out.`;
+      break;
+    case 'sl':
+      head = '🛑 *STOP LOSS HIT*';
+      body = `Closed at \`${fmt(setup.stop)}\`. Risk managed per plan — next setup.`;
+      break;
+    case 'expired':
+      head = '⏳ *SETUP EXPIRED*';
+      body = `No TP1/SL hit within the window. Close any remainder manually.`;
+      break;
+    default:
+      return;
+  }
+  const text = [
+    head,
+    `${dir}  ·  ${setup.strategy || ''}`,
+    '',
+    body,
+    currentPrice != null ? `📍 Now: \`${fmt(currentPrice)}\`` : '',
+  ].filter(Boolean).join('\n');
+  return postRaw(text);
+}
+
+// ─── Startup banner ──────────────────────────────────────────────────────
+
+export async function sendStartup() {
   const cfg = getRuntimeConfig() || {};
-  const enabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] === true);
-  const disabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] !== true);
-
-  const inactiveLine = disabledStrategies.length === 0
-    ? '_(all enabled)_'
-    : disabledStrategies.map((s) => strategyNum(s.key)).join(' ');
-
+  let total = 0, enabled = 0;
+  try {
+    for (const s of await loadRegistry()) {
+      total++;
+      if (cfg.strategies?.[s.id] === true) enabled++;
+    }
+  } catch {}
   const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
     ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
-  const muteLine = muteSec > 0 ? `🔕 Muted ${Math.round(muteSec / 60)}m` : null;
-  const bypassLine = cfg.bypassKillzones ? '🌐 24/7 mode ON' : null;
-
   const text = [
-    BAR,
-    `✅ *OCTAVE ONLINE*  ·  MGC1! + MNQ1! + MES1!`,
-    `📊 Active: ${enabledStrategies.length}/${STRATEGY_INFO.length} strategies`,
-    `⚫ Inactive: ${inactiveLine}`,
-    muteLine,
-    bypassLine,
-    BAR,
-    ``,
-    `🔌 Watching: \`MGC1!\` + \`MNQ1!\` + \`MES1!\` · \`${tgEscape(tf)}m+\``,
-    `🟢 Service started · monitoring live`,
-    ``,
-    BAR,
+    '╭───────────────────────╮',
+    '│   🎵 *OCTAVE ONLINE* 🎵   │',
+    '╰───────────────────────╯',
+    '',
+    `📡 Watching MGC1! · MNQ1! · MES1!`,
+    `🎚 Strategies: *${enabled}/${total}* active`,
+    cfg.aiEngine?.enabled !== false ? '🤖 Holy AI Engine: ON' : '🤖 Holy AI Engine: off',
+    muteSec > 0 ? `🔕 Muted ${Math.round(muteSec / 60)}m` : '🔔 Alerts live',
+    '',
+    '_Send /menu in Telegram for the control panel._',
   ].filter(Boolean).join('\n');
   return postRaw(text);
 }
 
 export async function sendDown(reason) {
-  return postRaw(`${BAR}\n⚠️ *OCTAVE STOPPING*\n${tgEscape(reason)}\n${BAR}`);
+  return postRaw(`⚠️ *OCTAVE STOPPING*\n${tgEscape(reason || '')}`);
 }
 
-/**
- * Follow-up milestone message — fired by loop.js when the follow-up tracker
- * detects price reaching BE / TP1 / TP2 / Runner / SL / expiry on an active
- * setup. Short and focused: tells the user what just happened and what to do.
- */
-export async function sendFollowUp({ setup, milestone, currentPrice }) {
-  const num = strategyNum(setup.strategy);
-  const display = strategyDisplay(setup.strategy);
-  const dirWord = setup.direction === 'LONG' ? 'LONG' : 'SHORT';
-  const fmt = (v) => (v != null && Number.isFinite(+v)) ? Number(v).toFixed(2) : '—';
+// ─── Session-change banner ───────────────────────────────────────────────
 
-  let head, body, action;
-  switch (milestone) {
-    case 'be':
-      head = '🟡 *MOVE TO BREAKEVEN*';
-      body = `+1R reached on ${dirWord} setup. Drag SL to entry now — trade is risk-free from here.`;
-      action = `New SL: \`$${fmt(setup.entry)}\``;
-      break;
-    case 'tp1':
-      head = '🎯 *TP1 HIT — TAKE PARTIAL*';
-      body = `Close 50%, leave runner to TP2. SL should already be at BE (or trail it tighter).`;
-      action = `TP1 was \`$${fmt(setup.t1)}\``;
-      break;
-    case 'tp2':
-      head = '🏆 *TP2 HIT — FULL TARGET*';
-      body = `Trade completed at full target.${setup.runner != null && setup.runner !== setup.t2 ? ' Optional: trail remainder to runner.' : ''}`;
-      action = `TP2 was \`$${fmt(setup.t2)}\``;
-      break;
-    case 'runner':
-      head = '🚀 *RUNNER HIT*';
-      body = `Trade extended past TP2 to the runner target. Close it out — banner trade.`;
-      action = `Runner was \`$${fmt(setup.runner)}\``;
-      break;
-    case 'sl':
-      head = '🛑 *STOP LOSS HIT*';
-      body = `Setup invalidated, trade closed. Risk was managed per plan.`;
-      action = `SL was \`$${fmt(setup.stop)}\``;
-      break;
-    case 'expired':
-      head = '⏳ *SETUP EXPIRED*';
-      body = `24h elapsed without TP1 or SL hit. Close any remaining position manually.`;
-      action = '';
-      break;
-    default:
-      return;
-  }
-
-  const text = [
-    BAR,
-    head,
-    `${display}  ·  ${num}  ·  ${dirWord}`,
-    BAR,
-    '',
-    body,
-    action,
-    '',
-    currentPrice != null ? `📍 Now: *$${fmt(currentPrice)}*` : '',
-    BAR,
-  ].filter(Boolean).join('\n');
-  return postRaw(text);
-}
-
-/**
- * Session-banner alert (separate path from setup alerts).
- * Called by detector when active session transitions.
- */
 export async function sendSessionChange({ fromSession, toSession, nowLabel, hint }) {
   const text = [
-    BAR,
-    `🌍 *SESSION CHANGE*`,
-    `📅 ${toSession.toUpperCase()}${fromSession ? ` (was ${fromSession.toUpperCase()})` : ''}`,
-    BAR,
-    ``,
-    `⏰ ${tgEscape(nowLabel)}`,
+    '🌍 *SESSION CHANGE*',
+    `${(toSession || '').toUpperCase()}${fromSession ? ` _(was ${String(fromSession).toUpperCase()})_` : ''}`,
+    nowLabel ? `⏰ ${tgEscape(nowLabel)}` : '',
     hint ? `ℹ️ ${tgEscape(hint)}` : '',
-    ``,
-    BAR,
   ].filter(Boolean).join('\n');
-  return postRaw(text);
-}
-
-/**
- * Setup alert in the new box-drawing format.
- *
- *   ══════════════════
- *   🚀 GOLD — LONG
- *   📊 STRATEGY #1
- *   ══════════════════
- *
- *   🟢 Buy: 4490.50
- *   🛑 SL:  4484.30
- *   🎯 TP1: 4496.70
- *   🎯 TP2: 4502.90
- *
- *   ⏰ Timeframe: 5m
- *   ⚡ Confidence: 87%
- *
- *   ℹ️ <summary>
- *
- *   ══════════════════
- */
-// Determine whether the entry can be MARKET-ordered right now, or needs a
-// resting LIMIT. The strategies all use limit-style entries (FVG midpoint,
-// C1 edge, etc.) so most triggers expect price to retrace into the zone.
-//
-//   LONG: limit BUY below current price → wait for retrace down to fill
-//   SHORT: limit SELL above current price → wait for retrace up to fill
-//   If current price is already at/past the limit, it's market-fillable now.
-function entryIntent(direction, entry, currentPrice, risk) {
-  if (entry == null || currentPrice == null) return null;
-  const diff = currentPrice - entry;
-  const tolerance = risk ? Math.max(0.5, 0.15 * risk) : 1;
-  if (Math.abs(diff) <= tolerance) {
-    return { label: '🚀 MARKET — fill NOW', hint: 'price is at entry level' };
-  }
-  if (direction === 'LONG') {
-    if (diff > 0) {
-      return { label: `⏳ LIMIT BUY @ $${entry.toFixed(2)}`, hint: `price is $${diff.toFixed(2)} above entry, wait for pullback` };
-    }
-    return { label: '🚀 MARKET BUY — price already at entry', hint: `price is $${Math.abs(diff).toFixed(2)} below entry` };
-  }
-  // SHORT
-  if (diff < 0) {
-    return { label: `⏳ LIMIT SELL @ $${entry.toFixed(2)}`, hint: `price is $${(-diff).toFixed(2)} below entry, wait for pullback` };
-  }
-  return { label: '🚀 MARKET SELL — price already at entry', hint: `price is $${diff.toFixed(2)} above entry` };
-}
-
-export async function send(r, ctx) {
-  if (r.status !== 'triggered' || !r.entryPlan) {
-    const g = STATUS_GLYPH[r.status] || { head: '🔔', verb: r.status };
-    return postRaw([
-      BAR,
-      `${g.head} *${g.verb.toUpperCase()}*`,
-      tgEscape(r.setupName || ''),
-      BAR,
-    ].join('\n'));
-  }
-
-  const ep = r.entryPlan;
-  const num = strategyNum(r.strategy);
-  const display = strategyDisplay(r.strategy);
-  const dirEmoji = r.direction === 'LONG' ? '🟢' : '🔴';
-  const dirWord = r.direction === 'LONG' ? 'LONG' : 'SHORT';
-  const conf = Math.round((r.confidence || 0) * 100);
-  const risk = ep.risk ?? Math.abs(ep.entry - ep.stop);
-  const intent = entryIntent(r.direction, ep.entry, ctx.lastClose, risk);
-  const fmt = (v) => (v != null && Number.isFinite(+v)) ? Number(v).toFixed(2) : '—';
-  const t1r = ep.t1 != null ? Math.abs(ep.t1 - ep.entry) / risk : null;
-  const t2r = ep.t2 != null ? Math.abs(ep.t2 - ep.entry) / risk : null;
-  const bePrice = r.direction === 'LONG' ? ep.entry + risk : ep.entry - risk;
-
-  // Register for follow-up so future ticks ping BE/TP1/TP2/SL milestones.
-  try { registerFollowUp(r); }
-  catch (err) { log.warn('registerFollowUp threw', { err: err.message }); }
-
-  // === Visual format per user directive 2026-05-21 ===
-  // Strategy name leads (big, bold). Number badge as subtitle. One clean
-  // price block; trade-management block clearly separated. No mode/local cruft.
-  const lines = [];
-  lines.push(BAR);
-  // Show the instrument the setup is on (MGC1!/MNQ1!/MES1!). Falls back to
-  // MGC1! if the result was created before per-instrument tagging.
-  const instMeta = INSTRUMENT_META[r.instrument] || INSTRUMENT_META.gold;
-  lines.push(`${dirEmoji} *${tgEscape(display.toUpperCase())}*`);
-  lines.push(`   _Strategy ${num}_   ·   ${dirWord}   ·   ${instMeta.symbol}  (${instMeta.label})`);
-  if (intent) lines.push(`*${intent.label}*`);
-  lines.push(BAR);
-  lines.push('');
-
-  // Price block (monospace, copy-friendly)
-  lines.push('```');
-  lines.push(`Entry   $${fmt(ep.entry)}`);
-  lines.push(`Stop    $${fmt(ep.stop)}    risk -$${fmt(risk)}`);
-  if (ep.t1 != null) lines.push(`TP1     $${fmt(ep.t1)}    +${t1r != null ? t1r.toFixed(1) : '?'}R`);
-  if (ep.t2 != null) lines.push(`TP2     $${fmt(ep.t2)}    +${t2r != null ? t2r.toFixed(1) : '?'}R`);
-  if (ep.runner != null && ep.runner !== ep.t2) {
-    const rr = Math.abs(ep.runner - ep.entry) / risk;
-    lines.push(`Runner  $${fmt(ep.runner)}    +${rr.toFixed(1)}R`);
-  }
-  lines.push('```');
-  lines.push('');
-
-  // Current price context
-  if (ctx.lastClose != null && ep.entry != null) {
-    const diff = ctx.lastClose - ep.entry;
-    const sign = diff >= 0 ? '+' : '';
-    lines.push(`📍 Now: *$${fmt(ctx.lastClose)}*  _(${sign}${diff.toFixed(2)} from entry)_`);
-  } else if (ctx.lastClose != null) {
-    lines.push(`📍 Now: *$${fmt(ctx.lastClose)}*`);
-  }
-  if (intent?.hint) lines.push(`_${tgEscape(intent.hint)}_`);
-  lines.push('');
-
-  // Trade management — the "what to do next" line
-  lines.push('🛡 *Risk plan*');
-  lines.push(`  • At +1R \`$${fmt(bePrice)}\` → move SL to breakeven`);
-  if (ep.t1 != null) lines.push(`  • At TP1 \`$${fmt(ep.t1)}\` → close 50%`);
-  if (ep.t2 != null && ep.t2 !== ep.t1) lines.push(`  • At TP2 \`$${fmt(ep.t2)}\` → close remainder or trail`);
-  lines.push(`  _You'll be auto-pinged when each level prints._`);
-  lines.push('');
-
-  // Confidence: show original + AI-adjusted side-by-side when the engine
-  // re-scored the setup. The adjusted figure is what gated the Telegram send.
-  if (r.aiScore?.aiEnabled) {
-    const adj = Math.round((r.adjustedConfidence ?? r.confidence) * 100);
-    const aiPct = Math.round((r.aiScore.score || 0) * 100);
-    lines.push(`⚡ ${conf}% conf · 🤖 ${aiPct}% AI · → *${adj}% adjusted*   ·   ⏰ ${ctx.timeframe || '?'}m`);
-  } else {
-    lines.push(`⚡ ${conf}% conf   ·   ⏰ ${ctx.timeframe || '?'}m`);
-  }
-  if (r.aiCommentary) lines.push(`🤖 _${tgEscape(r.aiCommentary)}_`);
-  if (r.summary) lines.push(`ℹ️ ${tgEscape(r.summary)}`);
-  lines.push(BAR);
-
-  const text = lines.join('\n');
-
-  // Chart image path: if alertChartImages is enabled in runtime config (default
-  // ON), generate a QuickChart URL with entry/SL/TP overlaid on recent bars
-  // and send via sendPhoto. Falls back to text-only sendMessage on any failure.
-  const cfg = getRuntimeConfig();
-  if (cfg?.alertChartImages !== false) {
-    const photoUrl = await buildAlertChartUrl(r);
-    if (photoUrl) {
-      const ok = await postPhoto(photoUrl, text);
-      if (ok) return true;
-      // sendPhoto failed (network glitch or Telegram couldn't fetch the image)
-      // — fall through to text-only send so the user still gets the alert
-      log.warn('sendPhoto failed, falling back to text', {});
-    }
-  }
   return postRaw(text);
 }

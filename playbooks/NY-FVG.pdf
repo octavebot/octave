@@ -1,0 +1,59 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Length 2098 >>
+stream
+BT /F2 22 Tf 0.10 0.10 0.12 rg 56.0 730.0 Td (NY Killzone ∑ FVG Retracement) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 680.0 Td (Concept) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 659.0 Td (First hour of NY \(07:00-10:00 NY\) often delivers a clean impulse that leaves an unfilled) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 644.0 Td (   3-candle FVG. Price tends to revisit that gap before continuing ó we enter on the retrace) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 629.0 Td (   into the gap midpoint.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 594.0 Td (Rules) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 573.0 Td (ï  Session ó NY killzone \(07:00-10:00 NY\).) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 556.0 Td (ï  FVG ó Newest bullish/bearish FVG formed in the last 8 bars on 15m.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 539.0 Td (ï  Retrace ó Latest bar pulled into the FVG zone \(low or high inside the gap\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 504.0 Td (Entry) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 483.0 Td (ï  Limit at FVG midpoint.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 448.0 Td (Stop loss) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 427.0 Td (ï  0.5 ◊ ATR beyond the gap's far edge.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 392.0 Td (Take profit) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 371.0 Td (ï  TP1: 1.1 x risk ∑ TP2: 1.5 x risk ∑ SL: 1.0 x risk) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 342.0 m 556 342.0 l S
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 324.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 303.0 Td (Trades: 138 ∑ 3.07 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Win rate: 62% ∑ Avg winner: 1.22 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Expectancy: 0.37 R per trade ∑ Profit factor: 1.95) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 252.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 223.0 m 556 223.0 l S
+BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 213.0 Td (Octave Trading Signals ∑ Strategy NY-FVG ∑ generated 2026-05-22) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 5 0 R >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000218 00000 n 
+0000000320 00000 n 
+0000002469 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+2605
+%%EOF

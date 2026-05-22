@@ -1,0 +1,65 @@
+%PDF-1.4
+%âãÏÓ
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Length 2883 >>
+stream
+BT /F2 22 Tf 0.10 0.10 0.12 rg 56.0 730.0 Td (EMA 9/21 Cross · Trend Continuation) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 680.0 Td (Concept) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 659.0 Td (Classic trend-follow momentum. The 50-EMA defines the bias \(price above -> long-only; below) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 644.0 Td (   -> short-only\). The 9/21 EMA cross gates the entry inside that trend so we only take) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 629.0 Td (   momentum kicks aligned with the higher-timeframe direction.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 594.0 Td (Rules) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 573.0 Td (•  Bias — H1 close > 50-EMA -> LONG bias only. < 50-EMA -> SHORT bias only.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 556.0 Td (•  Trigger — On 15m close, the 9-EMA crosses the 21-EMA in the direction of the bias AND) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 541.0 Td (   the closing bar's body is in the same direction.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 524.0 Td (•  Confirmation filter — ATR\(14\) on 15m > 0.5 × ATR\(14\) on H1 \(avoid dead-tape entries\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 489.0 Td (Entry) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 468.0 Td (•  Limit order at the 9-EMA value of the trigger bar \(small pullback fill\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 433.0 Td (Stop loss) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 412.0 Td (•  1.0 × ATR\(14\) on 15m below entry \(long\) / above entry \(short\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 377.0 Td (Take profit) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 356.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 321.0 Td (Best timeframe) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 300.0 Td (15m execution with H1 trend filter. The 9/21/50 EMA stack is the only thing on the chart.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 265.0 Td (When to skip) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 244.0 Td (•  News blackout ±30m \(handled globally\).) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 227.0 Td (•  Outside US session if the instrument is futures-thin.) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 198.0 m 556 198.0 l S
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 180.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 159.0 Td (Trades: 61 · 1.36 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 142.0 Td (Win rate: 62% · Avg winner: 1.19 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 125.0 Td (Expectancy: 0.37 R per trade · Profit factor: 1.97) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 108.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 79.0 m 556 79.0 l S
+BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 69.0 Td (Octave Trading Signals · Strategy EMA-CROSS · generated 2026-05-22) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 5 0 R >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000218 00000 n 
+0000000320 00000 n 
+0000003254 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+3390
+%%EOF

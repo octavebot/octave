@@ -33,15 +33,25 @@ const HTML_FILE = join(__dirname, 'index.html');
 const PORT = parseInt(process.env.OCTAVE_WEBUI_PORT || '7345', 10);
 
 const DEFAULTS = {
-  version: 1,
+  version: 2,
   mode: 'auto',
-  strategies: {
-    USLS: false, 'ICT-SMC': false, 'ALGO-SMC': false, ADAPTIVE: false,
-    ICT: true, SMT: true, TRINITY: true,
-    AMN: true, TORI: true, WARRIOR: true,
-  },
+  strategies: {},  // populated from the strategy registry at runtime
   lastUpdated: 0,
 };
+
+// Strategy registry — loaded once at startup. Used to validate config writes
+// and to surface the strategy list to the dashboard.
+let REGISTRY = [];
+async function loadStrategyRegistry() {
+  try {
+    const { loadRegistry } = await import('../lib/strategy_registry.js');
+    REGISTRY = await loadRegistry();
+    console.log(`[webui] loaded ${REGISTRY.length} strategies from registry`);
+  } catch (err) {
+    console.error('[webui] registry load failed:', err.message);
+  }
+}
+function registryIds() { return new Set(REGISTRY.map((s) => s.id)); }
 
 function readJson(path, fallback) {
   if (!existsSync(path)) return fallback;
@@ -216,15 +226,14 @@ async function saveConfig(updates) {
   const next = { ...current };
   if (updates.strategies && typeof updates.strategies === 'object') {
     next.strategies = { ...current.strategies };
-    // Built-in strategies must be in DEFAULTS; user strategies (custom ids) are
-    // allowed through unconditionally so the dashboard can toggle them.
-    let userKeys = new Set();
+    // Accept any registered built-in strategy id, plus any user strategy id.
+    const valid = registryIds();
     try {
       const us = await import('../lib/user_strategies.js');
-      userKeys = new Set(us.list().map((s) => s.id));
+      for (const s of us.list()) valid.add(s.id);
     } catch {}
     for (const [k, v] of Object.entries(updates.strategies)) {
-      if (k in DEFAULTS.strategies || userKeys.has(k)) next.strategies[k] = !!v;
+      if (valid.has(k)) next.strategies[k] = !!v;
     }
   }
   if (typeof updates.bypassKillzones === 'boolean') next.bypassKillzones = updates.bypassKillzones;
@@ -395,6 +404,33 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // ─── Strategy registry + playbooks ───
+    if (req.method === 'GET' && url.pathname === '/api/strategies') {
+      const cfg = loadConfig();
+      let userStrategies = [];
+      try { const us = await import('../lib/user_strategies.js'); userStrategies = us.list(); } catch {}
+      const builtins = REGISTRY.map((s, i) => ({
+        id: s.id, num: i + 1, name: s.name, concept: s.concept,
+        timeframes: s.timeframes, enabled: cfg.strategies?.[s.id] === true,
+        kind: 'builtin',
+        hasPlaybook: existsSync(join(REPO_DIR, 'playbooks', `${s.id}.pdf`)),
+      }));
+      const custom = userStrategies.map((u) => ({
+        id: u.id, name: u.name, concept: u.entry || '', enabled: cfg.strategies?.[u.id] !== false,
+        kind: 'user', hasPlaybook: false,
+      }));
+      return sendJson(res, 200, { strategies: [...builtins, ...custom] });
+    }
+    const pbMatch = url.pathname.match(/^\/api\/playbook\/([A-Za-z0-9_-]+)$/);
+    if (req.method === 'GET' && pbMatch) {
+      const pdfPath = join(REPO_DIR, 'playbooks', `${pbMatch[1]}.pdf`);
+      if (!existsSync(pdfPath)) return sendJson(res, 404, { error: 'no playbook' });
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/pdf');
+      res.setHeader('content-disposition', `attachment; filename="${pbMatch[1]}.pdf"`);
+      return res.end(readFileSync(pdfPath));
+    }
+
     // ─── Self-heal endpoints ───
     if (req.method === 'GET' && url.pathname === '/api/diagnose') {
       const sh = await import('../lib/self_heal.js');
@@ -557,6 +593,9 @@ const BIND = process.env.OCTAVE_WEBUI_BIND || '127.0.0.1';
 server.listen(PORT, BIND, () => {
   console.log(`[webui] listening on http://${BIND}:${PORT}`);
 });
+
+// Load the strategy registry so /api/strategies + config validation work.
+loadStrategyRegistry();
 
 // Webui no longer runs the Telegram bot in-process. The bot runs as its own
 // LaunchAgent (com.jqvier.octave-telegram) so a bug in command handlers can't

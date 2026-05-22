@@ -44,24 +44,33 @@ const ENV_FILE_CANDIDATES = [
 ].filter(Boolean);
 
 // ─── STRATEGY REGISTRY ───────────────────────────────────────────────────
-// Single source of truth. Number → key bidirectional; display order matches.
+// Auto-discovered from src/strategies/ via lib/strategy_registry.js. Loaded
+// once at startup into module-level maps. Numbers are assigned 1..N by
+// registry order so /enable <num> still works.
 
-const STRATEGIES = [
-  { num:  '1', key: 'USLS',     name: 'USLS — Session Sweep' },
-  { num:  '2', key: 'ICT-SMC',  name: 'ICT/SMC — HTF Judas' },
-  { num:  '3', key: 'ALGO-SMC', name: 'ALGO/SMC — 71% Fib' },
-  { num:  '4', key: 'ADAPTIVE', name: 'Adaptive Matrix' },
-  { num:  '5', key: 'ICT',      name: 'ICT Killzone' },
-  { num:  '6', key: 'SMT',      name: 'Gold/Silver SMT' },
-  { num:  '7', key: 'TRINITY',  name: 'Trinity Model' },
-  { num:  '8', key: 'AMN',      name: 'AMN Dual-Model' },
-  { num:  '9', key: 'TORI',     name: 'TORI · 4H Trendline' },
-  { num: '10', key: 'WARRIOR',  name: 'Warrior Momentum' },
-];
-const NUM_TO_KEY = Object.fromEntries(STRATEGIES.map((s) => [s.num, s.key]));
-const KEY_TO_NUM = Object.fromEntries(STRATEGIES.map((s) => [s.key, s.num]));
-const KEY_TO_NAME = Object.fromEntries(STRATEGIES.map((s) => [s.key, s.name]));
-const ALL_KEYS = STRATEGIES.map((s) => s.key);
+let STRATEGIES = [];          // [{ num, key, name, concept, timeframes }]
+let NUM_TO_KEY = {};
+let KEY_TO_NUM = {};
+let KEY_TO_NAME = {};
+let ALL_KEYS = [];
+
+async function loadStrategies() {
+  try {
+    const { loadRegistry } = await import('../lib/strategy_registry.js');
+    const reg = await loadRegistry();
+    STRATEGIES = reg.map((s, i) => ({
+      num: String(i + 1), key: s.id, name: s.name,
+      concept: s.concept, timeframes: s.timeframes,
+    }));
+    NUM_TO_KEY = Object.fromEntries(STRATEGIES.map((s) => [s.num, s.key]));
+    KEY_TO_NUM = Object.fromEntries(STRATEGIES.map((s) => [s.key, s.num]));
+    KEY_TO_NAME = Object.fromEntries(STRATEGIES.map((s) => [s.key, s.name]));
+    ALL_KEYS = STRATEGIES.map((s) => s.key);
+    console.log(`[bot] loaded ${STRATEGIES.length} strategies from registry`);
+  } catch (err) {
+    console.error('[bot] strategy registry load failed:', err.message);
+  }
+}
 
 // ─── CREDENTIALS ─────────────────────────────────────────────────────────
 
@@ -132,6 +141,26 @@ async function ackCallback(callbackId, text = '') {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackId, text, show_alert: false }),
   }).catch(() => {});
+}
+
+/** Upload a local file as a Telegram document. Node 20 has FormData/Blob built-in. */
+async function sendDocument(filePath, caption = '') {
+  try {
+    const bytes = readFileSync(filePath);
+    const form = new FormData();
+    form.append('chat_id', String(CHAT_ID));
+    if (caption) { form.append('caption', caption); form.append('parse_mode', 'Markdown'); }
+    form.append('document', new Blob([bytes], { type: 'application/pdf' }), filePath.split('/').pop());
+    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, { method: 'POST', body: form });
+    if (!res.ok) {
+      console.error('[bot] sendDocument', res.status, (await res.text().catch(() => '')).slice(0, 200));
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[bot] sendDocument threw:', err.message);
+    return false;
+  }
 }
 
 // ─── STATE ACCESSORS ─────────────────────────────────────────────────────
@@ -573,12 +602,13 @@ async function cmdSummary(arg) {
 
 async function cmdStrategies() {
   const cfg = loadConfig() || { strategies: {} };
-  const lines = [header('🎚', 'Strategies')];
+  const onCount = STRATEGIES.filter((s) => !!cfg.strategies[s.key]).length;
+  const lines = [header('🎚', 'Strategies', `${onCount}/${STRATEGIES.length} active`), ''];
   for (const s of STRATEGIES) {
     const on = !!cfg.strategies[s.key];
     lines.push(`${statusDot(on ? 'ok' : 'off')} \`#${s.num}\` ${tgEscape(s.name)}`);
   }
-  // User-defined
+  // User-added strategies (from file uploads / AI)
   try {
     const us = await import('../lib/user_strategies.js');
     const items = us.list();
@@ -590,25 +620,48 @@ async function cmdStrategies() {
       }
     }
   } catch {}
-  lines.push('', '_Toggle: `/enable <num>` · `/disable <num>` (e.g. `/enable 5`)_');
+  lines.push('',
+    '_Tap toggles in `/menu` → Strategies, or `/enable <num>` · `/disable <num>`._',
+    '_`/playbook <num>` for the full PDF · `/addstrategy` to add your own._');
   await send(lines.join('\n'));
 }
 
 async function cmdEnable(arg) {
   const k = resolveStrategy(arg);
-  if (!k) return send('Usage: `/enable <num>` (1-10) or `/enable <key>` (e.g. `TRINITY`)');
+  if (!k) return send(`Usage: \`/enable <num>\` (1-${STRATEGIES.length}) or \`/enable <key>\``);
   await updateConfig((c) => { c.strategies = c.strategies || {}; c.strategies[k] = true; return c; });
-  await send(`${statusDot('ok')} *${k}* (\`#${KEY_TO_NUM[k] || 'U'}\`) → ENABLED`);
+  await send(`${statusDot('ok')} *${KEY_TO_NAME[k] || k}* (\`#${KEY_TO_NUM[k] || 'U'}\`) → ENABLED`);
 }
 
 async function cmdDisable(arg) {
   const k = resolveStrategy(arg);
-  if (!k) return send('Usage: `/disable <num>` (1-10) or `/disable <key>`');
+  if (!k) return send(`Usage: \`/disable <num>\` (1-${STRATEGIES.length}) or \`/disable <key>\``);
   await updateConfig((c) => { c.strategies = c.strategies || {}; c.strategies[k] = false; return c; });
-  await send(`${statusDot('off')} *${k}* (\`#${KEY_TO_NUM[k] || 'U'}\`) → disabled`);
+  await send(`${statusDot('off')} *${KEY_TO_NAME[k] || k}* (\`#${KEY_TO_NUM[k] || 'U'}\`) → disabled`);
 }
 
-// ── User strategies ──
+/** /playbook <num|id> — send the strategy's PDF playbook. */
+async function cmdPlaybook(arg) {
+  const k = resolveStrategy(arg);
+  if (!k) {
+    return send([
+      header('📘', 'Playbooks'),
+      '',
+      'Send `/playbook <num>` to get a strategy\'s full PDF.',
+      `Example: \`/playbook 1\` → ${KEY_TO_NAME[NUM_TO_KEY['1']] || ''}`,
+      '',
+      'See `/strategies` for the numbered list.',
+    ].join('\n'));
+  }
+  const pdfPath = join(REPO_DIR, 'playbooks', `${k}.pdf`);
+  if (!existsSync(pdfPath)) {
+    return send(`📘 No playbook PDF for *${k}* yet. Run the backtest report to generate it.`);
+  }
+  const ok = await sendDocument(pdfPath, `📘 ${KEY_TO_NAME[k] || k} — playbook + backtest stats`);
+  if (!ok) await send('⚠️ Could not send the playbook file.');
+}
+
+// ── User strategies (add via file/AI, delete via command — no editing) ──
 
 async function cmdMyStrategies() {
   let items = [];
@@ -617,13 +670,13 @@ async function cmdMyStrategies() {
     return send([
       header('👤', 'My strategies'),
       '',
-      '_(none defined yet)_',
+      '_(none added yet)_',
       '',
-      'Create with: `/addstrategy <id> "<name>" <entry> [tf]`',
-      'entry ∈ ema_cross · ema_pullback · bb_extreme · rsi_bounds',
-      'Example: `/addstrategy my-ema 9/21 cross" ema_cross 15`',
+      section('Adding a strategy is one step'),
+      bullet('📎 Send a PDF / image / text file describing the strategy'),
+      bullet('💬 Or just describe it to me in plain English'),
       '',
-      'Or upload a PDF/image and the AI will extract it.',
+      'The AI extracts the rules and adds it automatically.',
     ].join('\n'));
   }
   const cfg = loadConfig() || {};
@@ -631,62 +684,28 @@ async function cmdMyStrategies() {
   for (const it of items) {
     const on = cfg.strategies?.[it.id] !== false;
     lines.push(`${statusDot(on ? 'ok' : 'off')} \`${tgEscape(it.id)}\` · ${tgEscape(it.name)}`);
-    lines.push(`   ${tgEscape(it.entry)} @ ${it.timeframe}m · stop ${it.stop_atr_mult}× ATR · TP ${it.tp_r}R`);
   }
-  lines.push('', '_Edit: `/editstrategy <id> key=value` · Delete: `/delstrategy <id>`_');
+  lines.push('', '_Delete: `/delstrategy <id>` · Add: send a file or describe it._');
   await send(lines.join('\n'));
 }
 
-async function cmdAddStrategy(arg) {
-  const parts = tokenize(arg || '');
-  if (parts.length < 3) {
-    return send([
-      'Usage: `/addstrategy <id> "<name>" <entry> [tf]`',
-      'entry: ema_cross · ema_pullback · bb_extreme · rsi_bounds',
-      'Example: `/addstrategy my-cross "EMA Cross" ema_cross 15`',
-    ].join('\n'));
-  }
-  const [id, name, entry, tf] = parts;
-  try {
-    const us = await import('../lib/user_strategies.js');
-    const created = us.create({
-      id, name, entry, timeframe: tf || '15',
-      description: '', direction: 'auto',
-      fast: 9, slow: 21, rsi_min: 0, rsi_max: 100,
-      stop_atr_mult: 1.5, tp_r: 2, enabled: true,
-    });
-    await updateConfig((c) => { c.strategies = c.strategies || {}; c.strategies[created.id] = true; return c; });
-    await send(`✅ Created \`${tgEscape(created.id)}\` — ${tgEscape(created.name)}\nEnabled. Tune with \`/editstrategy ${created.id} key=value\`.`);
-  } catch (err) { await send(`⚠️ ${err.message}`); }
-}
-
-async function cmdEditStrategy(arg) {
-  const parts = tokenize(arg || '');
-  if (parts.length < 2) {
-    return send('Usage: `/editstrategy <id> key=value …`\nKeys: name, description, timeframe, direction, entry, fast, slow, rsi_min, rsi_max, stop_atr_mult, tp_r, enabled');
-  }
-  const id = parts[0];
-  try {
-    const us = await import('../lib/user_strategies.js');
-    const cur = us.get(id);
-    if (!cur) return send(`No strategy \`${tgEscape(id)}\`. See \`/mystrategies\`.`);
-    const patch = { ...cur };
-    for (const kv of parts.slice(1)) {
-      const eq = kv.indexOf('='); if (eq < 0) continue;
-      const k = kv.slice(0, eq).trim(); const v = kv.slice(eq + 1).trim();
-      if (['fast', 'slow', 'rsi_min', 'rsi_max', 'stop_atr_mult', 'tp_r'].includes(k)) patch[k] = Number(v);
-      else if (k === 'enabled') patch.enabled = (v === 'true' || v === '1' || v === 'on');
-      else patch[k] = v;
-    }
-    const updated = us.update(id, patch);
-    await updateConfig((c) => { c.strategies = c.strategies || {}; c.strategies[updated.id] = updated.enabled; return c; });
-    await send(`✅ Updated \`${tgEscape(updated.id)}\``);
-  } catch (err) { await send(`⚠️ ${err.message}`); }
+async function cmdAddStrategy() {
+  await send([
+    header('➕', 'Add a strategy'),
+    '',
+    'Two simple ways — no forms, no parameters:',
+    '',
+    bullet('📎 *Send a file* — PDF, image, or text describing the strategy. The AI reads it and builds the strategy.'),
+    bullet('💬 *Just describe it* — e.g. "add a strategy that buys when RSI drops below 30 on the 1h and price is above the 200 EMA".'),
+    '',
+    'Either way it\'s added enabled and starts watching immediately.',
+    '_Remove one anytime with `/delstrategy <id>`._',
+  ].join('\n'));
 }
 
 async function cmdDelStrategy(arg) {
   const id = (arg || '').trim().replace(/^['"]|['"]$/g, '');
-  if (!id) return send('Usage: `/delstrategy <id>`');
+  if (!id) return send('Usage: `/delstrategy <id>` — see `/mystrategies` for ids.');
   try {
     const us = await import('../lib/user_strategies.js');
     us.remove(id);
@@ -1327,14 +1346,14 @@ const HELP_TOPICS = {
     kv('/strategies', 'list every strategy, on/off'),
     kv('/enable <num>', 'turn on (e.g. `/enable 5`)'),
     kv('/disable <num>', 'turn off'),
+    kv('/playbook <num>', 'get the strategy PDF'),
     '',
-    section('Custom strategies'),
+    section('Your own strategies'),
     kv('/mystrategies', 'list yours'),
-    kv('/addstrategy <id> "<name>" <entry> [tf]', 'create'),
-    kv('/editstrategy <id> key=value', 'edit'),
+    kv('/addstrategy', 'how to add one (file or describe it)'),
     kv('/delstrategy <id>', 'delete'),
     '',
-    '_Or send a PDF/image — AI will extract a strategy from it._',
+    '_To add: send a PDF/image or just describe the strategy — the AI builds it._',
   ].join('\n'),
   settings: [
     header('⚙️', 'Settings commands'),
@@ -1662,14 +1681,13 @@ async function handleStrategyUpload(fileObj, caption) {
     await updateConfig((c) => { c.strategies = c.strategies || {}; c.strategies[created.id] = true; return c; });
 
     await send([
-      `✅ *Strategy created* via ${source === 'heuristic' ? 'heuristic fallback' : 'AI extraction'}`,
+      `✅ *Strategy added* via ${source === 'heuristic' ? 'heuristic fallback' : 'AI extraction'}`,
       kv('id', `\`${tgEscape(created.id)}\``),
       kv('name', tgEscape(created.name)),
       kv('entry', `\`${created.entry}\` · tf \`${created.timeframe}m\``),
-      kv('params', `EMA ${created.fast}/${created.slow} · stop ${created.stop_atr_mult}× ATR · TP ${created.tp_r}R`),
       notes ? `_${tgEscape(notes)}_` : '',
       '',
-      `Tune with \`/editstrategy ${created.id} key=value\`.`,
+      `Enabled and watching now. Remove anytime with \`/delstrategy ${created.id}\`.`,
     ].filter(Boolean).join('\n'));
   } catch (err) {
     await send(`⚠️ Upload failed: ${err.message}`);
@@ -1696,8 +1714,9 @@ const COMMANDS = {
   '/history': cmdHistory, '/today': cmdToday, '/yesterday': cmdYesterday,
   '/range': cmdRange, '/last': cmdLast, '/summary': cmdSummary,
   '/strategies': cmdStrategies, '/enable': cmdEnable, '/disable': cmdDisable,
+  '/playbook': cmdPlaybook,
   '/mystrategies': cmdMyStrategies, '/addstrategy': cmdAddStrategy,
-  '/editstrategy': cmdEditStrategy, '/delstrategy': cmdDelStrategy,
+  '/delstrategy': cmdDelStrategy,
   '/24h': cmd24h, '/mute': cmdMute, '/unmute': cmdUnmute,
   '/backtest': cmdBacktest,
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
@@ -1787,11 +1806,12 @@ async function pollLoop() {
   console.log('[bot] poll loop stopped');
 }
 
-export function start() {
+export async function start() {
   if (!loadCreds()) {
     console.error('[bot] missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — disabled');
     return;
   }
+  await loadStrategies(); // populate the strategy maps before polling
   // Clear any stale webhook so long-poll works (prevents 409 on a fresh boot
   // if the token was ever used with setWebhook elsewhere).
   fetch(`https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=false`).catch(() => {});
