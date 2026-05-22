@@ -267,7 +267,7 @@ async function tick() {
     }
   }
 
-  // End-of-day report — fire once when the clock first enters the 18:00 NY hour.
+  // End-of-day report — fire once when the clock first enters the 17:00 NY hour.
   try { await maybeDailyReport(suppressTelegram); }
   catch (err) { log.warn('daily report threw', { err: err.message }); }
 
@@ -277,8 +277,8 @@ async function tick() {
 }
 
 // ─── End-of-day report ──────────────────────────────────────────────────
-// At 18:00 NY (market close) send a summary of the day. The last-sent date
-// is persisted so a restart inside the 18:00 hour doesn't re-send.
+// At 17:00 NY (gold-futures close) send a summary of the day. The last-sent
+// date is persisted so a restart inside the 17:00 hour doesn't re-send.
 const DAILY_REPORT_FILE = join(dirname(fileURLToPath(import.meta.url)), 'state', 'daily-report.json');
 let lastReportDate = (() => {
   try { return JSON.parse(readFileSync(DAILY_REPORT_FILE, 'utf8')).lastSentDate || ''; }
@@ -287,7 +287,7 @@ let lastReportDate = (() => {
 
 async function maybeDailyReport(suppressTelegram) {
   const np = nyParts(Date.now() / 1000);
-  if (np.h !== 18) return;                 // only during the 18:00-18:59 NY hour
+  if (np.h !== 17) return;                 // only during the 17:00-17:59 NY hour
   if (lastReportDate === np.dateKey) return; // already sent today
   lastReportDate = np.dateKey;
   try { writeFileSync(DAILY_REPORT_FILE, JSON.stringify({ lastSentDate: np.dateKey })); } catch {}
