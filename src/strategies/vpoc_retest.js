@@ -15,6 +15,7 @@ export const meta = {
   id: 'VPOC-RETEST',
   name: 'Volume POC · Retest',
   concept: 'Approximated daily POC retest as mean-reversion magnet',
+  window: 'Any session hour',
   timeframes: ['15'],
   defaultEnabled: true,
 };

@@ -61,6 +61,7 @@ async function loadStrategies() {
     STRATEGIES = reg.map((s, i) => ({
       num: String(i + 1), key: s.id, name: s.name,
       concept: s.concept, timeframes: s.timeframes,
+      window: s.window || 'Any session hour',
     }));
     NUM_TO_KEY = Object.fromEntries(STRATEGIES.map((s) => [s.num, s.key]));
     KEY_TO_NUM = Object.fromEntries(STRATEGIES.map((s) => [s.key, s.num]));
@@ -622,7 +623,50 @@ async function cmdStrategies() {
   } catch {}
   lines.push('',
     '_Tap toggles in `/menu` → Strategies, or `/enable <num>` · `/disable <num>`._',
-    '_`/playbook <num>` for the full PDF · `/addstrategy` to add your own._');
+    '_`/killzones` for active windows · `/playbook <num>` for the PDF._');
+  await send(lines.join('\n'));
+}
+
+/** /killzones — show the time window each strategy hunts in (NY time). */
+async function cmdKillzones() {
+  const nyNow = nyHHmm(Date.now());
+  const nyHour = parseInt(nyNow.split(':')[0], 10);
+
+  // Resolve active/idle from each strategy's window string. A window like
+  // "… 02:00-05:00 ET" gives a numeric range; "Any session hour" is always on.
+  const rows = STRATEGIES.map((s) => {
+    const w = s.window || 'Any session hour';
+    const m = w.match(/(\d{2}):\d{2}\s*[-–]\s*(\d{2}):\d{2}/);
+    const active = !m || (nyHour >= +m[1] && nyHour < +m[2]);
+    return { s, w, active };
+  });
+  const live = rows.filter((r) => r.active);
+  const idle = rows.filter((r) => !r.active);
+
+  const lines = [header('🕐', 'Strategy Killzones', `Now: ${nyNow} ET`), ''];
+  lines.push('_The window each strategy hunts for setups. New York time._', '');
+
+  if (live.length) {
+    lines.push(section('🟢 Hunting now'));
+    for (const r of live) {
+      lines.push(`  \`#${r.s.num}\` ${tgEscape(r.s.name)}`);
+      lines.push(`       ${tgEscape(r.w)}`);
+    }
+  }
+  if (idle.length) {
+    lines.push('', section('⚫ Waiting for their window'));
+    for (const r of idle) {
+      lines.push(`  \`#${r.s.num}\` ${tgEscape(r.s.name)}`);
+      lines.push(`       ${tgEscape(r.w)}`);
+    }
+  }
+  lines.push('',
+    '*Reference — NY time*',
+    bullet('Asian session  ·  20:00-02:00 ET'),
+    bullet('London killzone  ·  02:00-05:00 ET'),
+    bullet('NY killzone  ·  07:00-10:00 ET'),
+    '',
+    '_Gold/futures are closed Fri 17:00 → Sun 18:00 ET._');
   await send(lines.join('\n'));
 }
 
@@ -1346,6 +1390,7 @@ const HELP_TOPICS = {
     kv('/strategies', 'list every strategy, on/off'),
     kv('/enable <num>', 'turn on (e.g. `/enable 5`)'),
     kv('/disable <num>', 'turn off'),
+    kv('/killzones', 'time window each strategy hunts in'),
     kv('/playbook <num>', 'get the strategy PDF'),
     '',
     section('Your own strategies'),
@@ -1714,7 +1759,7 @@ const COMMANDS = {
   '/history': cmdHistory, '/today': cmdToday, '/yesterday': cmdYesterday,
   '/range': cmdRange, '/last': cmdLast, '/summary': cmdSummary,
   '/strategies': cmdStrategies, '/enable': cmdEnable, '/disable': cmdDisable,
-  '/playbook': cmdPlaybook,
+  '/playbook': cmdPlaybook, '/killzones': cmdKillzones,
   '/mystrategies': cmdMyStrategies, '/addstrategy': cmdAddStrategy,
   '/delstrategy': cmdDelStrategy,
   '/24h': cmd24h, '/mute': cmdMute, '/unmute': cmdUnmute,

@@ -13,6 +13,7 @@ export const meta = {
   id: 'EMA-CROSS',
   name: 'EMA 9/21 Cross · Trend',
   concept: 'Momentum cross in the direction of the 50-EMA trend',
+  window: 'Any session hour',
   timeframes: ['15', '60'],
   defaultEnabled: true,
 };

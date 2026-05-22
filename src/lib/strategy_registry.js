@@ -50,6 +50,7 @@ export async function loadRegistry() {
         id: mod.meta.id,
         name: mod.meta.name,
         concept: mod.meta.concept,
+        window: mod.meta.window || 'Any session hour',
         timeframes: mod.meta.timeframes || ['15'],
         instruments: mod.meta.instruments || ['gold', 'nasdaq', 'sp'],
         defaultEnabled: mod.meta.defaultEnabled !== false,

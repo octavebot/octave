@@ -14,6 +14,7 @@ export const meta = {
   id: 'ASIAN-BREAKOUT',
   name: 'Asian Range Breakout',
   concept: 'First 15m close beyond Asian session range with strong body',
+  window: 'London + NY · 02:00-10:00 ET',
   timeframes: ['15'],
   defaultEnabled: true,
 };

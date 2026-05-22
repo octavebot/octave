@@ -14,6 +14,7 @@ export const meta = {
   id: 'NY-FVG',
   name: 'NY Killzone · FVG Retracement',
   concept: 'Impulse + 3-candle FVG during NY killzone, enter on retrace',
+  window: 'NY killzone · 07:00-10:00 ET',
   timeframes: ['15'],
   defaultEnabled: true,
 };

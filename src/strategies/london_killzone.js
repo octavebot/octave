@@ -13,6 +13,7 @@ export const meta = {
   id: 'LONDON-SWEEP',
   name: 'London Killzone · Asian Sweep Reversal',
   concept: 'London opens with a stop run on Asian range, then reverses',
+  window: 'London killzone · 02:00-05:00 ET',
   timeframes: ['15'],
   defaultEnabled: true,
 };

@@ -14,6 +14,7 @@ export const meta = {
   id: 'VWAP-REJ',
   name: 'VWAP Rejection · Intraday',
   concept: 'Rejection at daily VWAP confirms the day\'s direction',
+  window: 'Any session hour',
   timeframes: ['5', '15'],
   defaultEnabled: true,
 };
