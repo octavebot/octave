@@ -173,19 +173,28 @@ export function step(priceOrPriceMap) {
 }
 
 /** Active (open) setups, newest first. Used by /status & dashboards. */
+// A setup still "open" after this long is stale — the trade resolved and the
+// tracker missed the exit, or it belonged to a since-removed strategy. Either
+// way it should not count as a live position.
+const STALE_OPEN_MS = 36 * 3600 * 1000;
+
 export function active() {
+  const now = Date.now();
   return Object.values(state.setups)
-    .filter((s) => !s.closedAt)
+    .filter((s) => !s.closedAt && (now - (s.createdAt || 0)) < STALE_OPEN_MS)
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-/** Remove closed setups older than 7d so the file stays small. */
+/** Drop closed setups >7d old and stale-open setups >36h old. */
 export function prune() {
-  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  const now = Date.now();
+  const closedCutoff = now - 7 * 24 * 3600 * 1000;
   let removed = 0;
   for (const id of Object.keys(state.setups)) {
     const s = state.setups[id];
-    if (s.closedAt && s.closedAt < cutoff) {
+    const staleClosed = s.closedAt && s.closedAt < closedCutoff;
+    const staleOpen = !s.closedAt && (now - (s.createdAt || 0)) > STALE_OPEN_MS;
+    if (staleClosed || staleOpen) {
       delete state.setups[id];
       removed++;
     }
