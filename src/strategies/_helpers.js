@@ -104,11 +104,11 @@ export function lastBearishRejection(bars) {
 
 // Uniform reward profile for every strategy. The strategy supplies entry +
 // a structural stop; we widen that stop by STOP_PAD × its distance so market
-// noise doesn't stop us out before the move plays — win rate rises while the
-// RR stays fixed (targets are multiples of the *widened* risk). TP1 = 1.2R,
-// TP2 = 1.5R measured off the widened risk.
-export const TP1_R = 1.1;
-export const TP2_R = 1.5;
+// noise doesn't stop us out before the move plays. Targets are multiples of
+// the *widened* risk — so every winning trade banks at least 1.2R (TP1),
+// running to 1.8R (TP2).
+export const TP1_R = 1.2;
+export const TP2_R = 1.8;
 export const STOP_PAD = 0.35;  // widen the structural stop by 35%
 
 /**
@@ -159,11 +159,11 @@ export function clamp01(x) {
 const CACHE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'backtest-cache.json');
 const DEFAULT_WIN_RATES = {
   'ASIAN-BREAKOUT': 0.62,
-  'EMA-CROSS': 0.65,
+  'EMA-CROSS': 0.63,
   'LONDON-SWEEP': 0.95,
-  'NY-FVG': 0.65,
+  'NY-FVG': 0.63,
   'VPOC-RETEST': 0.57,
-  'VWAP-REJ': 0.77,
+  'VWAP-REJ': 0.73,
 };
 let _winRates = { rates: null, at: 0 };
 

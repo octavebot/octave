@@ -35,6 +35,13 @@ const INTERVAL = {
   'W': '1wk',
 };
 
+// Bar duration in seconds per timeframe key — used to detect and drop the
+// still-forming final bar.
+const TF_SECONDS = {
+  '1': 60, '5': 300, '15': 900, '30': 1800, '60': 3600,
+  '240': 14400, '1D': 86400, 'D': 86400, 'W': 604800,
+};
+
 // Yahoo intraday lookback caps:
 //   1m: 7 days max
 //   5m / 15m / 30m: 60 days max
@@ -76,6 +83,15 @@ export async function fetchBars(asset, tf) {
     const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
     if (o == null || h == null || l == null || c == null) continue;
     bars.push({ time: ts[i], open: +o, high: +h, low: +l, close: +c, volume: v ?? 0 });
+  }
+  // Drop the final bar if it is still in progress. Yahoo includes the current
+  // unfinished period; strategies and the backtest must only ever see CLOSED
+  // candles, or live alerting fires on a half-formed bar whose high/low/close
+  // keep moving — premature signals that diverge from backtested behaviour.
+  const intervalSec = TF_SECONDS[String(tf)];
+  if (intervalSec && bars.length) {
+    const lastOpen = bars[bars.length - 1].time;
+    if (lastOpen + intervalSec > Date.now() / 1000) bars.pop();
   }
   return {
     symbol,

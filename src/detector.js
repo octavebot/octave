@@ -18,6 +18,9 @@
  * @property {Array<string>} [confirmations]  bullet list shown in alerts
  */
 
+import { writeFileSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
@@ -26,6 +29,9 @@ import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
 import { enrichSetup } from './lib/trade_enrichment.js';
 import { loadRegistry } from './lib/strategy_registry.js';
+import { computeInstrumentBias } from './lib/bias.js';
+
+const BIAS_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-bias.json');
 
 // Three primary instruments. Each runs the full strategy gauntlet; strategies
 // can opt out by declaring `meta.instruments`.
@@ -86,9 +92,17 @@ export async function detect() {
   const registry = await loadRegistry();
   const allResults = [];
 
+  const biasByInstrument = {};
   for (const instrument of INSTRUMENTS) {
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
+
+    // Structural bias for this instrument — independent of whether any
+    // strategy is triggering. Persisted below for the /bias command.
+    try {
+      const b = computeInstrumentBias(ctx);
+      if (b) biasByInstrument[instrument] = b;
+    } catch (err) { log.warn('bias compute threw', { instrument, err: err.message }); }
 
     const results = [];
     for (const s of registry) {
@@ -130,5 +144,12 @@ export async function detect() {
       }
     }
   }
+
+  // Persist the bias snapshot so /bias reads a fresh structural read instantly.
+  try {
+    writeFileSync(BIAS_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), bias: biasByInstrument }));
+    renameSync(BIAS_SNAPSHOT + '.tmp', BIAS_SNAPSHOT);
+  } catch { /* best-effort */ }
+
   return filtered;
 }

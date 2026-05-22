@@ -928,56 +928,37 @@ async function runDetectChild() {
 }
 
 async function cmdBias() {
-  await send('🧭 Computing bias across MGC + MNQ + MES…');
-  const r = await runDetectChild();
-  if (r.error) return send(`⚠️ ${r.error}`);
+  // Structural bias — read the signal engine's live snapshot (refreshed every
+  // 3s). It scores real multi-timeframe structure per instrument, so it is
+  // always meaningful, not just "whatever strategy is triggering right now".
+  const snap = readJson(join(STATE_DIR, 'last-bias.json'), null);
+  if (!snap || !snap.bias || (Date.now() - (snap.at || 0)) > 180_000) {
+    return send('🧭 Bias data not ready — the signal engine is still warming up. Try again in a moment.');
+  }
 
-  const STATUS_WT = { triggered: 3, near_trigger: 2, forming: 1, invalidated: 0 };
   const INSTRUMENTS = [
     { key: 'gold',   label: 'GOLD',   sym: 'MGC1!' },
     { key: 'nasdaq', label: 'NASDAQ', sym: 'MNQ1!' },
     { key: 'sp',     label: 'S&P',    sym: 'MES1!' },
   ];
+  const ICON = { BULLISH: '🟢', BEARISH: '🔴', NEUTRAL: '⚪' };
 
-  const byInst = {};
-  for (const x of r.results || []) {
-    if (!x.direction || x.direction === 'NONE') continue;
-    const inst = x.instrument || 'gold';
-    (byInst[inst] ||= { long: [], short: [], longScore: 0, shortScore: 0 });
-    const w = (STATUS_WT[x.status] || 0) * (x.confidence || 0.5);
-    if (x.direction === 'LONG')  { byInst[inst].long.push(x);  byInst[inst].longScore  += w; }
-    if (x.direction === 'SHORT') { byInst[inst].short.push(x); byInst[inst].shortScore += w; }
-  }
-  const totalSignals = Object.values(byInst).reduce((n, g) => n + g.long.length + g.short.length, 0);
-
-  if (totalSignals === 0) {
-    return send([
-      header('⚪', 'NEUTRAL — no signals'),
-      '',
-      'No directional development right now — markets in chop, outside',
-      'killzone windows, or waiting for a sweep. Check back later.',
-    ].join('\n'));
-  }
-
-  const lines = [header('🧭', 'Multi-instrument bias'), ''];
+  const lines = [header('🧭', 'Market bias'), ''];
   for (const inst of INSTRUMENTS) {
-    const g = byInst[inst.key];
-    if (!g) { lines.push(`⚪ *${inst.label}* \`${inst.sym}\` · no signals`); continue; }
-    const total = g.longScore + g.shortScore;
-    let icon, word, pct;
-    if (total < 0.1) { icon = '⚪'; word = 'NEUTRAL'; pct = '—'; }
-    else if (g.longScore > g.shortScore * 1.3) { icon = '🟢'; word = 'BULLISH'; pct = `${Math.round(g.longScore / total * 100)}%`; }
-    else if (g.shortScore > g.longScore * 1.3) { icon = '🔴'; word = 'BEARISH'; pct = `${Math.round(g.shortScore / total * 100)}%`; }
-    else { icon = '⚪'; word = 'MIXED'; pct = '~50/50'; }
-    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · ${word} (${pct})`);
-    lines.push(`   ${g.long.length}L · ${g.short.length}S signals`);
-    const top = [...g.long, ...g.short].sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 3);
-    for (const s of top) {
-      const arrow = s.direction === 'LONG' ? '🟢' : '🔴';
-      lines.push(`     ${arrow} #${KEY_TO_NUM[s.strategy] || 'U'} ${s.strategy} · ${s.status} · ${Math.round((s.confidence||0)*100)}%`);
-    }
+    const b = snap.bias[inst.key];
+    if (!b) { lines.push(`⚪ *${inst.label}* \`${inst.sym}\` · no data`, ''); continue; }
+    // Strength: how lopsided the factor vote is.
+    const agree = Math.abs(b.score);
+    const strength = agree >= b.maxScore - 1 ? 'strong' : agree >= 2 ? 'moderate' : 'slight';
+    const label = b.direction === 'NEUTRAL' ? 'NEUTRAL' : `${b.direction} · ${strength}`;
+    lines.push(`${ICON[b.direction]} *${inst.label}* \`${inst.sym}\` · ${label}`);
+    lines.push(`   _${b.factors.filter((f) => f.v > 0).length}↑ ${b.factors.filter((f) => f.v < 0).length}↓ ${b.factors.filter((f) => f.v === 0).length}→ · price \`${b.price.toFixed(2)}\`_`);
+    // One line per factor so the read is transparent.
+    const fIcon = (v) => v > 0 ? '🟢' : v < 0 ? '🔴' : '⚪';
+    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label.replace(/^(H1|15m) /, '')}`).join(' · '));
     lines.push('');
   }
+  lines.push('_Structural read across H1 + 15m trend, momentum & session._');
   await send(lines.join('\n'));
 }
 
