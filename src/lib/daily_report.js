@@ -10,6 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nyParts } from './time.js';
+import * as followUp from './follow_up.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dirname, '..', '..');
@@ -100,8 +101,7 @@ export function buildDailyReport(nowUnix = Date.now() / 1000) {
   // ── Open positions carried into the next session ──
   let stillLive = 0, stillPending = 0;
   try {
-    const fu = await import('./follow_up.js');
-    for (const s of fu.active()) {
+    for (const s of followUp.active()) {
       if (s.phase === 'pending') stillPending++;
       else stillLive++;
     }
