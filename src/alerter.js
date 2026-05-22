@@ -102,6 +102,7 @@ async function postPhoto(photoUrl, caption) {
  */
 async function buildSignalCard(r, ctx) {
   const ep = r.entryPlan;
+  const cfg = getRuntimeConfig() || {};
   const inst = INSTRUMENT_META[r.instrument] || { label: r.instrument || '?', symbol: r.symbol || '?' };
   const dirIcon = r.direction === 'LONG' ? '🟢' : '🔴';
   const risk = ep.risk ?? Math.abs(ep.entry - ep.stop);
@@ -154,6 +155,23 @@ async function buildSignalCard(r, ctx) {
   lines.push('├ *Stop Loss* ───────────');
   lines.push(`  ❌  \`${fmtPrice(ep.stop)}\``);
   lines.push('');
+  // Position size — contracts to risk the configured $/trade given this
+  // setup's stop distance. The widened risk is in price points; convert to
+  // dollars with the micro-future point value.
+  const DOLLAR_PER_POINT = { gold: 10, nasdaq: 2, sp: 5 };
+  const dpp = DOLLAR_PER_POINT[r.instrument] || 1;
+  const perContract = risk * dpp;
+  const riskBudget = Number(cfg.riskPerTradeUsd) > 0 ? Number(cfg.riskPerTradeUsd) : 250;
+  if (perContract > 0) {
+    const contracts = Math.floor(riskBudget / perContract);
+    lines.push('├ *Position Size* ───────');
+    if (contracts >= 1) {
+      lines.push(`  📐  *${contracts}* contract${contracts > 1 ? 's' : ''}  ·  risks ~$${Math.round(contracts * perContract)}`);
+    } else {
+      lines.push(`  📐  *1* contract  ·  risks ~$${Math.round(perContract)}  _(stop wide — over your $${riskBudget})_`);
+    }
+    lines.push('');
+  }
   lines.push('├ *Trade Data* ──────────');
   lines.push(`  ⏰ TF     →  ${tfLabel(r.timeframe || ctx.timeframe)}`);
   lines.push(`  📊 Conf   →  ${confPct}%`);

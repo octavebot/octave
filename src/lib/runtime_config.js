@@ -26,6 +26,7 @@ const DEFAULTS = Object.freeze({
   mute: { untilMs: 0, reason: null },
   alertChartImages: false,  // chart images disabled — text-only signal cards
   aiEngine: { enabled: true, threshold: 0.55 },
+  riskPerTradeUsd: 250,     // $ risked per trade — drives the contract-size line
   lastUpdated: 0,
 });
 
@@ -45,6 +46,7 @@ export function load() {
         enabled: raw.aiEngine?.enabled !== false,
         threshold: Number(raw.aiEngine?.threshold) || 0.55,
       },
+      riskPerTradeUsd: Number(raw.riskPerTradeUsd) > 0 ? Number(raw.riskPerTradeUsd) : 250,
       lastUpdated: raw.lastUpdated || 0,
     };
   } catch {
