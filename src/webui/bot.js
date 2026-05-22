@@ -1037,6 +1037,9 @@ async function cmdNews(arg) {
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(new Date(u * 1000));
 
+  // ForexFactory folder colours: 🔴 high · 🟠 medium · 🟡 low impact.
+  const folder = (impact) => ({ high: '🔴', medium: '🟠', low: '🟡' }[impact] || '⚪');
+
   const byDay = new Map();
   for (const ev of evs) {
     const key = fmtDate(ev.unix);
@@ -1045,12 +1048,17 @@ async function cmdNews(arg) {
   }
 
   const lines = [header('📰', 'News watch'), '', headerLine, nextLine, '', `─── next ${hours}h ───`].filter(Boolean);
-  if (byDay.size === 0) lines.push('', '_No high-impact USD events in this window._');
-  else for (const [day, dayEvents] of byDay) {
+  if (byDay.size === 0) {
+    lines.push('', '_No USD events in this window._');
+  } else for (const [day, dayEvents] of byDay) {
     lines.push('', section(day));
-    for (const ev of dayEvents) lines.push(bullet(`\`${fmtTime(ev.unix)}\` · ${tgEscape(ev.title || ev.name || '?')}`));
+    for (const ev of dayEvents) {
+      lines.push(`${folder(ev.impact)} \`${fmtTime(ev.unix)}\` · ${tgEscape(ev.title || ev.name || '?')}`);
+    }
   }
-  lines.push('', '_Auto-paused ±30m around each event. Source: ForexFactory._');
+  lines.push('',
+    '🔴 high  ·  🟠 medium  ·  🟡 low impact',
+    '_Bot auto-pauses ±30m around 🔴 high-impact events only. Source: ForexFactory._');
   await send(lines.join('\n'));
 }
 

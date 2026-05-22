@@ -84,14 +84,18 @@ export async function refreshForexFactory(force = false) {
       const impact = (ev.impact || '').toLowerCase();
       const titleLc = String(ev.title).toLowerCase();
       const keywordHit = HIGH_IMPACT_KEYWORDS.some((kw) => titleLc.includes(kw));
-      // Keep High-impact OR explicit keyword hits at any impact
-      if (impact !== 'high' && !keywordHit) continue;
+      // Keep low / medium / high so the calendar can show the full
+      // yellow/orange/red folder system. Holiday + non-economic rows dropped.
+      // A keyword hit (NFP, CPI, FOMC…) is forced to high even if FF mislabels it.
+      let level = ['high', 'medium', 'low'].includes(impact) ? impact : null;
+      if (keywordHit) level = 'high';
+      if (!level) continue;
       // ForexFactory date is ISO with timezone offset, e.g. "2026-05-22T08:30:00-04:00"
       const unix = Math.floor(new Date(ev.date).getTime() / 1000);
       if (!Number.isFinite(unix)) continue;
       events.push({
         title: ev.title,
-        impact: 'high',
+        impact: level,
         source: 'forexfactory',
         unix,
         date: ev.date.slice(0, 10),
@@ -137,20 +141,24 @@ function eventTime(ev) {
   return Math.floor((fakeUtc + offset) / 1000);
 }
 
-/** Combined event stream (manual JSON + ForexFactory cache). */
-function allHighImpactEvents() {
+/** Combined event stream (manual JSON + ForexFactory cache) — all impacts. */
+function allEvents() {
   reload();
   const out = [];
   for (const ev of cache.events) {
-    if (ev.impact !== 'high') continue;
     const t = eventTime(ev);
     if (!t) continue;
-    out.push({ ...ev, unix: t, source: ev.source || 'manual' });
+    out.push({ ...ev, impact: (ev.impact || 'high').toLowerCase(), unix: t, source: ev.source || 'manual' });
   }
   for (const ev of ffCache.events) {
-    if (Number.isFinite(ev.unix)) out.push(ev);
+    if (Number.isFinite(ev.unix)) out.push({ ...ev, impact: (ev.impact || 'high').toLowerCase() });
   }
   return out;
+}
+
+/** High-impact subset — the only events that gate the trading blackout. */
+function allHighImpactEvents() {
+  return allEvents().filter((ev) => ev.impact === 'high');
 }
 
 /**
@@ -175,17 +183,20 @@ export function checkBlackout(nowUnix = Date.now() / 1000, windowMinutes = 30) {
   };
 }
 
-/** Return all upcoming high-impact events in the next `hoursAhead` hours. */
+/**
+ * Upcoming events in the next `hoursAhead` hours — ALL impact levels, each
+ * carrying its `impact` ('high'|'medium'|'low') for the folder-colour display.
+ */
 export function upcomingEvents(nowUnix = Date.now() / 1000, hoursAhead = 24) {
   const cutoff = nowUnix + hoursAhead * 3600;
-  return allHighImpactEvents()
+  return allEvents()
     .filter((ev) => ev.unix >= nowUnix && ev.unix <= cutoff)
     .sort((a, b) => a.unix - b.unix);
 }
 
-/** Next single upcoming high-impact event (or null), with minutesAway. */
+/** Next upcoming HIGH-impact event (or null), with minutesAway. */
 export function nextEvent(nowUnix = Date.now() / 1000) {
-  const up = upcomingEvents(nowUnix, 7 * 24);
+  const up = upcomingEvents(nowUnix, 7 * 24).filter((ev) => ev.impact === 'high');
   if (up.length === 0) return null;
   const ev = up[0];
   return { ...ev, minutesAway: Math.round((ev.unix - nowUnix) / 60) };
