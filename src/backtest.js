@@ -31,18 +31,6 @@ import { evaluateTrinity } from './strategies/trinity.js';
 import { evaluateAMN } from './strategies/amn.js';
 import { evaluateTORI } from './strategies/tori.js';
 import { evaluateWARRIOR } from './strategies/warrior.js';
-// ChatGPT Strategies pack
-import { evaluate as cgtEma } from './strategies/chatgpt/ema_trend.js';
-import { evaluate as cgtHtfsd } from './strategies/chatgpt/htf_supply_demand.js';
-import { evaluate as cgtLondon } from './strategies/chatgpt/london_breakout.js';
-import { evaluate as cgtNyrev } from './strategies/chatgpt/ny_reversal_trap.js';
-import { evaluate as cgtVwap } from './strategies/chatgpt/vwap_mean_reversion.js';
-// Gemini Strategies pack
-import { evaluate as gemAsia } from './strategies/gemini/asian_range_breakout.js';
-import { evaluate as gemEma } from './strategies/gemini/golden_river_ema.js';
-import { evaluate as gemFib } from './strategies/gemini/golden_fibonacci.js';
-import { evaluate as gemSmc } from './strategies/gemini/institutional_order_blocks.js';
-import { evaluate as gemVwap } from './strategies/gemini/vwap_rubber_band.js';
 import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_strategies.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
@@ -70,9 +58,7 @@ export function getAllStrategies() {
   return [...BUILTIN_STRATEGIES, ...listUserStrategies().map(userStrategyEntry)];
 }
 
-// Backtest registry — order matters for display; the `num` field is shown in
-// /backtest output and can be either a number (1..10) or a letter-prefixed id
-// (C1..C5 for ChatGPT, G1..G5 for Gemini). User strategies get `num: 'U'`.
+// Backtest registry — order matches display order. User strategies get `num: 'U'`.
 export const BUILTIN_STRATEGIES = [
   { name: 'USLS',       num: 1,   fn: evaluateUSLS,     label: 'USLS' },
   { name: 'ICT-SMC',    num: 2,   fn: evaluateICTSMC,   label: 'ICT/SMC' },
@@ -84,26 +70,23 @@ export const BUILTIN_STRATEGIES = [
   { name: 'AMN',        num: 8,   fn: evaluateAMN,      label: 'AMN Dual-Model' },
   { name: 'TORI',       num: 9,   fn: evaluateTORI,     label: 'TORI Trendline' },
   { name: 'WARRIOR',    num: 10,  fn: evaluateWARRIOR,  label: 'Warrior Momentum' },
-  { name: 'CGT-EMA',    num: 'C1', fn: cgtEma,           label: 'CGT · EMA Trend' },
-  { name: 'CGT-HTFSD',  num: 'C2', fn: cgtHtfsd,         label: 'CGT · HTF Supply & Demand' },
-  { name: 'CGT-LONDON', num: 'C3', fn: cgtLondon,        label: 'CGT · London Breakout' },
-  { name: 'CGT-NYREV',  num: 'C4', fn: cgtNyrev,         label: 'CGT · NY Reversal Trap' },
-  { name: 'CGT-VWAP',   num: 'C5', fn: cgtVwap,          label: 'CGT · VWAP Mean Reversion' },
-  { name: 'GEM-ASIA',   num: 'G1', fn: gemAsia,          label: 'GEM · Asian Range Breakout' },
-  { name: 'GEM-EMA',    num: 'G2', fn: gemEma,           label: 'GEM · Golden River EMA' },
-  { name: 'GEM-FIB',    num: 'G3', fn: gemFib,           label: 'GEM · Golden Fibonacci' },
-  { name: 'GEM-SMC',    num: 'G4', fn: gemSmc,           label: 'GEM · Institutional OBs' },
-  { name: 'GEM-VWAP',   num: 'G5', fn: gemVwap,          label: 'GEM · VWAP Rubber Band' },
 ];
 
+// All three primary instruments are fetched. Gold-only strategies (Gold/Silver
+// SMT, DXY-driven gold bias, Trinity, etc.) simply produce no triggered results
+// when ctx.instrument !== 'gold'; the walk still runs them.
+const INSTRUMENTS = ['gold', 'nasdaq', 'sp'];
+const INSTRUMENT_META = {
+  gold:   { pair: 'XAUUSD', symbol: 'MGC1!', dollarPerPoint: 10 }, // MGC = $10/point
+  nasdaq: { pair: 'NQ100',  symbol: 'MNQ1!', dollarPerPoint: 2 },  // MNQ = $2/point
+  sp:     { pair: 'SP500',  symbol: 'MES1!', dollarPerPoint: 5 },  // MES = $5/point
+};
+
 const PANE_REQUESTS = [
-  ['gold',   '1'],
-  ['gold',   '5'],
-  ['gold',   '15'],
-  ['gold',   '60'],
-  ['gold',   '1D'],
-  ['silver', '5'],
-  ['silver', '15'],
+  ['gold',   '1'], ['gold',   '5'], ['gold',   '15'], ['gold',   '60'], ['gold',   '1D'],
+  ['nasdaq', '5'], ['nasdaq', '15'], ['nasdaq', '60'], ['nasdaq', '1D'],
+  ['sp',     '5'], ['sp',     '15'], ['sp',     '60'], ['sp',     '1D'],
+  ['silver', '5'], ['silver', '15'],
   ['dxy',    '1D'],
 ];
 
@@ -127,7 +110,7 @@ function trimToWindow(panesByTf, sinceUnix) {
   return out;
 }
 
-function buildCtxFromMaps(panesByTf, lastBarIdxByKey) {
+function buildCtxFromMaps(panesByTf, lastBarIdxByKey, instrument = 'gold') {
   const ctxPanes = new Map();
   let anchor = null;
   for (const [key, p] of panesByTf) {
@@ -135,24 +118,26 @@ function buildCtxFromMaps(panesByTf, lastBarIdxByKey) {
     if (idx < 30) continue;
     const slice = p.bars.slice(0, idx + 1);
     ctxPanes.set(key, { ...p, bars: slice });
-    if (!anchor && (key === 'gold|5' || key === 'gold|15')) {
+    if (!anchor && (key === `${instrument}|5` || key === `${instrument}|15`)) {
       anchor = ctxPanes.get(key);
     }
   }
   if (!anchor) {
     for (const [k, p] of ctxPanes) {
-      if (k.startsWith('gold|')) { anchor = p; break; }
+      if (k.startsWith(`${instrument}|`)) { anchor = p; break; }
     }
   }
   if (!anchor) return null;
   const last = anchor.bars[anchor.bars.length - 1];
   const np = nyParts(last.time);
   return {
+    instrument,
     ts: last.time * 1000,
     barTime: last.time,
     lastClose: last.close,
     panes: [...ctxPanes.values()],
     panesByTf: ctxPanes,
+    pane: (tf) => ctxPanes.get(`${instrument}|${tf}`),
     anchorSymbol: anchor.symbol,
     anchorResolution: anchor.resolution,
     dateKey: np.dateKey,
@@ -198,8 +183,8 @@ export async function runBacktest(opts = {}) {
   const enabledNames = opts.strategies?.length
     ? opts.strategies
     : Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => k);
-  // Accept multiple identifiers per strategy: full key (CGT-EMA), display num
-  // ('C1' or 1), or any case variant. Normalize before matching.
+  // Accept multiple identifiers per strategy: full key (TRINITY), display num
+  // (1..10), or any case variant. Normalize before matching.
   const requested = new Set(enabledNames.map((n) => String(n).toUpperCase()));
   const ALL = getAllStrategies();
   const selected = ALL.filter((s) =>
@@ -221,28 +206,9 @@ export async function runBacktest(opts = {}) {
     return { error: 'no panes after trim', stats: {}, panesSummary: [], window: null };
   }
 
-  // Pick anchor — prefer 5m gold for the walk
-  const anchorKey = ['gold|5', 'gold|15', 'gold|60'].find((k) => panesByTf.has(k));
-  if (!anchorKey) {
-    return { error: 'no anchor pane', stats: {}, panesSummary: [], window: null };
-  }
-  const anchorPane = panesByTf.get(anchorKey);
-  const total = anchorPane.bars.length;
-  const warmup = Math.min(80, Math.floor(total * 0.15));
-
-  const panesSummary = [...panesByTf.entries()].map(([k, p]) => `${k}=${p.bars.length}`);
-  const window = {
-    days,
-    fromUnix: anchorPane.bars[0].time,
-    toUnix: anchorPane.bars[total - 1].time,
-    anchorTF: anchorKey.split('|')[1] + 'm',
-    anchorSym: anchorPane.symbol,
-  };
-
-  // Bookkeeping
+  // Bookkeeping — stats are aggregate across instruments; trades carry an
+  // `instrument` field so downstream can group/filter.
   const stats = {};
-  const seenSetupIds = {};
-  const pendingLimits = {};
   for (const s of selected) {
     stats[s.name] = {
       name: s.name, num: s.num, label: s.label,
@@ -250,85 +216,121 @@ export async function runBacktest(opts = {}) {
       triggeredCount: 0, uniqueTriggered: 0, invalidatedCount: 0,
       limitsExpired: 0, trades: [],
     };
-    seenSetupIds[s.name] = new Set();
-    pendingLimits[s.name] = [];
   }
 
-  // Walk forward through anchor bars
-  for (let i = warmup; i < total; i += step) {
-    const anchorTime = anchorPane.bars[i].time;
-    const lastBarIdx = new Map();
-    for (const [k, p] of panesByTf) {
-      // binary search for last bar with time <= anchorTime
-      let lo = 0, hi = p.bars.length - 1, idx = -1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (p.bars[mid].time <= anchorTime) { idx = mid; lo = mid + 1; } else hi = mid - 1;
-      }
-      if (idx >= 0) lastBarIdx.set(k, idx);
-    }
-    const ctx = buildCtxFromMaps(panesByTf, lastBarIdx);
-    if (!ctx) continue;
+  let firstAnchorTime = null, lastAnchorTime = null;
+  const panesSummary = [...panesByTf.entries()].map(([k, p]) => `${k}=${p.bars.length}`);
+  let walkedInstruments = 0;
+  let lastAnchorTF = '5m';
 
-    for (const s of selected) {
-      const st = stats[s.name];
-      st.ticksRun++;
-      let results;
-      try { results = s.fn(ctx) || []; } catch { continue; }
-      for (const r of results) {
-        if (r.status === 'forming') st.formingCount++;
-        else if (r.status === 'near_trigger') st.nearTriggerCount++;
-        else if (r.status === 'invalidated') st.invalidatedCount++;
-        else if (r.status === 'triggered' && r.entryPlan && r.direction !== 'NONE') {
-          st.triggeredCount++;
-          if (seenSetupIds[s.name].has(r.setupId)) continue;
-          if ((r.confidence || 0) < confMin) {
-            seenSetupIds[s.name].add(r.setupId);
+  for (const inst of INSTRUMENTS) {
+    const anchorKey = [`${inst}|5`, `${inst}|15`, `${inst}|60`].find((k) => panesByTf.has(k));
+    if (!anchorKey) continue;
+    const anchorPane = panesByTf.get(anchorKey);
+    const total = anchorPane.bars.length;
+    if (total < 50) continue;
+    const warmup = Math.min(80, Math.floor(total * 0.15));
+    walkedInstruments++;
+    lastAnchorTF = anchorKey.split('|')[1] + 'm';
+    const t0 = anchorPane.bars[0].time, tN = anchorPane.bars[total - 1].time;
+    if (firstAnchorTime == null || t0 < firstAnchorTime) firstAnchorTime = t0;
+    if (lastAnchorTime == null || tN > lastAnchorTime) lastAnchorTime = tN;
+
+    // Per-instrument dedup + pending-limits buckets (kept inside the inst loop
+    // so a setupId in gold doesn't accidentally suppress the same id in nasdaq)
+    const seenSetupIds = {};
+    const pendingLimits = {};
+    for (const s of selected) { seenSetupIds[s.name] = new Set(); pendingLimits[s.name] = []; }
+
+    for (let i = warmup; i < total; i += step) {
+      const anchorTime = anchorPane.bars[i].time;
+      const lastBarIdx = new Map();
+      for (const [k, p] of panesByTf) {
+        // binary search for last bar with time <= anchorTime
+        let lo = 0, hi = p.bars.length - 1, idx = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (p.bars[mid].time <= anchorTime) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+        }
+        if (idx >= 0) lastBarIdx.set(k, idx);
+      }
+      const ctx = buildCtxFromMaps(panesByTf, lastBarIdx, inst);
+      if (!ctx) continue;
+
+      for (const s of selected) {
+        const st = stats[s.name];
+        st.ticksRun++;
+        let results;
+        try { results = s.fn(ctx) || []; } catch { continue; }
+        for (const r of results) {
+          if (r.status === 'forming') st.formingCount++;
+          else if (r.status === 'near_trigger') st.nearTriggerCount++;
+          else if (r.status === 'invalidated') st.invalidatedCount++;
+          else if (r.status === 'triggered' && r.entryPlan && r.direction !== 'NONE') {
+            st.triggeredCount++;
+            const dedupId = `${inst}|${r.setupId}`;
+            if (seenSetupIds[s.name].has(dedupId)) continue;
+            if ((r.confidence || 0) < confMin) {
+              seenSetupIds[s.name].add(dedupId);
+              continue;
+            }
+            seenSetupIds[s.name].add(dedupId);
+            st.uniqueTriggered++;
+            pendingLimits[s.name].push({
+              instrument: inst,
+              direction: r.direction, entry: r.entryPlan.entry, stop: r.entryPlan.stop,
+              t1: r.entryPlan.t1, t2: r.entryPlan.t2,
+              risk: r.entryPlan.risk ?? Math.abs(r.entryPlan.entry - r.entryPlan.stop),
+              placedIdx: i, placedTime: anchorTime,
+              setupId: r.setupId, confidence: r.confidence,
+              expiresIdx: i + 40,
+            });
+          }
+        }
+      }
+
+      // Process pending limits against this anchor bar
+      for (const s of selected) {
+        const arr = pendingLimits[s.name];
+        const st = stats[s.name];
+        const remaining = [];
+        for (const lim of arr) {
+          if (i >= lim.expiresIdx) { st.limitsExpired++; continue; }
+          const bar = anchorPane.bars[i];
+          const fill = (lim.direction === 'LONG' && bar.low <= lim.entry) ||
+                       (lim.direction === 'SHORT' && bar.high >= lim.entry);
+          if (!fill) {
+            const stopFirst = (lim.direction === 'LONG' && bar.low <= lim.stop) ||
+                              (lim.direction === 'SHORT' && bar.high >= lim.stop);
+            if (stopFirst) { st.limitsExpired++; continue; }
+            remaining.push(lim);
             continue;
           }
-          seenSetupIds[s.name].add(r.setupId);
-          st.uniqueTriggered++;
-          pendingLimits[s.name].push({
-            direction: r.direction, entry: r.entryPlan.entry, stop: r.entryPlan.stop,
-            t1: r.entryPlan.t1, t2: r.entryPlan.t2,
-            risk: r.entryPlan.risk ?? Math.abs(r.entryPlan.entry - r.entryPlan.stop),
-            placedIdx: i, placedTime: anchorTime,
-            setupId: r.setupId, confidence: r.confidence,
-            expiresIdx: i + 40,
-          });
+          const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: i });
+          if (outcome) {
+            st.trades.push({
+              ...lim, openIdx: i, openTime: bar.time,
+              exit: outcome.exit, exitIdx: outcome.exitIdx, exitReason: outcome.reason,
+              R: outcome.R, win: outcome.R > 0,
+            });
+          }
         }
+        pendingLimits[s.name] = remaining;
       }
-    }
-
-    // Process pending limits against this anchor bar
-    for (const s of selected) {
-      const arr = pendingLimits[s.name];
-      const st = stats[s.name];
-      const remaining = [];
-      for (const lim of arr) {
-        if (i >= lim.expiresIdx) { st.limitsExpired++; continue; }
-        const bar = anchorPane.bars[i];
-        const fill = (lim.direction === 'LONG' && bar.low <= lim.entry) ||
-                     (lim.direction === 'SHORT' && bar.high >= lim.entry);
-        if (!fill) {
-          const stopFirst = (lim.direction === 'LONG' && bar.low <= lim.stop) ||
-                            (lim.direction === 'SHORT' && bar.high >= lim.stop);
-          if (stopFirst) { st.limitsExpired++; continue; }
-          remaining.push(lim);
-          continue;
-        }
-        const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: i });
-        if (outcome) {
-          st.trades.push({
-            ...lim, openIdx: i, openTime: bar.time,
-            exit: outcome.exit, exitIdx: outcome.exitIdx, exitReason: outcome.reason,
-            R: outcome.R, win: outcome.R > 0,
-          });
-        }
-      }
-      pendingLimits[s.name] = remaining;
     }
   }
+
+  if (walkedInstruments === 0) {
+    return { error: 'no anchor pane on any instrument', stats: {}, panesSummary, window: null };
+  }
+
+  const window = {
+    days,
+    fromUnix: firstAnchorTime,
+    toUnix: lastAnchorTime,
+    anchorTF: lastAnchorTF,
+    instruments: INSTRUMENTS,
+  };
 
   // Compute summary metrics per strategy + log every trade to the JSONL
   for (const name of Object.keys(stats)) {
@@ -415,11 +417,16 @@ export async function runBacktest(opts = {}) {
     const winRRs = trades.filter((t) => t.win).map((t) => t.R);
     s.avgWinR = winRRs.length ? winRRs.reduce((a, b) => a + b, 0) / winRRs.length : 0;
 
-    // Net "pips" — gold tick is $0.01, so $1 = 100 pips. Convert R to dollars
-    // using each trade's risk distance, then to pips.
-    const netDollars = trades.reduce((a, t) => a + t.R * (t.risk || 0), 0);
+    // Net dollars per trade — multiply R × risk-in-price-points × $/point for the
+    // instrument that trade was placed on. Gold ≈ $10/point (MGC), Nasdaq ≈ $2 (MNQ),
+    // S&P ≈ $5 (MES). Defaults to $1/point if instrument unknown (back-compat).
+    const netDollars = trades.reduce((a, t) => {
+      const mult = INSTRUMENT_META[t.instrument]?.dollarPerPoint ?? 1;
+      return a + t.R * (t.risk || 0) * mult;
+    }, 0);
     s.netDollars = netDollars;
-    s.netPips = Math.round(netDollars * 100); // gold pips ≈ cents
+    // Legacy "netPips" — only meaningful for gold (cents). Set null for mixed/other.
+    s.netPips = null;
 
     // Average confidence and A+ subset
     const confs = trades.map((t) => t.confidence || 0);
@@ -431,17 +438,19 @@ export async function runBacktest(opts = {}) {
 
     // Append each trade to the JSONL log in the requested format
     for (const t of trades) {
+      const meta = INSTRUMENT_META[t.instrument] || { pair: 'UNKNOWN', dollarPerPoint: 1 };
       appendTrade({
         strategy: name,
-        pair: 'XAUUSD',
+        instrument: t.instrument,
+        pair: meta.pair,
         direction: t.direction,
         entry: t.entry,
         sl: t.stop,
         tp: t.t1,
         risk_reward: t.risk > 0 ? Math.abs(t.t1 - t.entry) / t.risk : null,
         result_R: t.R,
-        result_dollars: t.R * (t.risk || 0),
-        result_pips: Math.round(t.R * (t.risk || 0) * 100),
+        result_dollars: t.R * (t.risk || 0) * meta.dollarPerPoint,
+        result_pips: t.instrument === 'gold' ? Math.round(t.R * (t.risk || 0) * 100) : null,
         duration_minutes: (t.exitIdx - t.openIdx) * ANCHOR_MIN,
         session: sessionLabel(t.openTime || 0),
         outcome: t.win ? 'WIN' : (t.R === 0 ? 'BREAKEVEN' : 'LOSS'),
@@ -450,6 +459,22 @@ export async function runBacktest(opts = {}) {
         opened_at: new Date((t.openTime || 0) * 1000).toISOString(),
         closed_at: new Date((t.placedTime || t.openTime || 0) * 1000).toISOString(),
       }, 'backtest');
+    }
+
+    // Per-instrument breakdown so reports can show "USLS on gold: 8W/3L, nasdaq: 2W/2L".
+    s.byInstrument = {};
+    for (const inst of INSTRUMENTS) {
+      const sub = trades.filter((t) => t.instrument === inst);
+      if (sub.length === 0) continue;
+      const wins = sub.filter((t) => t.win).length;
+      s.byInstrument[inst] = {
+        tradeCount: sub.length,
+        wins,
+        losses: sub.length - wins,
+        winRate: wins / sub.length,
+        sumR: sub.reduce((a, b) => a + b.R, 0),
+        avgR: sub.reduce((a, b) => a + b.R, 0) / sub.length,
+      };
     }
   }
 

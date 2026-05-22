@@ -1,0 +1,23 @@
+{
+  "byStrategy": {
+    "TRINITY": {
+      "wins": 1,
+      "losses": 0,
+      "breakevens": 0,
+      "n": 1,
+      "winRate": 1,
+      "recommendedFloor": 0.5,
+      "recommendation": "Not enough data (1/5). Holding static floor 0.5."
+    },
+    "AMN": {
+      "wins": 1,
+      "losses": 0,
+      "breakevens": 0,
+      "n": 1,
+      "winRate": 1,
+      "recommendedFloor": 0.5,
+      "recommendation": "Not enough data (1/5). Holding static floor 0.5."
+    }
+  },
+  "updatedAt": 1779419466079
+}

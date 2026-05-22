@@ -34,6 +34,11 @@ function loadEnv() {
     console.error('[config] create the .env file or pass env vars via systemd EnvironmentFile');
     process.exit(2);
   }
+  // Propagate file vars into process.env so modules that read process.env.* directly
+  // (e.g. lib/llm.js reaching for GEMINI_API_KEY / ANTHROPIC_API_KEY) see them too.
+  for (const [k, v] of Object.entries(fileEnv)) {
+    if (process.env[k] === undefined) process.env[k] = v;
+  }
   return { ...process.env, ...fileEnv };
 }
 

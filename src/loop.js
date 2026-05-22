@@ -6,9 +6,12 @@ import * as dedup from './dedup.js';
 import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
+import * as journal from './lib/trade_journal.js';
+import { appendTrade, sessionLabel } from './lib/trade_log.js';
 import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
+import * as holyAi from './lib/holy_ai.js';
 
 let stopping = false;
 export function stop() { stopping = true; }
@@ -77,6 +80,16 @@ async function tick() {
     );
   }
 
+  // ── HOLY AI ENGINE — score triggered setups before sending ──
+  // Runs once per tick (regime is cached 30min, scores cached per setupId).
+  // If engine is disabled OR LLM is offline, scoreSetup returns a no-op that
+  // preserves the original confidence — trading flow is never blocked.
+  const aiCfg = holyAi.getEngineConfig();
+  let regimeCtx = null;
+  if (aiCfg.enabled) {
+    try { regimeCtx = await holyAi.marketRegime(); } catch (err) { log.warn('holy_ai regime threw', { err: err.message }); }
+  }
+
   for (const r of results) {
     const key = dedupKey(r);
     if (dedup.has(key)) continue;
@@ -85,18 +98,48 @@ async function tick() {
     // Forming / near_trigger / invalidated are still logged + drawn on the
     // chart (visible via /history), they just don't ring the phone.
     const isTelegramWorthy = r.status === 'triggered';
-    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram;
+
+    // AI scoring gate — only run on triggered setups (rest don't fire Telegram anyway).
+    // The AI score multiplies into r.confidence. Setups below aiCfg.threshold
+    // are dropped from Telegram but still logged (so backtesting + audit shows
+    // what AI filtered out).
+    let aiScore = null;
+    if (isTelegramWorthy && aiCfg.enabled) {
+      try {
+        aiScore = await holyAi.scoreSetup(r, { regime: regimeCtx });
+        r.aiScore = aiScore;
+        r.adjustedConfidence = aiScore.adjusted_confidence;
+      } catch (err) {
+        log.warn('holy_ai scoreSetup threw', { setupId: r.setupId, err: err.message });
+      }
+    }
+    const aiGated = isTelegramWorthy && aiScore?.aiEnabled && aiScore.adjusted_confidence < aiCfg.threshold;
+    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !aiGated;
 
     // Mark BEFORE sending, then roll back on failure (avoids dup spam if send is slow)
     dedup.add(key, { strategy: r.strategy, status: r.status });
     let ok = true;
     if (shouldSendTelegram) {
+      // Generate commentary (best-effort; '' if AI offline or fails)
+      if (aiCfg.enabled) {
+        try {
+          const cmt = await holyAi.commentary(r, { regime: regimeCtx });
+          if (cmt?.text) r.aiCommentary = cmt.text;
+        } catch (err) { log.warn('holy_ai commentary threw', { setupId: r.setupId, err: err.message }); }
+      }
       try {
         ok = await alerter.send(r, { symbol: r.symbol, timeframe: r.timeframe, lastClose: r.lastClose });
       } catch (err) {
         log.warn('alerter send threw', { err: err.message });
         ok = false;
       }
+    } else if (aiGated) {
+      log.info('alert ai-gated', {
+        strategy: r.strategy, setupId: r.setupId,
+        originalConfidence: r.confidence, aiScore: aiScore.score,
+        adjustedConfidence: aiScore.adjusted_confidence, threshold: aiCfg.threshold,
+        reasoning: aiScore.reasoning,
+      });
     }
     if (!ok) {
       dedup.remove(key);
@@ -109,6 +152,30 @@ async function tick() {
         strategy: r.strategy, status: r.status, setupId: r.setupId, confidence: r.confidence,
         telegram: tgState,
       });
+      // Auto-journal every triggered setup with its enrichment block. Uses the
+      // existing 'in' action so journal stats/trade() keep working; the auto
+      // flag + enrichment distinguish it from user-confirmed entries.
+      if (isTelegramWorthy && r.entryPlan) {
+        try {
+          journal.log({
+            action: 'in',
+            setupId: r.setupId,
+            instrument: r.instrument,
+            strategy: r.strategy,
+            direction: r.direction,
+            contracts: 0,
+            price: r.entryPlan.entry,
+            stop: r.entryPlan.stop,
+            t1: r.entryPlan.t1,
+            t2: r.entryPlan.t2,
+            confidence: r.confidence,
+            auto: true,
+            enrichment: r.enrichment || null,
+          });
+        } catch (err) {
+          log.warn('auto-journal in threw', { setupId: r.setupId, err: err.message });
+        }
+      }
       // Sync TradingView drawings regardless of whether Telegram was sent —
       // user still sees the setup forming on the chart in real time.
       try {
@@ -139,6 +206,46 @@ async function tick() {
       if (!suppressTelegram) {
         try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: priceMap[inst] }); }
         catch (err) { log.warn('follow-up send threw', { err: err.message }); }
+      }
+      // Auto-journal milestone events. BE is a state flag; tp1/tp2/sl/runner/expired close the trade.
+      try {
+        if (m.milestone === 'be') {
+          journal.log({ action: 'be', setupId: m.setup.setupId, auto: true });
+        } else if (['tp1', 'tp2', 'sl', 'runner', 'expired'].includes(m.milestone)) {
+          const exitPrice = priceMap[inst];
+          const reason = m.milestone === 'runner' ? 'tp2' : m.milestone;
+          journal.log({
+            action: 'out',
+            setupId: m.setup.setupId,
+            reason,
+            price: exitPrice,
+            auto: true,
+          });
+          // Also write a closed-trade row to trades.jsonl for backtest-style queries.
+          const isWin = ['tp1', 'tp2', 'runner'].includes(m.milestone);
+          const isLoss = m.milestone === 'sl';
+          const entry = m.setup.entry, stop = m.setup.stop;
+          const risk = Math.abs(entry - stop);
+          const resultPoints = isWin && exitPrice != null ? Math.abs(exitPrice - entry)
+                              : isLoss ? -risk : 0;
+          appendTrade({
+            setupId: m.setup.setupId,
+            strategy: m.setup.strategy,
+            instrument: inst,
+            direction: m.setup.direction,
+            entry,
+            sl: stop,
+            tp: m.setup.t2 ?? m.setup.t1 ?? null,
+            exit: exitPrice,
+            risk_reward: risk ? resultPoints / risk : null,
+            result_points: resultPoints,
+            duration_minutes: m.setup.createdAt ? Math.round((Date.now() - m.setup.createdAt) / 60000) : null,
+            session: sessionLabel(Date.now() / 1000),
+            outcome: isWin ? 'WIN' : isLoss ? 'LOSS' : m.milestone === 'expired' ? 'EXPIRED' : 'OTHER',
+          }, 'live');
+        }
+      } catch (err) {
+        log.warn('auto-journal milestone threw', { setupId: m.setup.setupId, milestone: m.milestone, err: err.message });
       }
     }
   }

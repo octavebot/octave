@@ -32,18 +32,6 @@ const STRATEGY_NUM = {
   AMN: '#8',
   TORI: '#9',
   WARRIOR: '#10',
-  // ChatGPT pack
-  'CGT-EMA': '#C1',
-  'CGT-HTFSD': '#C2',
-  'CGT-LONDON': '#C3',
-  'CGT-NYREV': '#C4',
-  'CGT-VWAP': '#C5',
-  // Gemini pack
-  'GEM-ASIA': '#G1',
-  'GEM-EMA': '#G2',
-  'GEM-FIB': '#G3',
-  'GEM-SMC': '#G4',
-  'GEM-VWAP': '#G5',
 };
 
 // Pretty name used in the alert header — what the user actually wants to see.
@@ -58,16 +46,6 @@ const STRATEGY_DISPLAY = {
   AMN: 'AMN Dual-Model',
   TORI: 'TORI · 4H Trendline',
   WARRIOR: 'Warrior Momentum',
-  'CGT-EMA': 'EMA Trend Continuation',
-  'CGT-HTFSD': 'HTF Supply & Demand Sniper',
-  'CGT-LONDON': 'London Breakout Momentum',
-  'CGT-NYREV': 'NY Reversal Trap',
-  'CGT-VWAP': 'VWAP Mean Reversion',
-  'GEM-ASIA': 'Asian Range Breakout',
-  'GEM-EMA': 'Golden River EMA',
-  'GEM-FIB': 'Golden Fibonacci Pullback',
-  'GEM-SMC': 'Institutional Order Blocks',
-  'GEM-VWAP': 'VWAP Rubber Band',
 };
 
 // Resolve the badge/number for any strategy, including user-defined ones.
@@ -166,16 +144,6 @@ const STRATEGY_INFO = [
   { key: 'AMN',        short: 'AMN' },
   { key: 'TORI',       short: 'TORI' },
   { key: 'WARRIOR',    short: 'Warrior' },
-  { key: 'CGT-EMA',    short: 'CGT·EMA' },
-  { key: 'CGT-HTFSD',  short: 'CGT·HTF' },
-  { key: 'CGT-LONDON', short: 'CGT·London' },
-  { key: 'CGT-NYREV',  short: 'CGT·NYRev' },
-  { key: 'CGT-VWAP',   short: 'CGT·VWAP' },
-  { key: 'GEM-ASIA',   short: 'GEM·Asia' },
-  { key: 'GEM-EMA',    short: 'GEM·EMA' },
-  { key: 'GEM-FIB',    short: 'GEM·Fib' },
-  { key: 'GEM-SMC',    short: 'GEM·SMC' },
-  { key: 'GEM-VWAP',   short: 'GEM·VWAP' },
 ];
 
 export async function sendStartup({ symbol, timeframe }) {
@@ -188,9 +156,6 @@ export async function sendStartup({ symbol, timeframe }) {
   const enabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] === true);
   const disabledStrategies = STRATEGY_INFO.filter((s) => cfg.strategies?.[s.key] !== true);
 
-  const activeLine = enabledStrategies.length === 0
-    ? '_(none enabled)_'
-    : enabledStrategies.map((s) => `${strategyNum(s.key)} ${s.short}`).join(' · ');
   const inactiveLine = disabledStrategies.length === 0
     ? '_(all enabled)_'
     : disabledStrategies.map((s) => strategyNum(s.key)).join(' ');
@@ -203,13 +168,13 @@ export async function sendStartup({ symbol, timeframe }) {
   const text = [
     BAR,
     `✅ *OCTAVE ONLINE*  ·  MGC1! + MNQ1! + MES1!`,
-    `📊 Active (${enabledStrategies.length}/${STRATEGY_INFO.length}): ${activeLine}`,
+    `📊 Active: ${enabledStrategies.length}/${STRATEGY_INFO.length} strategies`,
     `⚫ Inactive: ${inactiveLine}`,
     muteLine,
     bypassLine,
     BAR,
     ``,
-    `🔌 Watching: \`${tgEscape(sym)}\` · \`${tgEscape(tf)}m\``,
+    `🔌 Watching: \`MGC1!\` + \`MNQ1!\` + \`MES1!\` · \`${tgEscape(tf)}m+\``,
     `🟢 Service started · monitoring live`,
     ``,
     BAR,
@@ -423,7 +388,16 @@ export async function send(r, ctx) {
   lines.push(`  _You'll be auto-pinged when each level prints._`);
   lines.push('');
 
-  lines.push(`⚡ ${conf}% conf   ·   ⏰ ${ctx.timeframe || '?'}m`);
+  // Confidence: show original + AI-adjusted side-by-side when the engine
+  // re-scored the setup. The adjusted figure is what gated the Telegram send.
+  if (r.aiScore?.aiEnabled) {
+    const adj = Math.round((r.adjustedConfidence ?? r.confidence) * 100);
+    const aiPct = Math.round((r.aiScore.score || 0) * 100);
+    lines.push(`⚡ ${conf}% conf · 🤖 ${aiPct}% AI · → *${adj}% adjusted*   ·   ⏰ ${ctx.timeframe || '?'}m`);
+  } else {
+    lines.push(`⚡ ${conf}% conf   ·   ⏰ ${ctx.timeframe || '?'}m`);
+  }
+  if (r.aiCommentary) lines.push(`🤖 _${tgEscape(r.aiCommentary)}_`);
   if (r.summary) lines.push(`ℹ️ ${tgEscape(r.summary)}`);
   lines.push(BAR);
 

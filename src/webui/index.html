@@ -583,7 +583,6 @@ function renderState(s) {
   // ── Strategies in folders ──
   const container = document.getElementById('strategies');
   const enabledMap = s.config?.strategies || {};
-  const userStrategies = s.user_strategies || [];
   const collapse = loadCollapseState();
 
   // Compose the displayed folder list = built-in + user (if any)

@@ -1,0 +1,20 @@
+{
+  "setups": {
+    "test-mock-1779420935997": {
+      "score": 0.8,
+      "reasoning": "Setup is solid due to confirmed range regime and defined support and resistance levels",
+      "adjusted_confidence": 0.68,
+      "aiEnabled": true
+    }
+  },
+  "regime": {
+    "at": 1779420866542,
+    "value": {
+      "regime": "range",
+      "confidence": 0.8,
+      "summary": "low vol, narrow ranges",
+      "aiEnabled": true
+    }
+  },
+  "coaching": {}
+}

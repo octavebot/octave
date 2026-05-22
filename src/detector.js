@@ -35,9 +35,8 @@ import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
 import { fetchAllPanes } from './lib/cloud_data_supplement.js';
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
-import { evaluateChatgptPack } from './strategies/chatgpt/index.js';
-import { evaluateGeminiPack } from './strategies/gemini/index.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
+import { enrichSetup } from './lib/trade_enrichment.js';
 
 // Three primary instruments. Each runs the full strategy gauntlet; gold-only
 // strategies skip themselves via ctx.instrument check.
@@ -130,10 +129,6 @@ export async function detect() {
       try { results.push(...fn(ctx)); }
       catch (err) { log.error(`${name} evaluator threw`, { instrument, err: err.message, stack: err.stack }); }
     }
-    try { results.push(...evaluateChatgptPack(ctx)); }
-    catch (err) { log.error('chatgpt pack threw', { instrument, err: err.message, stack: err.stack }); }
-    try { results.push(...evaluateGeminiPack(ctx)); }
-    catch (err) { log.error('gemini pack threw', { instrument, err: err.message, stack: err.stack }); }
     try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }
     catch (err) { log.error('user strategies threw', { instrument, err: err.message, stack: err.stack }); }
 
@@ -148,6 +143,11 @@ export async function detect() {
       r.barTime = ctx.barTime;
       // Namespace setupId so identical USLS setupId on gold + nasdaq doesn't collide.
       if (!r.setupId.startsWith(`${instrument}|`)) r.setupId = `${instrument}|${r.setupId}`;
+      // Attach enrichment block on triggered results so loop.js can auto-journal it.
+      if (r.status === 'triggered') {
+        try { r.enrichment = enrichSetup(r, ctx); }
+        catch (err) { log.warn('enrichSetup threw', { setupId: r.setupId, err: err.message }); }
+      }
     }
     allResults.push(...results);
   }

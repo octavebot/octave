@@ -12,7 +12,6 @@
     "verify": "node src/index.js --verify"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.97.1",
     "busboy": "^1.6.0",
     "tradingview-mcp": "file:../tradingview-mcp"
   }

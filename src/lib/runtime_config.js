@@ -43,30 +43,21 @@ const DEFAULTS = Object.freeze({
     AMN: true,
     TORI: true,
     WARRIOR: true,
-    // ChatGPT pack (5 strategies)
-    'CGT-EMA': true,
-    'CGT-HTFSD': true,
-    'CGT-LONDON': true,
-    'CGT-NYREV': true,
-    'CGT-VWAP': true,
-    // Gemini pack (5 strategies)
-    'GEM-ASIA': true,
-    'GEM-EMA': true,
-    'GEM-FIB': true,
-    'GEM-SMC': true,
-    'GEM-VWAP': true,
   },
   mute: { untilMs: 0, reason: null },
   alertChartImages: true,
   // 24/7 by default per user directive 2026-05-21: every strategy should
   // fire any hour. Toggle off via /24h off if you want killzone gating back.
   bypassKillzones: true,
+  // Holy AI Engine: re-scores triggered setups, generates commentary, gates
+  // weak alerts. threshold is the minimum AI-adjusted confidence (0..1) for
+  // a setup to reach Telegram. Disable via /ai-engine off when you want raw
+  // strategy output.
+  aiEngine: { enabled: true, threshold: 0.55 },
   lastUpdated: 0,
 });
 
-// All strategy keys this system knows about (in display order). The first
-// 10 are the original numbered set; the ChatGPT and Gemini packs each add
-// 5 named strategies organized by folder.
+// All built-in strategy keys this system knows about (in display order).
 export const ALL_STRATEGIES = [
   { key: 'USLS', num: '#1', label: 'Strategy #1 (USLS)', group: 'Core' },
   { key: 'ICT-SMC', num: '#2', label: 'Strategy #2 (ICT/SMC)', group: 'Core' },
@@ -78,18 +69,6 @@ export const ALL_STRATEGIES = [
   { key: 'AMN', num: '#8', label: 'Strategy #8 (AMN — Dual-Model)', group: 'Core' },
   { key: 'TORI', num: '#9', label: 'Strategy #9 (TORI — 4H Trendline)', group: 'Core' },
   { key: 'WARRIOR', num: '#10', label: 'Strategy #10 (Warrior Momentum)', group: 'Core' },
-  // ChatGPT Strategies folder
-  { key: 'CGT-EMA',    num: '#C1', label: 'EMA Trend Continuation', group: 'Chatgpt Strategies' },
-  { key: 'CGT-HTFSD',  num: '#C2', label: 'HTF Supply & Demand Sniper', group: 'Chatgpt Strategies' },
-  { key: 'CGT-LONDON', num: '#C3', label: 'London Breakout Momentum', group: 'Chatgpt Strategies' },
-  { key: 'CGT-NYREV',  num: '#C4', label: 'NY Reversal Trap', group: 'Chatgpt Strategies' },
-  { key: 'CGT-VWAP',   num: '#C5', label: 'VWAP Mean Reversion', group: 'Chatgpt Strategies' },
-  // Gemini Strategies folder
-  { key: 'GEM-ASIA',   num: '#G1', label: 'Asian Range Breakout', group: 'Gemini Strategies' },
-  { key: 'GEM-EMA',    num: '#G2', label: 'Golden River EMA', group: 'Gemini Strategies' },
-  { key: 'GEM-FIB',    num: '#G3', label: 'Golden Fibonacci Pullback', group: 'Gemini Strategies' },
-  { key: 'GEM-SMC',    num: '#G4', label: 'Institutional Order Blocks', group: 'Gemini Strategies' },
-  { key: 'GEM-VWAP',   num: '#G5', label: 'VWAP Rubber Band', group: 'Gemini Strategies' },
 ];
 
 let cache = null;
@@ -106,6 +85,10 @@ export function load() {
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
       alertChartImages: raw.alertChartImages !== false, // default true
       bypassKillzones: raw.bypassKillzones === true, // default false
+      aiEngine: {
+        enabled: raw.aiEngine?.enabled !== false,                // default true
+        threshold: Number(raw.aiEngine?.threshold) || 0.55,
+      },
       lastUpdated: raw.lastUpdated || 0,
     };
   } catch {

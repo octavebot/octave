@@ -39,10 +39,6 @@ const DEFAULTS = {
     USLS: false, 'ICT-SMC': false, 'ALGO-SMC': false, ADAPTIVE: false,
     ICT: true, SMT: true, TRINITY: true,
     AMN: true, TORI: true, WARRIOR: true,
-    // ChatGPT Strategies pack
-    'CGT-EMA': true, 'CGT-HTFSD': true, 'CGT-LONDON': true, 'CGT-NYREV': true, 'CGT-VWAP': true,
-    // Gemini Strategies pack
-    'GEM-ASIA': true, 'GEM-EMA': true, 'GEM-FIB': true, 'GEM-SMC': true, 'GEM-VWAP': true,
   },
   lastUpdated: 0,
 };

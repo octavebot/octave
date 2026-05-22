@@ -1,14 +1,14 @@
 /**
- * AI chat — Claude with tool use, talks to the bot in natural language.
+ * AI chat — Gemini with tool use, talks to the bot in natural language.
  *
- * Routes any free-form Telegram message to Claude. Claude has a catalog of
+ * Routes any free-form Telegram message to Gemini. The model has a catalog of
  * tools that let it inspect the bot state (status, prices, bias, news,
  * journal) AND change it (log a trade, enable/disable strategies, run
  * backtests, fix services, create user strategies).
  *
- * Multi-turn tool loop: Claude returns tool_use blocks → we execute → return
- * tool_result → repeat until Claude answers in plain text. Caps at 6 tool
- * rounds so a runaway loop can't burn through tokens.
+ * Multi-turn tool loop: Gemini returns tool_use blocks → we execute → return
+ * tool_result → repeat until Gemini answers in plain text. Caps at 6 tool
+ * rounds so a runaway loop can't burn through quota.
  */
 
 import { chatWithTools, pickProvider, providerLabel } from './llm.js';
@@ -18,6 +18,11 @@ import * as fu from './follow_up.js';
 import * as sh from './self_heal.js';
 import * as news from './news.js';
 import { load as loadCfg, save as saveCfg } from './runtime_config.js';
+import { classifyRegime } from './regime.js';
+import { predictVolatility } from './volatility.js';
+import { sentimentSnapshot, sentimentDeep } from './sentiment.js';
+import { snapshot as adaptiveSnapshot, recompute as adaptiveRecompute } from './adaptive_thresholds.js';
+import { findSimilarSetups } from './pattern_clustering.js';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -213,6 +218,67 @@ const TOOLS = [
       required: ['component'],
     },
   },
+  // ─── AI analytics tools (deterministic; no LLM cost) ───
+  {
+    name: 'classify_regime',
+    description: 'Classify the current market regime (trend_up/trend_down/range/breakout/reversal) for one instrument using ADX, EMA structure, BB width, and RSI.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        instrument: { type: 'string', description: 'gold | nasdaq | sp' },
+        timeframe: { type: 'string', description: 'default 15' },
+      },
+      required: ['instrument'],
+    },
+  },
+  {
+    name: 'predict_volatility',
+    description: 'Current ATR, percentile rank vs last 100 bars, EWMA next-bar forecast, and bucket (low/normal/elevated/extreme).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        instrument: { type: 'string', description: 'gold | nasdaq | sp' },
+        timeframe: { type: 'string', description: 'default 15' },
+      },
+      required: ['instrument'],
+    },
+  },
+  {
+    name: 'get_adaptive_thresholds',
+    description: 'Per-strategy recommended confidence floor based on rolling 14-day winrate. Tightens after losing streaks, loosens after winning streaks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        strategy: { type: 'string', description: 'specific id; omit for all strategies' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'find_similar_setups',
+    description: 'Find the N past trades whose regime/volatility/RSI/ADX features most resemble the current setup, with their outcomes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        instrument: { type: 'string', description: 'gold | nasdaq | sp' },
+        direction: { type: 'string', description: 'LONG | SHORT (optional; uses current dominant bias if omitted)' },
+        n: { type: 'number', description: 'how many matches, default 5' },
+      },
+      required: ['instrument'],
+    },
+  },
+  {
+    name: 'analyze_sentiment',
+    description: 'Sentiment read for one instrument. Returns deterministic score+factors; if `deep=true`, also calls Gemini for a 2-sentence narrative (burns 1 quota).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        instrument: { type: 'string', description: 'gold | nasdaq | sp' },
+        deep: { type: 'boolean', description: 'include LLM narrative; default false' },
+      },
+      required: ['instrument'],
+    },
+  },
 ];
 
 // ─── Tool implementations ───
@@ -367,7 +433,68 @@ const toolHandlers = {
     if (!component || component === 'all') return sh.fixAll();
     return sh.fixOne(component);
   },
+
+  // ─── AI analytics handlers ───
+  async classify_regime({ instrument, timeframe = '15' }) {
+    const ctx = await buildInstrumentCtxForTools(instrument);
+    if (!ctx) return { error: `no panes for ${instrument}` };
+    return classifyRegime(ctx, timeframe);
+  },
+
+  async predict_volatility({ instrument, timeframe = '15' }) {
+    const ctx = await buildInstrumentCtxForTools(instrument);
+    if (!ctx) return { error: `no panes for ${instrument}` };
+    return predictVolatility(ctx, timeframe);
+  },
+
+  async get_adaptive_thresholds({ strategy } = {}) {
+    const s = adaptiveRecompute();
+    if (strategy) return s.byStrategy?.[strategy] || { error: `no data for ${strategy}` };
+    return s;
+  },
+
+  async find_similar_setups({ instrument, direction, n = 5 }) {
+    const ctx = await buildInstrumentCtxForTools(instrument);
+    if (!ctx) return { error: `no panes for ${instrument}` };
+    const reg = classifyRegime(ctx, '15');
+    const vol = predictVolatility(ctx, '15');
+    return findSimilarSetups({
+      regime: reg.regime,
+      volatilityBucket: vol.bucket,
+      rsi: reg.rsi,
+      adx: reg.adx,
+      direction: direction || 'LONG',
+    }, n);
+  },
+
+  async analyze_sentiment({ instrument, deep = false }) {
+    const ctx = await buildInstrumentCtxForTools(instrument);
+    if (!ctx) return { error: `no panes for ${instrument}` };
+    if (deep) return await sentimentDeep(ctx);
+    return sentimentSnapshot(ctx);
+  },
 };
+
+async function buildInstrumentCtxForTools(instrument) {
+  if (!['gold', 'nasdaq', 'sp'].includes(instrument)) return null;
+  const { fetchAllPanes } = await import('./cloud_data_supplement.js');
+  const panesByTf = await fetchAllPanes().catch(() => null);
+  if (!panesByTf || panesByTf.size === 0) return null;
+  const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
+  let anchor = null;
+  for (const tf of candidates) {
+    const p = panesByTf.get(`${instrument}|${tf}`);
+    if (p?.bars?.length) { anchor = p; break; }
+  }
+  if (!anchor) return null;
+  return {
+    instrument,
+    panes: [...panesByTf.values()],
+    panesByTf,
+    pane: (tf) => panesByTf.get(`${instrument}|${tf}`),
+    lastClose: anchor.bars[anchor.bars.length - 1].close,
+  };
+}
 
 // ─── Multi-turn chat loop ───
 
@@ -390,9 +517,8 @@ export async function chat(chatId, userText) {
   if (!provider) {
     return [
       '🤖 *AI chat is offline*',
-      'Set ONE of these env vars on the VPS:',
-      '  • `GEMINI_API_KEY=...` (free, 1500 req/day) — get one at https://aistudio.google.com/apikey',
-      '  • `ANTHROPIC_API_KEY=sk-ant-...` (paid)',
+      'Set `GROQ_API_KEY=...` in your `.env` (free, 14400 req/day).',
+      'Get a key at https://console.groq.com/keys',
       '',
       'Then `/fix bot`.',
     ].join('\n');

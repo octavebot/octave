@@ -1,86 +1,163 @@
 /**
- * LLM provider abstraction — Claude (paid) or Gemini (free) under one API.
+ * LLM provider abstraction — Groq (preferred, free) or Gemini (fallback).
  *
  * Provider selection (first match wins):
- *   ANTHROPIC_API_KEY → Claude Haiku 4.5
- *   GEMINI_API_KEY    → Gemini 2.0 Flash (free tier: 1500 req/day)
- *   else              → throws "no-llm-key" (caller shows a friendly fallback)
+ *   GROQ_API_KEY   → Llama 3.3 70B via Groq (free, 14400 req/day)
+ *   GEMINI_API_KEY → Gemini Flash/Pro (free tier — often quota-blocked)
+ *   else           → throws "no-llm-key" (caller shows a friendly fallback)
  *
- * Public surface:
+ * Public surface (unchanged across providers):
  *   chatWithTools({ system, messages, tools, toolHandlers, maxRounds }) → text reply
  *   oneShot({ system, userParts, maxTokens })                            → text reply
  *
- * `tools` schema is provider-agnostic (Anthropic-style JSON schema). We
- * translate to Gemini's function-declaration shape internally.
- * `messages` follow Anthropic's role/content shape: { role, content } where
- * content is either a string or an array of typed blocks (text, tool_use,
- * tool_result). The Gemini path converts on the fly.
+ * `tools` schema is Anthropic-style JSON schema. We translate to Gemini's
+ * functionDeclaration shape or OpenAI's `tools` shape (Groq is OpenAI-compatible)
+ * internally. `messages` follow Anthropic's role/content shape; each provider
+ * gets its own converter.
  */
 
-const ANTHROPIC_MODEL = process.env.OCTAVE_ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+const GROQ_MODEL = process.env.OCTAVE_GROQ_MODEL || 'llama-3.3-70b-versatile';
 const GEMINI_MODEL = process.env.OCTAVE_GEMINI_MODEL || 'gemini-2.0-flash';
 
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
 export function pickProvider() {
-  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+  if (process.env.GROQ_API_KEY) return 'groq';
   if (process.env.GEMINI_API_KEY) return 'gemini';
   return null;
 }
 
 export function providerLabel() {
   const p = pickProvider();
-  return p === 'anthropic' ? 'Claude Haiku' : p === 'gemini' ? 'Gemini Flash' : 'offline';
+  if (p === 'groq') return `Groq ${GROQ_MODEL.replace('-versatile','').replace('llama-','Llama ')}`;
+  if (p === 'gemini') return `Gemini ${GEMINI_MODEL.includes('pro') ? 'Pro' : 'Flash'}`;
+  return 'offline';
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // chatWithTools — multi-turn tool-use loop
 // ────────────────────────────────────────────────────────────────────────
 
-/**
- * Run a tool-using conversation until the model emits plain text.
- * Mutates `messages` so the caller can persist updated history.
- */
 export async function chatWithTools({ system, messages, tools, toolHandlers, maxRounds = 6 }) {
   const provider = pickProvider();
   if (!provider) throw new Error('no-llm-key');
-  if (provider === 'anthropic') return _claudeChat({ system, messages, tools, toolHandlers, maxRounds });
+  if (provider === 'groq') return _groqChat({ system, messages, tools, toolHandlers, maxRounds });
   return _geminiChat({ system, messages, tools, toolHandlers, maxRounds });
 }
 
-async function _claudeChat({ system, messages, tools, toolHandlers, maxRounds }) {
-  const Anthropic = (await import('@anthropic-ai/sdk')).default;
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// ── Groq (OpenAI-compatible) ────────────────────────────────────────────
+
+async function _groqChat({ system, messages, tools, toolHandlers, maxRounds }) {
+  // Translate Anthropic-style messages → OpenAI-style messages
+  const oaMessages = [{ role: 'system', content: system }];
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      oaMessages.push({ role: m.role, content: m.content });
+      continue;
+    }
+    if (m.role === 'assistant') {
+      const textParts = m.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+      const toolUses = m.content.filter((b) => b.type === 'tool_use');
+      const msg = { role: 'assistant', content: textParts || null };
+      if (toolUses.length) {
+        msg.tool_calls = toolUses.map((b) => ({
+          id: b.id,
+          type: 'function',
+          function: { name: b.name, arguments: JSON.stringify(b.input || {}) },
+        }));
+      }
+      oaMessages.push(msg);
+    } else if (m.role === 'user') {
+      // user-role content array carries tool_result blocks; each becomes its own tool message
+      for (const b of m.content) {
+        if (b.type === 'tool_result') {
+          oaMessages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: String(b.content || '') });
+        } else if (b.type === 'text') {
+          oaMessages.push({ role: 'user', content: b.text });
+        }
+      }
+    }
+  }
+
+  // Translate Anthropic tools → OpenAI tools
+  const oaTools = (tools || []).map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema || { type: 'object', properties: {} },
+    },
+  }));
+
   for (let round = 0; round < maxRounds; round++) {
-    const resp = await client.messages.create({
-      model: ANTHROPIC_MODEL, max_tokens: 1024, system, tools, messages,
+    const body = {
+      model: GROQ_MODEL,
+      messages: oaMessages,
+      max_tokens: 1024,
+    };
+    if (oaTools.length) { body.tools = oaTools; body.tool_choice = 'auto'; }
+
+    const resp = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify(body),
     });
-    messages.push({ role: 'assistant', content: resp.content });
-    if (resp.stop_reason !== 'tool_use') {
-      return resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim() || '(no reply)';
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => '');
+      throw new Error(`Groq HTTP ${resp.status}: ${err.slice(0, 200)}`);
     }
-    const results = [];
-    for (const block of resp.content) {
-      if (block.type !== 'tool_use') continue;
-      const handler = toolHandlers[block.name];
+    const data = await resp.json();
+    const choice = data?.choices?.[0]?.message;
+    if (!choice) return '(no reply)';
+
+    const text = choice.content || '';
+    const calls = choice.tool_calls || [];
+
+    // Persist this assistant turn back into the Anthropic-style messages array
+    const assistantBlocks = [];
+    if (text) assistantBlocks.push({ type: 'text', text });
+    for (const c of calls) {
+      let input = {};
+      try { input = JSON.parse(c.function.arguments || '{}'); } catch {}
+      assistantBlocks.push({ type: 'tool_use', id: c.id, name: c.function.name, input });
+    }
+    messages.push({ role: 'assistant', content: assistantBlocks });
+    oaMessages.push(choice);
+
+    if (calls.length === 0) {
+      return text.trim() || '(no reply)';
+    }
+
+    // Execute tool calls, push tool_result for each
+    const toolResultBlocks = [];
+    for (const c of calls) {
+      const handler = toolHandlers[c.function.name];
       let out;
-      try { out = handler ? await handler(block.input || {}) : { error: `unknown tool: ${block.name}` }; }
+      let args = {};
+      try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
+      try { out = handler ? await handler(args) : { error: `unknown tool: ${c.function.name}` }; }
       catch (err) { out = { error: err.message }; }
-      results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(out).slice(0, 4000) });
+      const stringified = JSON.stringify(out).slice(0, 4000);
+      toolResultBlocks.push({ type: 'tool_result', tool_use_id: c.id, content: stringified });
+      oaMessages.push({ role: 'tool', tool_call_id: c.id, content: stringified });
     }
-    messages.push({ role: 'user', content: results });
+    messages.push({ role: 'user', content: toolResultBlocks });
   }
   return '_(stopped after tool round cap — try a more specific question)_';
 }
 
+// ── Gemini (kept as fallback) ───────────────────────────────────────────
+
 async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds }) {
-  // Anthropic-style tools → Gemini functionDeclarations
   const functionDeclarations = (tools || []).map((t) => ({
     name: t.name,
     description: t.description,
     parameters: sanitizeSchemaForGemini(t.input_schema),
   }));
 
-  // Build Gemini `contents` from Anthropic-style messages. Pending tool_use
-  // calls become functionCall parts; tool_result blocks become functionResponse.
   const contents = [];
   for (const m of messages) {
     if (typeof m.content === 'string') {
@@ -93,8 +170,6 @@ async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds })
       if (b.type === 'text') parts.push({ text: b.text });
       else if (b.type === 'tool_use') parts.push({ functionCall: { name: b.name, args: b.input || {} } });
       else if (b.type === 'tool_result') {
-        // Gemini wants a functionResponse with the original function name. We
-        // didn't keep that mapping; piggy-back on the previous functionCall.
         const prevModel = [...contents].reverse().find((c) => c.role === 'model');
         const prevCall = prevModel?.parts?.find((p) => p.functionCall)?.functionCall;
         const fnName = prevCall?.name || 'unknown';
@@ -105,10 +180,7 @@ async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds })
   }
 
   for (let round = 0; round < maxRounds; round++) {
-    const body = {
-      contents,
-      systemInstruction: { parts: [{ text: system }] },
-    };
+    const body = { contents, systemInstruction: { parts: [{ text: system }] } };
     if (functionDeclarations.length) body.tools = [{ functionDeclarations }];
     const resp = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
@@ -124,19 +196,14 @@ async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds })
     const fnCalls = parts.filter((p) => p.functionCall);
     const textParts = parts.filter((p) => p.text).map((p) => p.text);
 
-    // Persist this assistant turn into the Anthropic-style messages array
-    // so callers can continue the conversation later.
     const assistantBlocks = [];
     for (const t of textParts) assistantBlocks.push({ type: 'text', text: t });
     for (const fc of fnCalls) assistantBlocks.push({ type: 'tool_use', id: `gem_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, name: fc.functionCall.name, input: fc.functionCall.args || {} });
     messages.push({ role: 'assistant', content: assistantBlocks });
     contents.push({ role: 'model', parts });
 
-    if (fnCalls.length === 0) {
-      return textParts.join('\n').trim() || '(no reply)';
-    }
+    if (fnCalls.length === 0) return textParts.join('\n').trim() || '(no reply)';
 
-    // Execute tools, append functionResponse parts
     const toolResultBlocks = [];
     const responseParts = [];
     for (const fc of fnCalls) {
@@ -160,31 +227,45 @@ async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds })
 // oneShot — single-call helper (used by strategy_extractor)
 // ────────────────────────────────────────────────────────────────────────
 
-/**
- * One-shot generate. `userParts` is the provider-agnostic array:
- *   [{ kind: 'text', text }, { kind: 'image', mediaType, base64 }, { kind: 'document', mediaType, base64 }]
- */
 export async function oneShot({ system, userParts, maxTokens = 1024 }) {
   const provider = pickProvider();
   if (!provider) throw new Error('no-llm-key');
-  if (provider === 'anthropic') return _claudeOneShot({ system, userParts, maxTokens });
+  if (provider === 'groq') return _groqOneShot({ system, userParts, maxTokens });
   return _geminiOneShot({ system, userParts, maxTokens });
 }
 
-async function _claudeOneShot({ system, userParts, maxTokens }) {
-  const Anthropic = (await import('@anthropic-ai/sdk')).default;
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const content = userParts.map((p) => {
-    if (p.kind === 'text') return { type: 'text', text: p.text };
-    if (p.kind === 'image') return { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } };
-    if (p.kind === 'document') return { type: 'document', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } };
-    return null;
-  }).filter(Boolean);
-  const resp = await client.messages.create({
-    model: ANTHROPIC_MODEL, max_tokens: maxTokens, system,
-    messages: [{ role: 'user', content }],
+async function _groqOneShot({ system, userParts, maxTokens }) {
+  // Groq's standard Llama models don't have vision; non-text parts are dropped.
+  // For PDF/image strategy extraction the caller will already have fallback
+  // logic, so we just send whatever text we have.
+  const text = userParts.filter((p) => p.kind === 'text').map((p) => p.text).join('\n\n');
+  const droppedMedia = userParts.some((p) => p.kind === 'image' || p.kind === 'document');
+  const userContent = droppedMedia && !text
+    ? '(image/document input — no vision on this model; replying based on filename and metadata only)'
+    : text;
+
+  const body = {
+    model: GROQ_MODEL,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: userContent },
+    ],
+    max_tokens: maxTokens,
+  };
+  const resp = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify(body),
   });
-  return resp.content?.[0]?.type === 'text' ? resp.content[0].text : '';
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => '');
+    throw new Error(`Groq HTTP ${resp.status}: ${err.slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  return data?.choices?.[0]?.message?.content || '';
 }
 
 async function _geminiOneShot({ system, userParts, maxTokens }) {
@@ -214,18 +295,12 @@ async function _geminiOneShot({ system, userParts, maxTokens }) {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────
 
-/**
- * Gemini's function-call schema is JSON Schema-ish but rejects some Anthropic
- * conveniences (allowed extra keys, certain `$schema` references). Strip
- * unsupported fields so the same `tools` array works for both providers.
- */
 function sanitizeSchemaForGemini(schema) {
   if (!schema || typeof schema !== 'object') return { type: 'OBJECT', properties: {} };
   const clone = JSON.parse(JSON.stringify(schema));
   const walk = (s) => {
     if (!s || typeof s !== 'object') return;
     if (Array.isArray(s)) return s.forEach(walk);
-    // Map JSON-Schema type strings to Gemini's enum
     if (typeof s.type === 'string') s.type = s.type.toUpperCase();
     delete s.$schema; delete s.additionalProperties; delete s.examples;
     for (const key of Object.keys(s)) walk(s[key]);

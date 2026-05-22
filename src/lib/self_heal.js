@@ -67,7 +67,8 @@ function readHeartbeatAgeMs(serviceName) {
   if (!existsSync(path)) return null;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
-    const ts = raw?.ts || raw?.lastTick;
+    // heartbeat.js writes `at`; older code wrote `ts`/`lastTick` — accept all.
+    const ts = raw?.at || raw?.ts || raw?.lastTick;
     if (!ts) return null;
     return Date.now() - ts;
   } catch { return null; }
@@ -122,12 +123,6 @@ const COMPONENTS = {
     heartbeat: 'market-data',
     // No process of its own — lives inside signal-engine. Restart that.
     owner: 'signal-engine',
-  },
-  'git-sync': {
-    label: 'Git sync (VPS auto-update)',
-    macAgent: 'com.jqvier.octave-git-sync',
-    systemdUnit: 'octave-git-sync.timer',
-    processPattern: 'git-sync.sh',
   },
   'backtest': {
     label: 'Backtest harness',

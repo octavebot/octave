@@ -2,11 +2,11 @@
  * Strategy extractor — takes an uploaded file (PDF, text, image, video, code)
  * and produces a user-strategy spec ready for user_strategies.create().
  *
- * Primary path: Anthropic Claude API. Reads PDFs, images, and text directly;
+ * Primary path: Gemini API. Reads PDFs, images, and text directly;
  * for video we extract a frame + transcript (best-effort) and feed that in.
  *
  * Fallback: regex heuristic that scans text for common trading rule phrases
- * (EMA, RSI, BB, TP, SL, ATR). Used when ANTHROPIC_API_KEY is missing.
+ * (EMA, RSI, BB, TP, SL, ATR). Used when GEMINI_API_KEY is missing.
  *
  * The output is the same JSON schema the dashboard form produces, so the
  * downstream pipeline (validate → save → evaluate) doesn't need to care
@@ -52,7 +52,7 @@ Reply with ONLY the JSON object. No prose, no markdown fences.`;
  * Public entry: extract a strategy spec from one uploaded file.
  *
  * @param {object} file  { buffer: Buffer, mimetype: string, filename: string }
- * @returns {Promise<{spec: object, source: 'claude'|'heuristic', notes?: string}>}
+ * @returns {Promise<{spec: object, source: 'gemini'|'heuristic', notes?: string}>}
  */
 export async function extractStrategy(file) {
   const ext = extname(file.filename).toLowerCase();
@@ -66,7 +66,7 @@ export async function extractStrategy(file) {
   if (!provider) {
     const text = await fileToText(file, mime);
     return { spec: heuristicParse(text, file.filename), source: 'heuristic',
-             notes: 'No LLM key set — used regex fallback. Add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY for AI extraction.' };
+             notes: 'No GEMINI_API_KEY set — used regex fallback. Get a free key at https://aistudio.google.com/apikey.' };
   }
 
   try {
