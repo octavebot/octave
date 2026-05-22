@@ -161,7 +161,7 @@ const DEFAULT_WIN_RATES = {
   'ASIAN-BREAKOUT': 0.62,
   'EMA-CROSS': 0.65,
   'LONDON-SWEEP': 0.95,
-  'NY-FVG': 0.54,
+  'NY-FVG': 0.65,
   'VPOC-RETEST': 0.57,
   'VWAP-REJ': 0.77,
 };

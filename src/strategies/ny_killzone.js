@@ -55,15 +55,21 @@ export function evaluate(ctx) {
   const a = atr(tf.bars, 14);
   if (!a) return out;
 
-  // H1 trend filter — only trade the FVG retrace in the H1 trend direction.
+  // Skip noise-sized gaps — a tradable FVG needs real displacement behind it.
+  const gapSize = gap.top - gap.bottom;
+  if (gapSize < 0.25 * a) return out;
+
+  // H1 trend filter — trade the FVG retrace only with a genuinely trending
+  // H1: price beyond the 50-EMA AND the 50-EMA itself sloping that way.
   const tf60 = ctx.pane('60');
   if (!tf60?.bars || tf60.bars.length < 55) return out;
   const e50arr = ema(tf60.bars, 50);
   const e50last = e50arr[e50arr.length - 1];
+  const e50prev = e50arr[e50arr.length - 4];
   const h1 = tf60.bars[tf60.bars.length - 1];
-  if (e50last == null) return out;
-  const trendUp = h1.close > e50last;
-  const trendDown = h1.close < e50last;
+  if (e50last == null || e50prev == null) return out;
+  const trendUp = h1.close > e50last && e50last >= e50prev;
+  const trendDown = h1.close < e50last && e50last <= e50prev;
 
   // bullish FVG: price moves up, leaves gap; retrace = price comes back down to it
   if (trendUp && gap.side === 'bullish' && last.low <= gap.top && last.low >= gap.bottom) {
@@ -71,7 +77,6 @@ export function evaluate(ctx) {
     const stop  = gap.bottom - 0.5 * a;
     const risk  = entry - stop;
     const sessHi = Math.max(...tf.bars.slice(-20).map((b) => b.high));
-    const gapSize = gap.top - gap.bottom;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', `fvg-${gap.time}`),
       direction: 'LONG', timeframe: '15',
@@ -89,7 +94,6 @@ export function evaluate(ctx) {
     const stop  = gap.top + 0.5 * a;
     const risk  = stop - entry;
     const sessLo = Math.min(...tf.bars.slice(-20).map((b) => b.low));
-    const gapSize = gap.top - gap.bottom;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', `fvg-${gap.time}`),
       direction: 'SHORT', timeframe: '15',
