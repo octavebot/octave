@@ -150,13 +150,22 @@ async function send(text, opts = {}) {
     disable_web_page_preview: true,
   };
   if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
-  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+  const post = (payload) => fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   }).catch((err) => ({ ok: false, status: 0, text: async () => err.message }));
+
+  let res = await post(body);
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    console.error('[bot] sendMessage', res.status, body.slice(0, 200));
+    const errBody = await res.text().catch(() => '');
+    // Markdown parse failure — never let a stray * / _ / ` swallow a whole
+    // reply. Resend as plain text so the command still answers the user.
+    if (res.status === 400 && /can't parse entities/i.test(errBody) && body.parse_mode) {
+      const { parse_mode, ...plain } = body;
+      res = await post(plain);
+      if (res.ok) { console.warn('[bot] markdown failed — sent plain'); return res; }
+    }
+    console.error('[bot] sendMessage', res.status, errBody.slice(0, 200));
   }
   return res;
 }
@@ -168,12 +177,19 @@ async function editMessage(chatId, messageId, text, opts = {}) {
     disable_web_page_preview: true,
   };
   if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
-  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
+  const post = (payload) => fetch(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   }).catch(() => null);
+
+  let res = await post(body);
   if (res && !res.ok) {
     const t = await res.text().catch(() => '');
+    if (/can't parse entities/i.test(t) && body.parse_mode) {
+      const { parse_mode, ...plain } = body;
+      res = await post(plain);
+      if (res && res.ok) return;
+    }
     if (!t.includes('not modified')) console.error('[bot] editMessage', res.status, t.slice(0, 200));
   }
 }
@@ -354,7 +370,7 @@ async function cmdStatus() {
     : muteMin > 0 ? `🔕 *Muted ${muteMin}m*`
     : '🔴 *Offline*';
 
-  const sessLabel = (session.lastSession || 'closed').toUpperCase();
+  const sessLabel = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
   const enabledList = enabled.length
     ? enabled.map((k) => `#${KEY_TO_NUM[k] || '?'} ${KEY_TO_NAME[k] || k}`)
     : ['_(no strategies enabled)_'];
@@ -464,7 +480,7 @@ async function cmdPerf() {
 async function cmdSession() {
   const session = readJson(SESSION_FILE, { lastSession: null });
   const hb = readJson(HEARTBEAT_FILE, null);
-  const s = (session.lastSession || 'closed').toUpperCase();
+  const s = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
   const open = s !== 'CLOSED' && s !== '—';
   await send([
     header(open ? '🟢' : '⚫', `${s} session`),
@@ -1556,10 +1572,13 @@ async function buildMainMenu() {
   try { const us = await import('../lib/user_strategies.js'); userCount = us.list().length; } catch {}
   const total = STRATEGIES.length + userCount;
 
+  // Session keys carry underscores (ny_am, ny_pm) — render with spaces so
+  // they never open a stray Markdown italic and break the whole message.
+  const sessLabel = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
   const text = [
     header('🎵', 'Octave'),
     '',
-    `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/${total} strategies · ${(session.lastSession || 'closed').toUpperCase()} session`,
+    `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/${total} strategies · ${sessLabel} session`,
   ].filter(Boolean).join('\n');
 
   const keyboard = [
