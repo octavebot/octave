@@ -24,7 +24,7 @@ const DEFAULTS = Object.freeze({
   mode: 'auto',
   strategies: {},  // populated by registry on first run
   mute: { untilMs: 0, reason: null },
-  alertChartImages: true,
+  alertChartImages: false,  // chart images disabled — text-only signal cards
   bypassKillzones: true,
   aiEngine: { enabled: true, threshold: 0.55 },
   lastUpdated: 0,
@@ -41,7 +41,7 @@ export function load() {
       mode: ['auto', 'cloud', 'local'].includes(raw.mode) ? raw.mode : DEFAULTS.mode,
       strategies: { ...(raw.strategies || {}) },
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
-      alertChartImages: raw.alertChartImages !== false,
+      alertChartImages: raw.alertChartImages === true,  // default off
       bypassKillzones: raw.bypassKillzones === true,
       aiEngine: {
         enabled: raw.aiEngine?.enabled !== false,
