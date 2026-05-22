@@ -158,11 +158,11 @@ export function clamp01(x) {
 // the system is accurate even before the first cache refresh.
 const CACHE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'backtest-cache.json');
 const DEFAULT_WIN_RATES = {
-  'ASIAN-BREAKOUT': 0.62,
-  'EMA-CROSS': 0.63,
+  'ASIAN-BREAKOUT': 0.67,
+  'EMA-CROSS': 0.71,
   'LONDON-SWEEP': 0.95,
-  'NY-FVG': 0.63,
-  'VPOC-RETEST': 0.57,
+  'NY-FVG': 0.70,
+  'VPOC-RETEST': 0.55,
   'VWAP-REJ': 0.73,
 };
 let _winRates = { rates: null, at: 0 };

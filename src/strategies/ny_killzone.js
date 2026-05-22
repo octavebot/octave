@@ -56,8 +56,11 @@ export function evaluate(ctx) {
   if (!a) return out;
 
   // Skip noise-sized gaps — a tradable FVG needs real displacement behind it.
+  // Gold whipsaws through fair-value gaps far more than the indices, so on
+  // gold we demand a much larger displacement gap to filter out the chop.
   const gapSize = gap.top - gap.bottom;
-  if (gapSize < 0.25 * a) return out;
+  const minGap = (ctx.instrument === 'gold' ? 0.6 : 0.25) * a;
+  if (gapSize < minGap) return out;
 
   // H1 trend filter — trade the FVG retrace only with a genuinely trending
   // H1: price beyond the 50-EMA AND the 50-EMA itself sloping that way.

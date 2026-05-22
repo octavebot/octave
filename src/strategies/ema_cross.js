@@ -76,8 +76,11 @@ export function evaluate(ctx) {
   const crossedDown = e9prev >= e21prev && e9now < e21now;
   const bullBody = last.close > last.open;
   const bearBody = last.close < last.open;
+  // Gold's 9/21 EMAs graze back and forth — on gold require the cross to
+  // open real separation rather than a touch-and-go that immediately recrosses.
+  const goldSepOK = ctx.instrument !== 'gold' || Math.abs(e9now - e21now) >= 0.06 * a15;
 
-  if (longBias && crossedUp && bullBody) {
+  if (longBias && crossedUp && bullBody && goldSepOK) {
     const entry = e9now;
     const stop  = entry - a15;
     const risk  = entry - stop;
@@ -97,7 +100,7 @@ export function evaluate(ctx) {
       t1: entry + 1.2 * risk,
       t2: entry + 2.0 * risk,
     }));
-  } else if (shortBias && crossedDown && bearBody) {
+  } else if (shortBias && crossedDown && bearBody && goldSepOK) {
     const entry = e9now;
     const stop  = entry + a15;
     const risk  = stop - entry;

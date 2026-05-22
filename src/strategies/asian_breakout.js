@@ -64,7 +64,9 @@ export function evaluate(ctx) {
   const body = Math.abs(last.close - last.open);
   const range = last.high - last.low;
   if (range <= 0) return out;
-  if (body / range < 0.62) return out;
+  // Gold fakes range breakouts more than the indices — demand a more
+  // decisive (fuller-bodied) breakout candle there.
+  if (body / range < (ctx.instrument === 'gold' ? 0.78 : 0.62)) return out;
 
   // H1 trend filter — only take breakouts aligned with the H1 50-EMA, and
   // require a real close beyond the range edge (not a marginal poke).
