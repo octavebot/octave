@@ -612,6 +612,9 @@ async function cmdSummary(arg) {
 
   const wins = trades.filter((t) => t.outcome === 'WIN').length;
   const losses = trades.filter((t) => t.outcome === 'LOSS').length;
+  // Limit orders that never filled — recorded, but NOT trades. Excluded
+  // from the win rate (which is wins ÷ resolved trades only).
+  const cancelled = trades.filter((t) => t.outcome === 'CANCELLED').length;
   const sumR = trades.reduce((acc, t) => acc + (+t.result_R || 0), 0);
 
   const lines = [
@@ -619,9 +622,12 @@ async function cmdSummary(arg) {
     '',
     `Alerts: *${alerts.length}* · ${triggered} 🟢 triggered · ${near} 🟠 near · ${formed} 🟡 forming`,
   ];
-  if (trades.length > 0) {
-    const wr = ((wins / trades.length) * 100).toFixed(0);
-    lines.push(`Trades: *${trades.length}* · ${wins}W / ${losses}L (${wr}%) · ${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R`);
+  if (wins + losses > 0) {
+    const wr = ((wins / (wins + losses)) * 100).toFixed(0);
+    lines.push(`Trades: *${wins + losses}* filled · ${wins}W / ${losses}L (${wr}%) · ${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R`);
+  }
+  if (cancelled > 0) {
+    lines.push(`Cancelled: *${cancelled}* limit${cancelled === 1 ? '' : 's'} never filled _(not counted W/L)_`);
   }
 
   const ranked = Object.entries(byStrategy).sort((a, b) => b[1].total - a[1].total).slice(0, 7);

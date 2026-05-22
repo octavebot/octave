@@ -176,30 +176,11 @@ async function tick() {
         strategy: r.strategy, status: r.status, setupId: r.setupId, confidence: r.confidence,
         telegram: tgState,
       });
-      // Auto-journal every triggered setup with its enrichment block. Uses the
-      // existing 'in' action so journal stats/trade() keep working; the auto
-      // flag + enrichment distinguish it from user-confirmed entries.
-      if (isTelegramWorthy && r.entryPlan) {
-        try {
-          journal.log({
-            action: 'in',
-            setupId: r.setupId,
-            instrument: r.instrument,
-            strategy: r.strategy,
-            direction: r.direction,
-            contracts: 0,
-            price: r.entryPlan.entry,
-            stop: r.entryPlan.stop,
-            t1: r.entryPlan.t1,
-            t2: r.entryPlan.t2,
-            confidence: r.confidence,
-            auto: true,
-            enrichment: r.enrichment || null,
-          });
-        } catch (err) {
-          log.warn('auto-journal in threw', { setupId: r.setupId, err: err.message });
-        }
-      }
+      // NOTE: the auto-journal 'in' is NOT written here. A triggered signal is
+      // a limit order — it may never fill. The entry is journalled only when
+      // the follow-up tracker reports a 'filled' milestone (see below), so
+      // invalidated / missed / unfilled setups never become phantom trades.
+
       // Sync TradingView drawings regardless of whether Telegram was sent —
       // user still sees the setup forming on the chart in real time.
       try {
@@ -231,39 +212,50 @@ async function tick() {
         try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: priceMap[inst] }); }
         catch (err) { log.warn('follow-up send threw', { err: err.message }); }
       }
-      // Auto-journal milestone events. BE is a state flag; tp1/tp2/sl/runner/expired close the trade.
+      // Record milestone events. The limit lifecycle has three outcome classes:
+      //   filled            → the entry actually happened: journal the 'in'
+      //   invalidated/      → the limit never filled: record as CANCELLED so it
+      //   missed/unfilled     shows in the log but is NEVER a win or a loss
+      //   tp1/tp2/sl/...    → the trade closed: journal 'out' + WIN/LOSS row
       try {
-        if (m.milestone === 'be') {
-          journal.log({ action: 'be', setupId: m.setup.setupId, auto: true });
+        const s = m.setup;
+        if (m.milestone === 'filled') {
+          journal.log({
+            action: 'in', setupId: s.setupId, instrument: inst, strategy: s.strategy,
+            direction: s.direction, contracts: 0, price: s.entry, stop: s.stop,
+            t1: s.t1, t2: s.t2, auto: true,
+          });
+        } else if (['invalidated', 'missed', 'unfilled'].includes(m.milestone)) {
+          // No trade occurred. One CANCELLED row — distinct from WIN/LOSS,
+          // excluded from win-rate maths.
+          appendTrade({
+            setupId: s.setupId, strategy: s.strategy, instrument: inst,
+            direction: s.direction, entry: s.entry, sl: s.stop,
+            tp: s.t2 ?? s.t1 ?? null, exit: null,
+            risk_reward: null, result_points: 0,
+            duration_minutes: s.placedAt ? Math.round((Date.now() - s.placedAt) / 60000) : null,
+            session: sessionLabel(Date.now() / 1000),
+            outcome: 'CANCELLED', exit_reason: m.milestone,
+          }, 'live');
+        } else if (m.milestone === 'be') {
+          journal.log({ action: 'be', setupId: s.setupId, auto: true });
         } else if (['tp1', 'tp2', 'sl', 'runner', 'expired'].includes(m.milestone)) {
           const exitPrice = priceMap[inst];
           const reason = m.milestone === 'runner' ? 'tp2' : m.milestone;
-          journal.log({
-            action: 'out',
-            setupId: m.setup.setupId,
-            reason,
-            price: exitPrice,
-            auto: true,
-          });
-          // Also write a closed-trade row to trades.jsonl for backtest-style queries.
+          journal.log({ action: 'out', setupId: s.setupId, reason, price: exitPrice, auto: true });
           const isWin = ['tp1', 'tp2', 'runner'].includes(m.milestone);
           const isLoss = m.milestone === 'sl';
-          const entry = m.setup.entry, stop = m.setup.stop;
+          const entry = s.entry, stop = s.stop;
           const risk = Math.abs(entry - stop);
           const resultPoints = isWin && exitPrice != null ? Math.abs(exitPrice - entry)
                               : isLoss ? -risk : 0;
           appendTrade({
-            setupId: m.setup.setupId,
-            strategy: m.setup.strategy,
-            instrument: inst,
-            direction: m.setup.direction,
-            entry,
-            sl: stop,
-            tp: m.setup.t2 ?? m.setup.t1 ?? null,
+            setupId: s.setupId, strategy: s.strategy, instrument: inst,
+            direction: s.direction, entry, sl: stop, tp: s.t2 ?? s.t1 ?? null,
             exit: exitPrice,
             risk_reward: risk ? resultPoints / risk : null,
             result_points: resultPoints,
-            duration_minutes: m.setup.createdAt ? Math.round((Date.now() - m.setup.createdAt) / 60000) : null,
+            duration_minutes: s.filledAt ? Math.round((Date.now() - s.filledAt) / 60000) : null,
             session: sessionLabel(Date.now() / 1000),
             outcome: isWin ? 'WIN' : isLoss ? 'LOSS' : m.milestone === 'expired' ? 'EXPIRED' : 'OTHER',
           }, 'live');
