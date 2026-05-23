@@ -1,13 +1,21 @@
 /**
  * Cloud data source. `fetchAllPanes()` returns a fresh `panesByTf` Map with
- * every pane any enabled strategy might need, sourced from Yahoo Finance.
- * Cached in memory for ~15s so the 3s detector loop doesn't hammer Yahoo.
+ * every pane any enabled strategy might need.
  *
- * Yahoo provides everything: gold 1m/5m/15m/60m/1D, silver 5m/15m, DXY 1D,
- * nasdaq + sp 5m/15m/60m/1D. Tunable via OCTAVE_DATA_TTL_MS env var.
+ * Layered sources:
+ *   1. Yahoo Finance — free, fast, but caps 15m intraday at 60-71 days.
+ *      Sufficient for live alerts; insufficient for true 1y/3y backtests.
+ *   2. OANDA — optional. If OANDA_API_TOKEN is set, the deep-backtest path
+ *      (fetchAllPanesForBacktest) pulls historical pages from OANDA to extend
+ *      back to ~5 years on the instruments OANDA supports (gold always; the
+ *      indices depend on account type).
+ *
+ * Cached in memory for ~15s so the 3s detector loop doesn't hammer the API.
+ * Tunable via OCTAVE_DATA_TTL_MS env var.
  */
 
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
+import { fetchAll as fetchOanda, isConfigured as oandaConfigured } from '../cloud/oanda.js';
 import { beat as heartbeat } from './heartbeat.js';
 
 // 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
@@ -83,3 +91,40 @@ export async function fetchAllPanes() {
   return inflightFull.then((m) => new Map(m));
 }
 
+/**
+ * Deep-history fetch for backtests. Pulls Yahoo first (fast, free) and then,
+ * if OANDA is configured, fetches the same instruments going back `targetDays`
+ * and MERGES the deeper history under the SAME pane keys.
+ *
+ * Merge rule: OANDA bars older than Yahoo's earliest bar fill in the gap;
+ * Yahoo wins for any overlapping time (it's the more authoritative live source).
+ *
+ * Bypasses the 15s cache — backtests run on demand, not in the hot loop.
+ *
+ * @param {number} targetDays  How far back to extend history (default 730 = 2y).
+ */
+export async function fetchAllPanesForBacktest(targetDays = 730) {
+  const yahoo = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
+  for (const [, p] of yahoo) p.source = p.source || 'yahoo';
+
+  if (!oandaConfigured()) return yahoo;
+
+  // Try OANDA only for instruments OANDA supports cleanly; skip dxy.
+  const oandaRequests = NEEDED_REQUESTS.filter(([asset]) => asset !== 'dxy');
+  const oanda = await fetchOanda(oandaRequests, { targetDays }).catch(() => new Map());
+
+  for (const [key, oandaPane] of oanda) {
+    const yahooPane = yahoo.get(key);
+    if (!yahooPane?.bars?.length) {
+      yahoo.set(key, oandaPane);
+      continue;
+    }
+    const yahooEarliest = yahooPane.bars[0].time;
+    const merged = [
+      ...oandaPane.bars.filter((b) => b.time < yahooEarliest),
+      ...yahooPane.bars,
+    ];
+    yahoo.set(key, { ...yahooPane, bars: merged, source: 'yahoo+oanda', barCount: merged.length });
+  }
+  return yahoo;
+}

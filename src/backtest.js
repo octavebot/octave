@@ -21,6 +21,7 @@
  */
 
 import { fetchBars as fetchYahoo } from './cloud/yahoo.js';
+import { fetchAll as fetchOandaAll, isConfigured as oandaConfigured } from './cloud/oanda.js';
 import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_strategies.js';
 import { loadRegistry } from './lib/strategy_registry.js';
 import { nyParts } from './lib/time.js';
@@ -66,7 +67,7 @@ const PANE_REQUESTS = [
   ['dxy',    '1D'],
 ];
 
-async function fetchAllPanes() {
+async function fetchAllPanes(targetDays = 0) {
   const map = new Map();
   await Promise.all(PANE_REQUESTS.map(async ([asset, tf]) => {
     try {
@@ -74,6 +75,20 @@ async function fetchAllPanes() {
       if (pane?.bars?.length) map.set(`${asset}|${tf}`, pane);
     } catch {}
   }));
+  // OANDA extension — if targetDays exceeds Yahoo's 15m cap (~71 days) AND
+  // OANDA is configured, fetch deep history and merge backward into the panes.
+  // OANDA covers gold + silver always; nasdaq/sp depend on account type.
+  if (targetDays > 71 && oandaConfigured()) {
+    const oandaRequests = PANE_REQUESTS.filter(([asset]) => asset !== 'dxy');
+    const oanda = await fetchOandaAll(oandaRequests, { targetDays }).catch(() => new Map());
+    for (const [key, op] of oanda) {
+      const yp = map.get(key);
+      if (!yp?.bars?.length) { map.set(key, op); continue; }
+      const yEarliest = yp.bars[0].time;
+      const merged = [...op.bars.filter((b) => b.time < yEarliest), ...yp.bars];
+      map.set(key, { ...yp, bars: merged, source: 'yahoo+oanda', barCount: merged.length });
+    }
+  }
   return map;
 }
 
@@ -247,7 +262,7 @@ export async function runBacktest(opts = {}) {
     return { error: 'no strategies to backtest', stats: {}, panesSummary: [], window: null };
   }
 
-  const panesByTfFull = await fetchAllPanes();
+  const panesByTfFull = await fetchAllPanes(days);
   if (panesByTfFull.size === 0) {
     return { error: 'no Yahoo data', stats: {}, panesSummary: [], window: null };
   }
