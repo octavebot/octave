@@ -159,12 +159,14 @@ export function clamp01(x) {
 // backtest cache; the defaults below are the last verified 30-day run so
 // the system is accurate even before the first cache refresh.
 const CACHE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'backtest-cache.json');
+// Conservative side of the run-to-run range observed across multiple 45-day
+// backtests — the nightly backtest cache overrides these once it runs.
 const DEFAULT_WIN_RATES = {
   'ASIAN-BREAKOUT': 0.63,
-  'DAILY-TREND-PB': 0.65,
-  'EMA-CROSS': 0.66,
-  'LONDON-SWEEP': 0.79,
-  'NY-FVG': 0.69,
+  'DAILY-TREND-PB': 0.60,
+  'EMA-CROSS': 0.62,
+  'LONDON-SWEEP': 0.72,
+  'NY-FVG': 0.68,
   'VPOC-RETEST': 0.50,
   'VWAP-REJ': 0.55,
 };
