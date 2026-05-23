@@ -114,7 +114,9 @@ export const STOP_PAD = 0.35;  // widen the structural stop by 35%
 /**
  * Build the standard triggered DetectorResult shape that the alerter expects.
  * Targets + the executed stop are derived from a noise-padded risk so the
- * whole stack ships a consistent 1.2R / 1.5R profile.
+ * whole stack ships a consistent 1.2R / 1.8R profile by default. Strategies
+ * targeting longer runs (e.g. DAILY-TREND-PB for prop-firm eval pass) can
+ * pass `t1Mult` / `t2Mult` to override per-call.
  */
 export function buildTriggered({
   strategy, setupId, direction, setupName, summary, confidence, timeframe,
@@ -159,9 +161,9 @@ export function clamp01(x) {
 const CACHE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'backtest-cache.json');
 const DEFAULT_WIN_RATES = {
   'ASIAN-BREAKOUT': 0.63,
-  'DAILY-TREND-PB': 0.58,
-  'EMA-CROSS': 0.61,
-  'LONDON-SWEEP': 0.76,
+  'DAILY-TREND-PB': 0.65,
+  'EMA-CROSS': 0.66,
+  'LONDON-SWEEP': 0.79,
   'NY-FVG': 0.69,
   'VPOC-RETEST': 0.50,
   'VWAP-REJ': 0.55,

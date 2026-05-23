@@ -24,3 +24,4 @@ src/state/news-ff-cache.json
 src/state/user-strategies.json
 src/state/trade-journal.jsonl
 /src/state/backtest-cache.json
+/src/state/last-bias.json

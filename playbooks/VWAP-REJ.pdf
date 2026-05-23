@@ -13,7 +13,7 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
 endobj
 5 0 obj
-<< /Length 2730 >>
+<< /Length 2732 >>
 stream
 BT /F2 22 Tf 0.10 0.10 0.12 rg 56.0 730.0 Td (VWAP Rejection · Intraday Continuation) Tj ET
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 680.0 Td (Concept) Tj ET
@@ -36,11 +36,11 @@ BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 298.0 Td (When to skip) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 277.0 Td (•  H1 trend disagrees with the day's VWAP side.) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 260.0 Td (•  Range-bound tape \(ATR-15m < 0.4 × ATR-H1\).) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 231.0 m 556 231.0 l S
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 213.0 Td (Backtest Results \(3-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 192.0 Td (Trades: 8 · 2.67 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 175.0 Td (Win rate: 63% · Avg winner: 0.83 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 158.0 Td (Expectancy: 0.17 R per trade · Profit factor: 1.47) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 141.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 213.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 192.0 Td (Trades: 83 · 1.84 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 175.0 Td (Win rate: 55% · Avg winner: 1.18 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 158.0 Td (Expectancy: 0.25 R per trade · Profit factor: 1.60) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 141.0 Td (Result vs target \(60% win, 1.2 RR\): FAIL) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 112.0 m 556 112.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 102.0 Td (Octave Trading Signals · Strategy VWAP-REJ · generated 2026-05-23) Tj ET
 endstream
@@ -56,9 +56,9 @@ xref
 0000000121 00000 n 
 0000000218 00000 n 
 0000000320 00000 n 
-0000003101 00000 n 
+0000003103 00000 n 
 trailer
 << /Size 7 /Root 1 0 R >>
 startxref
-3237
+3239
 %%EOF

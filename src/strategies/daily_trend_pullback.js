@@ -28,11 +28,15 @@ back to its 20-EMA. On 15m, the first pin bar or engulfing in the bias
 direction at that pullback is the entry.
 
 ## Rules
-1. **Daily bias** — D1 close > 20-EMA → LONG only. < 20-EMA → SHORT only.
-   The 20-EMA must also be sloping in the bias direction.
-2. **H1 pullback** — Last 3 H1 bars touched within 0.3 × ATR(H1) of the H1 20-EMA.
-3. **15m rejection** — Most recent 15m bar is a pin bar or engulfing in the
-   bias direction, with body in that direction.
+1. **Daily bias** — D1 close > 20-EMA AND 20-EMA sloping up → LONG only.
+   D1 close < 20-EMA AND 20-EMA sloping down → SHORT only.
+2. **H1 pullback** — Any of the last 5 H1 bars wicked into a 0.6 × ATR(H1)
+   band around the H1 20-EMA.
+3. **15m proximity** — The current 15m bar itself wicks within 0.4 × ATR(15m)
+   of the H1 20-EMA — we're trading the pullback live, not after it ended.
+4. **15m rejection** — Engulfing or pin bar in the bias direction. Bar must
+   close past the prior 15m bar's high (long) or low (short) — commitment
+   beyond the pullback, not just a wick touch.
 
 ## Entry
 - Market at rejection-bar close.
@@ -95,14 +99,13 @@ export function evaluate(ctx) {
   const lastTouches = last.low - proximityTol <= h20last && last.high + proximityTol >= h20last;
   if (!lastTouches) return out;
 
-  // Engulfings travel further than pins on average — require either a real
-  // engulfing OR a pin with a body ≥ 0.6 × ATR(15m) (real displacement, not
-  // a tiny doji-pin). And require the rejection bar to take out the prior
-  // bar's high/low (commitment beyond the pullback).
-  const bigEngulfBull = isEngulfing(prev, last, 'bullish');
-  const bigPinBull = isPinBar(last, 'bullish') && Math.abs(last.close - last.open) >= 0.6 * a15;
+  // Engulfing or pin in the bias direction. The "took prev high/low" filter
+  // is the real quality gate — without it, any micro-rejection at the EMA
+  // qualifies and the win rate halves. With it, we demand commitment past
+  // the pullback's last bar before entering.
+  const rejBull = isEngulfing(prev, last, 'bullish') || isPinBar(last, 'bullish');
   const tookPrevHigh = last.close > prev.high;
-  if (dailyUp && (bigEngulfBull || bigPinBull) && tookPrevHigh && last.close > last.open) {
+  if (dailyUp && rejBull && tookPrevHigh && last.close > last.open) {
     const entry = last.close;
     const stop = last.low - 0.4 * a15;
     const risk = entry - stop;
@@ -119,10 +122,9 @@ export function evaluate(ctx) {
       entry, stop, t1Mult: 1.5, t2Mult: 3.0,
     }));
   }
-  const bigEngulfBear = isEngulfing(prev, last, 'bearish');
-  const bigPinBear = isPinBar(last, 'bearish') && Math.abs(last.close - last.open) >= 0.6 * a15;
+  const rejBear = isEngulfing(prev, last, 'bearish') || isPinBar(last, 'bearish');
   const tookPrevLow = last.close < prev.low;
-  if (dailyDown && (bigEngulfBear || bigPinBear) && tookPrevLow && last.close < last.open) {
+  if (dailyDown && rejBear && tookPrevLow && last.close < last.open) {
     const entry = last.close;
     const stop = last.high + 0.4 * a15;
     const risk = stop - entry;
