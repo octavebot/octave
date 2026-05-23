@@ -130,25 +130,81 @@ function buildCtxFromMaps(panesByTf, lastBarIdxByKey, instrument = 'gold') {
   };
 }
 
+/**
+ * Simulate a single trade bar-by-bar.
+ *
+ * Default mode is the conservative "all-or-nothing" exit at TP1: the legacy
+ * model that under-counts runners.
+ *
+ * partial=true models real trading: 50% off at TP1 (book half the profit),
+ * remaining 50% trails with stop moved to BREAKEVEN. The runner then either
+ * hits TP2 (full TP2 R on the runner) or stops out at BE (zero R on the
+ * runner). Final R = 0.5 × TP1_R + 0.5 × runner_R. This matches how the
+ * alerter's signal cards instruct the user to manage live trades.
+ *
+ * Stop-vs-TP ordering when both hit on the same bar is pessimistic (stop
+ * wins) — real fills depend on intra-bar tick sequence.
+ */
 function simulateTrade(bars, trade, opts = {}) {
   const maxBars = opts.maxBars ?? 200;
+  const partial = opts.partial === true;
   const { direction, entry, stop, t1, t2, openIdx, risk } = trade;
+
+  const long = direction === 'LONG';
+  const sign = long ? 1 : -1;
+  const tp1R = t1 != null ? Math.abs(t1 - entry) / risk : null;
+  const tp2R = t2 != null ? Math.abs(t2 - entry) / risk : null;
+
+  // Phase 1: pre-TP1 — original stop, target = TP1
+  let tp1HitIdx = null;
+  let phase1Result = null;
   for (let i = openIdx + 1; i < Math.min(bars.length, openIdx + maxBars); i++) {
     const b = bars[i];
-    if (direction === 'LONG') {
-      if (b.low <= stop) return { exit: stop, exitIdx: i, R: -1, reason: 'SL' };
-      if (t2 != null && b.high >= t2) return { exit: t2, exitIdx: i, R: Math.abs(t2 - entry) / risk, reason: 'TP2' };
-      if (t1 != null && b.high >= t1) return { exit: t1, exitIdx: i, R: Math.abs(t1 - entry) / risk, reason: 'TP1' };
-    } else {
-      if (b.high >= stop) return { exit: stop, exitIdx: i, R: -1, reason: 'SL' };
-      if (t2 != null && b.low <= t2) return { exit: t2, exitIdx: i, R: Math.abs(entry - t2) / risk, reason: 'TP2' };
-      if (t1 != null && b.low <= t1) return { exit: t1, exitIdx: i, R: Math.abs(entry - t1) / risk, reason: 'TP1' };
+    const sLHit = long ? b.low <= stop : b.high >= stop;
+    if (sLHit) { phase1Result = { exit: stop, exitIdx: i, R: -1, reason: 'SL' }; break; }
+    if (t2 != null && (long ? b.high >= t2 : b.low <= t2)) {
+      // TP2 hit before TP1 — direct gap to TP2. Full runner takes TP2 R.
+      phase1Result = { exit: t2, exitIdx: i, R: tp2R, reason: 'TP2' };
+      break;
+    }
+    if (t1 != null && (long ? b.high >= t1 : b.low <= t1)) {
+      tp1HitIdx = i;
+      if (!partial) {
+        phase1Result = { exit: t1, exitIdx: i, R: tp1R, reason: 'TP1' };
+      }
+      break;
     }
   }
-  const last = bars[Math.min(bars.length - 1, openIdx + maxBars - 1)];
+
+  if (phase1Result) return phase1Result;
+
+  // partial && tp1 hit → simulate runner with stop at entry
+  if (partial && tp1HitIdx != null) {
+    for (let i = tp1HitIdx + 1; i < Math.min(bars.length, openIdx + maxBars); i++) {
+      const b = bars[i];
+      const beHit = long ? b.low <= entry : b.high >= entry;
+      const tp2Hit = t2 != null && (long ? b.high >= t2 : b.low <= t2);
+      if (beHit && tp2Hit) {
+        // Both on same bar — pessimistic: BE stop wins (runner = 0R)
+        return { exit: entry, exitIdx: i, R: 0.5 * tp1R, reason: 'TP1+BE' };
+      }
+      if (beHit) return { exit: entry, exitIdx: i, R: 0.5 * tp1R, reason: 'TP1+BE' };
+      if (tp2Hit) return { exit: t2, exitIdx: i, R: 0.5 * tp1R + 0.5 * tp2R, reason: 'TP1+TP2' };
+    }
+    // Runner timed out — close at last bar
+    const lastIdx = Math.min(bars.length - 1, openIdx + maxBars - 1);
+    const last = bars[lastIdx];
+    if (!last) return { exit: entry, exitIdx: tp1HitIdx, R: 0.5 * tp1R, reason: 'TP1+time' };
+    const runnerR = sign * (last.close - entry) / risk;
+    return { exit: last.close, exitIdx: lastIdx, R: 0.5 * tp1R + 0.5 * Math.max(0, runnerR), reason: 'TP1+time' };
+  }
+
+  // Time-out without ever hitting anything
+  const lastIdx = Math.min(bars.length - 1, openIdx + maxBars - 1);
+  const last = bars[lastIdx];
   if (!last) return null;
-  const R = direction === 'LONG' ? (last.close - entry) / risk : (entry - last.close) / risk;
-  return { exit: last.close, exitIdx: Math.min(bars.length - 1, openIdx + maxBars - 1), R, reason: 'time' };
+  const R = sign * (last.close - entry) / risk;
+  return { exit: last.close, exitIdx: lastIdx, R, reason: 'time' };
 }
 
 /**
@@ -159,6 +215,7 @@ function simulateTrade(bars, trade, opts = {}) {
  * @param {number} [opts.days]          Lookback window in days (default 7)
  * @param {number} [opts.step]          Anchor step in bars (default 1)
  * @param {number} [opts.confMin]       Optional confidence floor (default 0 — count every setup)
+ * @param {boolean} [opts.partial]      Use 50/50 partial-TP simulation (default false)
  * @returns {Promise<{ stats, panesSummary, window }>}
  */
 export async function runBacktest(opts = {}) {
@@ -307,7 +364,7 @@ export async function runBacktest(opts = {}) {
               if (stopFirst) { st.limitsExpired++; resolved = true; break; }
               continue; // not filled on this bar — keep scanning
             }
-            const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: j });
+            const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: j }, { partial: opts.partial });
             if (outcome) {
               st.trades.push({
                 ...lim, openIdx: j, openTime: bar.time,
