@@ -144,6 +144,8 @@ export function setMode(accountId, mode) {
  * executor) when a signal passes the risk gates.
  */
 export function openTrade(accountId, trade) {
+  // Ensure today bucket is current before incrementing todayTrades.
+  maybeRollDay();
   const acc = state.accounts[accountId];
   if (!acc) return false;
   acc.openTrades.push({
@@ -173,6 +175,10 @@ export function openTrade(accountId, trade) {
  * @param {number} pnlUsd  net dollar result of the trade (signed)
  */
 export function closeTrade(accountId, setupId, pnlUsd) {
+  // Ensure we're billing P&L to the CURRENT NY day. If the day flipped
+  // since the last call, roll yesterday's bucket into history first so
+  // this close's P&L lands in today's record, not yesterday's.
+  maybeRollDay();
   const acc = state.accounts[accountId];
   if (!acc) return false;
   const idx = acc.openTrades.findIndex((t) => t.setupId === setupId);

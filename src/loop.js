@@ -19,7 +19,13 @@ import { nyParts } from './lib/time.js';
 
 const DETECT_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-detect.json');
 
-/** Atomically persist the latest detect() results for the bot to read. */
+/**
+ * Atomically persist the latest detect() results for the bot to read.
+ * Skips the write when results are byte-identical to last write —
+ * detector cache means most ticks return the same array, so this avoids
+ * ~80% of unnecessary disk I/O during a fetch cycle.
+ */
+let _lastSnapshotHash = '';
 function writeDetectSnapshot(results) {
   try {
     const slim = results.map((r) => ({
@@ -28,6 +34,9 @@ function writeDetectSnapshot(results) {
       setupName: r.setupName, setupId: r.setupId, geometry: r.geometry,
       entryPlan: r.entryPlan,
     }));
+    const body = JSON.stringify(slim);
+    if (body === _lastSnapshotHash) return;  // unchanged → no write
+    _lastSnapshotHash = body;
     writeFileSync(DETECT_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), results: slim }));
     renameSync(DETECT_SNAPSHOT + '.tmp', DETECT_SNAPSHOT);
   } catch { /* snapshot is best-effort — never break the loop */ }

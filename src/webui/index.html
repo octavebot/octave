@@ -346,6 +346,15 @@
     </div>
   </div>
 
+  <!-- EVAL ACCOUNTS -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <h2 style="margin:0;">Eval Accounts</h2>
+      <a href="/positions" target="_blank" style="color:var(--text-dim);font-size:12px;text-decoration:none;">Trade Panel ↗</a>
+    </div>
+    <div id="accounts" style="margin-top:12px;"></div>
+  </div>
+
   <!-- SERVICES -->
   <div class="card">
     <h2>Services</h2>
@@ -497,6 +506,56 @@ async function postConfig(payload) {
   return r.json();
 }
 
+// Eval accounts — paper-trader balance/profit/DD/open trades per account.
+// Fetches /api/positions and renders compact cards. Failures are silent so
+// the rest of the dashboard keeps working.
+async function renderAccounts() {
+  const root = document.getElementById('accounts');
+  if (!root) return;
+  try {
+    const r = await fetch('/api/positions');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const fmt = (n) => '$' + Math.round(n).toLocaleString('en-US');
+    const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n).replace('$', n >= 0 ? '$' : '-$').replace('-$-', '-$');
+    const html = ['auto', 'user'].map((id) => {
+      const a = data.accounts[id] || {};
+      const profit = (a.balance || 0) - 50000;
+      const peak = a.peakEod || 50000;
+      const dd = peak - (a.balance || 0);
+      const ddPct = Math.min(100, (dd / 2000) * 100);
+      const open = a.openTrades || [];
+      const profitColor = profit >= 0 ? 'var(--accent)' : '#e85a71';
+      const dayColor = (a.dailyPnl || 0) >= 0 ? 'var(--accent)' : '#e85a71';
+      const modeBadge = a.mode === 'live'
+        ? '<span style="background:#4cc38a;color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">LIVE</span>'
+        : '<span style="background:rgba(240,185,65,0.2);color:#f0b941;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">PAPER</span>';
+      return `
+        <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:600;letter-spacing:0.04em;">${id.toUpperCase()}</div>
+            <div>${modeBadge} <span style="color:var(--text-dim);font-size:11px;margin-left:6px;">${a.phase || 'eval'}</span></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px;margin-bottom:6px;">
+            <div><div style="color:var(--text-dim);font-size:10px;text-transform:uppercase;">Balance</div><div style="font-weight:600;font-size:14px;">${fmt(a.balance || 0)}</div></div>
+            <div><div style="color:var(--text-dim);font-size:10px;text-transform:uppercase;">Profit</div><div style="font-weight:600;font-size:14px;color:${profitColor};">${fmtSigned(profit)}</div></div>
+            <div><div style="color:var(--text-dim);font-size:10px;text-transform:uppercase;">Today</div><div style="font-weight:600;font-size:14px;color:${dayColor};">${fmtSigned(a.dailyPnl || 0)}</div></div>
+            <div><div style="color:var(--text-dim);font-size:10px;text-transform:uppercase;">Open</div><div style="font-weight:600;font-size:14px;">${open.length}</div></div>
+          </div>
+          <div style="margin-top:8px;">
+            <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;margin-bottom:3px;">DD used: ${fmt(dd)} / $2000</div>
+            <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+              <div style="height:100%;width:${ddPct}%;background:${ddPct > 75 ? '#e85a71' : ddPct > 50 ? '#f0b941' : '#4cc38a'};transition:width 0.3s;"></div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+    root.innerHTML = html;
+  } catch (err) {
+    root.innerHTML = '<div style="color:var(--text-dim);font-size:12px;">Account state unavailable</div>';
+  }
+}
+
 function fmtAge(ms) {
   if (!ms || ms < 0) return '—';
   const s = Math.round(ms / 1000);
@@ -560,6 +619,9 @@ function renderState(s) {
     ? s.activity.active_setups
     : (s.activity.tracked_setups || 0));
   document.getElementById('active-setups').textContent = String(activeCount);
+
+  // ── Eval accounts (fetched separately so failure doesn't kill the page) ──
+  renderAccounts();
 
   // ── Strategies in folders ──
   const container = document.getElementById('strategies');
