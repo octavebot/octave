@@ -63,12 +63,24 @@ export function evaluate(ctx) {
   if (!tf60?.bars || tf60.bars.length < 50) return out;
   if (!dPane?.bars || dPane.bars.length < 25) return out;
 
-  // Daily bias: D1 close vs 20-EMA, EMA slope confirmation
+  // Daily bias: D1 close vs 20-EMA, EMA slope confirmation. ALSO require a
+  // minimum daily ATR to confirm there's real movement in the trend — flat
+  // markets with technically-up EMAs but no displacement produce false signals.
+  // 3y backtest finding: longs at 42% (+1.9R/400 trades) were dragged by
+  // weak-trend days; shorts held 51% (+27.6R/180 trades) because down-trends
+  // tend to be sharper. The displacement filter targets the weak-trend
+  // false-positive pattern without overfitting to instrument or session.
   const d20 = ema(dPane.bars, 20);
   const d20last = d20[d20.length - 1];
   const d20prev = d20[d20.length - 3];
   const dlast = dPane.bars[dPane.bars.length - 1];
   if (d20last == null || d20prev == null) return out;
+  const aD = atr(dPane.bars, 14);
+  if (!aD) return out;
+  // Require D1 close to be ≥ 0.3 × D1-ATR away from the 20-EMA — real
+  // separation, not just barely-above noise.
+  const trendStrength = Math.abs(dlast.close - d20last);
+  if (trendStrength < 0.3 * aD) return out;
   const dailyUp = dlast.close > d20last && d20last > d20prev;
   const dailyDown = dlast.close < d20last && d20last < d20prev;
   if (!dailyUp && !dailyDown) return out;

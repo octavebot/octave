@@ -8,7 +8,7 @@
 
 import { vwap, ema, isPinBar, isEngulfing } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
-import { nyDayStartUnix } from '../lib/time.js';
+import { nyDayStartUnix, nyParts } from '../lib/time.js';
 import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
 
 export const meta = {
@@ -54,6 +54,13 @@ export function evaluate(ctx) {
   const tf60 = ctx.pane('60');
   if (!tf?.bars || tf.bars.length < 30) return out;
   if (!tf60?.bars || tf60.bars.length < 55) return out;
+
+  // Skip NY-PM (12:00-16:00 ET). 3-year backtest: NY-PM is 35% win / -21.6R
+  // over 123 trades vs Asian/London/NY-AM all ≥46%. VWAP loses its meaning
+  // mid-day — institutions have already positioned for the session and stop
+  // defending it. Drop the whole window rather than half-fix it.
+  const np = nyParts(ctx.barTime);
+  if (np.h >= 12 && np.h < 16) return out;
 
   const bars = tf.bars;
   const sessStart = nyDayStartUnix(ctx.barTime);
