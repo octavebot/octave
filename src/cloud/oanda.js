@@ -45,17 +45,20 @@ const PAGINATE_BACKWARD_LIMIT = 30;  // ≤150k candles per pane — plenty for 
  * the caller can stop paginating.
  */
 async function fetchPage(symbol, granularity, count, toUnix, token, base) {
+  // OANDA docs: `includeFirst` is only valid alongside `from`. We always
+  // paginate backward via `to` + `count`, so we never set `from` or `includeFirst`.
   const params = new URLSearchParams({
     granularity,
     count: String(count),
     price: 'M',
     smooth: 'false',
-    includeFirst: 'false',
   });
   if (toUnix) params.set('to', String(toUnix));
   const url = `${base}/v3/instruments/${symbol}/candles?${params}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
+    // 404 = instrument unsupported on this account (e.g. NAS100 on EU demo).
+    // 400 = bad params — most often "instrument is not tradeable" wrapper.
     if (res.status === 404 || res.status === 400) return { error: 'unsupported', status: res.status };
     throw new Error(`OANDA ${symbol} ${granularity}: HTTP ${res.status}`);
   }
