@@ -37,9 +37,9 @@ BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 277.0 Td (•  H1 trend disagrees with the d
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 260.0 Td (•  Range-bound tape \(ATR-15m < 0.4 × ATR-H1\).) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 231.0 m 556 231.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 213.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 192.0 Td (Trades: 82 · 1.82 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 175.0 Td (Win rate: 55% · Avg winner: 1.20 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 158.0 Td (Expectancy: 0.25 R per trade · Profit factor: 1.60) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 192.0 Td (Trades: 83 · 1.84 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 175.0 Td (Win rate: 54% · Avg winner: 1.20 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 158.0 Td (Expectancy: 0.24 R per trade · Profit factor: 1.59) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 141.0 Td (Result vs target \(60% win, 1.2 RR\): FAIL) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 112.0 m 556 112.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 102.0 Td (Octave Trading Signals · Strategy VWAP-REJ · generated 2026-05-23) Tj ET

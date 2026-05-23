@@ -32,9 +32,9 @@ BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 392.0 Td (Take profit) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 371.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 342.0 m 556 342.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 324.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 303.0 Td (Trades: 53 · 1.18 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Win rate: 68% · Avg winner: 1.37 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Expectancy: 0.61 R per trade · Profit factor: 2.89) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 303.0 Td (Trades: 54 · 1.20 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Win rate: 70% · Avg winner: 1.36 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Expectancy: 0.66 R per trade · Profit factor: 3.22) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 252.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 223.0 m 556 223.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 213.0 Td (Octave Trading Signals · Strategy NY-FVG · generated 2026-05-23) Tj ET

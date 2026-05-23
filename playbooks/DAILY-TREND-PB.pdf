@@ -44,7 +44,7 @@ BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 158.0 Td (•  The daily + H1 + 15m alignmen
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 141.0 Td (•  Stop sits beyond a real swing low/high, not arbitrary chart distance.) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 112.0 m 556 112.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 94.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 73.0 Td (Trades: 59 · 1.31 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 73.0 Td (Trades: 67 · 1.49 per day) Tj ET
 endstream
 endobj
 6 0 obj
@@ -53,9 +53,9 @@ endobj
 7 0 obj
 << /Length 470 >>
 stream
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 736.0 Td (Win rate: 61% · Avg winner: 1.38 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 719.0 Td (Expectancy: 0.47 R per trade · Profit factor: 2.28) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 702.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 736.0 Td (Win rate: 57% · Avg winner: 1.39 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 719.0 Td (Expectancy: 0.38 R per trade · Profit factor: 1.95) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 702.0 Td (Result vs target \(60% win, 1.2 RR\): FAIL) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 673.0 m 556 673.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 663.0 Td (Octave Trading Signals · Strategy DAILY-TREND-PB · generated 2026-05-23) Tj ET
 endstream

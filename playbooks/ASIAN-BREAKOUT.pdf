@@ -33,9 +33,9 @@ BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 377.0 Td (Take profit) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 356.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 327.0 m 556 327.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 309.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 288.0 Td (Trades: 60 · 1.33 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 271.0 Td (Win rate: 63% · Avg winner: 1.04 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 254.0 Td (Expectancy: 0.33 R per trade · Profit factor: 1.99) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 288.0 Td (Trades: 64 · 1.42 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 271.0 Td (Win rate: 66% · Avg winner: 1.05 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 254.0 Td (Expectancy: 0.39 R per trade · Profit factor: 2.29) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 237.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 208.0 m 556 208.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 198.0 Td (Octave Trading Signals · Strategy ASIAN-BREAKOUT · generated 2026-05-23) Tj ET

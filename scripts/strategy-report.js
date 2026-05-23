@@ -24,7 +24,12 @@ const MAX_TRADES_PER_DAY = 4.0;
 
   // step:3 samples the 5m anchor every 15m — strategies fire on 15m+ panes,
   // so this loses no signal while running 3× faster.
-  const res = await runBacktest({ days, strategies: ids, confMin: 0.65, step: 3 });
+  // confMin: 0 — report measures RAW strategy edge over every setup it produces.
+  // Live runtime gates via the Holy AI engine + aiEngine.threshold, not this
+  // pre-filter. Filtering on confidence here would be circular: confidence is
+  // derived from the win rate, so a low-WR strategy would self-suppress to
+  // zero trades and never get measured.
+  const res = await runBacktest({ days, strategies: ids, confMin: 0, step: 3 });
   if (res.error) {
     console.error('Backtest error:', res.error);
     process.exit(1);

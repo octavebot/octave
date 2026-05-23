@@ -38,9 +38,9 @@ BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 244.0 Td (•  News blackout ±30m \(handled 
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 227.0 Td (•  Outside US session if the instrument is futures-thin.) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 198.0 m 556 198.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 180.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 159.0 Td (Trades: 55 · 1.22 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 142.0 Td (Win rate: 65% · Avg winner: 1.30 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 125.0 Td (Expectancy: 0.51 R per trade · Profit factor: 2.46) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 159.0 Td (Trades: 50 · 1.11 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 142.0 Td (Win rate: 64% · Avg winner: 1.26 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 125.0 Td (Expectancy: 0.44 R per trade · Profit factor: 2.23) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 108.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 79.0 m 556 79.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 69.0 Td (Octave Trading Signals · Strategy EMA-CROSS · generated 2026-05-23) Tj ET
