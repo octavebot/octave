@@ -17,9 +17,42 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUEUE_FILE = join(__dirname, '..', 'state', 'pending-tg.jsonl');
+// Per-chat outgoing-message log used by /cleanup-group to find and delete
+// the bot's old messages. One JSONL per chat id, last 500 entries kept.
+const GROUP_MSG_LOG_DIR = join(__dirname, '..', 'state', 'tg-sent');
 
 let draining = false;
 let drainTimer = null;
+
+function logGroupSend(chatId, messageId) {
+  try {
+    if (!existsSync(GROUP_MSG_LOG_DIR)) mkdirSync(GROUP_MSG_LOG_DIR, { recursive: true });
+    const f = join(GROUP_MSG_LOG_DIR, `${chatId}.jsonl`);
+    appendFileSync(f, JSON.stringify({ id: messageId, at: Date.now() }) + '\n');
+  } catch {}
+}
+
+/**
+ * Read the bot's recent outgoing message ids for a chat — used by
+ * /cleanup-group to delete them.
+ */
+export function listSentToChat(chatId) {
+  try {
+    const f = join(GROUP_MSG_LOG_DIR, `${chatId}.jsonl`);
+    if (!existsSync(f)) return [];
+    return readFileSync(f, 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+/** Clear the recorded log after a successful cleanup. */
+export function clearSentLog(chatId) {
+  try {
+    const f = join(GROUP_MSG_LOG_DIR, `${chatId}.jsonl`);
+    if (existsSync(f)) writeFileSync(f, '');
+  } catch {}
+}
 
 function appendQueue(item) {
   try {
@@ -52,7 +85,7 @@ function writeQueue(items) {
 }
 
 async function tryTelegramCall(call) {
-  // call = { method: 'sendMessage'|'sendPhoto', token, body }
+  // call = { method: 'sendMessage'|'sendPhoto'|'deleteMessage', token, body }
   const url = `https://api.telegram.org/bot${call.token}/${call.method}`;
   try {
     const r = await fetch(url, {
@@ -60,7 +93,11 @@ async function tryTelegramCall(call) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(call.body),
     });
-    if (r.ok) return { ok: true };
+    if (r.ok) {
+      // Capture message_id so callers (e.g. cleanup logger) can use it.
+      try { const j = await r.json(); return { ok: true, result: j.result }; }
+      catch { return { ok: true }; }
+    }
     const text = await r.text().catch(() => '');
     return { ok: false, status: r.status, body: text };
   } catch (err) {
@@ -78,7 +115,17 @@ async function tryTelegramCall(call) {
  */
 export async function send(token, method, body) {
   let res = await tryTelegramCall({ token, method, body });
-  if (res.ok) return true;
+  if (res.ok) {
+    // Best-effort log: if we just sent to the signal group, record the
+    // message_id so /cleanup-group can delete it later. Failures here are
+    // silent — never break delivery on a logging error.
+    try {
+      const msgId = res.result?.message_id;
+      const chatId = body?.chat_id;
+      if (msgId && chatId) logGroupSend(String(chatId), msgId);
+    } catch {}
+    return true;
+  }
 
   // Markdown parse failure — Telegram's legacy Markdown is fragile and a
   // stray * / _ / ` in dynamic text (AI commentary, summaries) breaks the

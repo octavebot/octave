@@ -30,3 +30,4 @@ src/state/trade-journal.jsonl
 /src/state/paper-trades.jsonl
 /src/state/broker-config.json
 /src/state/live-executions.jsonl
+/src/state/tg-sent/

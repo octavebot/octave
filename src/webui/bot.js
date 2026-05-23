@@ -86,12 +86,20 @@ async function loadStrategies() {
 let TOKEN = '', CHAT_ID = '', OWNER_ID = '';
 let ALLOWED_CHATS = new Set();
 
-// Commands that change state — restricted to the owner. Everyone else in the
-// group gets signals + read-only info commands.
+// Commands that change state — restricted to the owner.
 const OWNER_ONLY = new Set([
   '/enable', '/disable', '/mute', '/unmute', '/ai-engine', '/aiengine',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy', '/clearchat',
-  '/ai', '/backtest',
+  '/ai', '/backtest', '/risk', '/broker', '/cleanup-group',
+]);
+
+// Friends in the group chat can only invoke these commands. Anything else
+// typed in the group routes the reply to the owner DM (so the friends never
+// see private state like account balances). The owner can still use
+// everything from the group; the reply just goes to their DM.
+const GROUP_ALLOWED_COMMANDS = new Set([
+  '/bias', '/news', '/last', '/levels', '/setups',
+  '/chatid', '/id',
 ]);
 
 function mergedEnv() {
@@ -1609,6 +1617,40 @@ async function cmdBroker(arg) {
   return sendOwner('unknown subcommand — try `/broker` for help');
 }
 
+async function cmdCleanupGroup(arg) {
+  const { send: tgSend, listSentToChat, clearSentLog } = await import('../lib/telegram_queue.js');
+  const groupChatId = String(CHAT_ID);
+  if (String(replyChat) === groupChatId) {
+    // Owner ran it from the group itself — odd but allow. Routing already
+    // sent the reply to DM since this is a non-allowlist command.
+  }
+  const sent = listSentToChat(groupChatId);
+  if (sent.length === 0) {
+    return sendOwner('No tracked bot messages to delete in the group.\n\n_Older messages (pre-Phase-3) need to be cleared manually:_\n_open the group → tap group name → "Clear chat history" → Delete for all members_');
+  }
+  await sendOwner(`🧹 Deleting ${sent.length} tracked bot message${sent.length === 1 ? '' : 's'} from the group…`);
+
+  // Telegram allows deleting bot's own messages anytime. Older than ~48h
+  // from non-bot users requires admin rights; for our own messages, no
+  // limit applies. Failures are silently counted.
+  let ok = 0, fail = 0;
+  for (const m of sent) {
+    try {
+      const r = await tgSend(TOKEN, 'deleteMessage', { chat_id: groupChatId, message_id: m.id });
+      if (r) ok++; else fail++;
+    } catch { fail++; }
+    // Small delay to avoid rate limiting
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  clearSentLog(groupChatId);
+  return sendOwner([
+    `✅ Cleanup done.`,
+    `Deleted: *${ok}*${fail > 0 ? '  ·  Failed: *' + fail + '*' : ''}`,
+    '',
+    fail > 0 ? '_Failures usually mean the message is > 48h old or already deleted. Use Telegram\'s "Clear chat history" to wipe older ones manually._' : '_Tracking log cleared. Future sends are re-tracked from now._',
+  ].join('\n'));
+}
+
 async function cmdShutdown(arg) {
   if (arg !== 'confirm') {
     return send([
@@ -1845,6 +1887,22 @@ async function cmdHelp(arg) {
 
 // ─── INLINE MENU ─────────────────────────────────────────────────────────
 
+// Slim menu shown in the group chat — only the read-only buttons friends
+// are allowed to invoke. No eval/account/risk surface visible.
+function buildGroupMenu() {
+  const text = [
+    header('🎵', 'Octave · Signals'),
+    '',
+    'Signals fire automatically. Useful read-only commands:',
+  ].join('\n');
+  const keyboard = [
+    [{ text: '🧭 Bias',   callback_data: 'act:bias' },   { text: '🎯 Setups', callback_data: 'act:setups' }],
+    [{ text: '📰 News',   callback_data: 'act:news' },   { text: '🔔 Last',   callback_data: 'act:last' }],
+    [{ text: '📊 Levels', callback_data: 'act:levels' }],
+  ];
+  return { text, keyboard };
+}
+
 async function buildMainMenu() {
   const cfg = loadConfig() || {};
   const session = readJson(SESSION_FILE, { lastSession: null });
@@ -1965,7 +2023,9 @@ function buildSystemView() {
 }
 
 async function cmdMenu() {
-  const v = await buildMainMenu();
+  // Slim menu in the group (signals + 5 read-only buttons), full menu in DM.
+  const inGroup = String(replyChat) === String(CHAT_ID) && String(replyChat) !== String(OWNER_ID);
+  const v = inGroup ? buildGroupMenu() : await buildMainMenu();
   await send(v.text, { keyboard: v.keyboard });
 }
 
@@ -2082,7 +2142,7 @@ async function handleCallback(cq) {
       const map = {
         bias: cmdBias, setups: cmdActiveSetups, today: cmdToday, last: cmdLast,
         price: cmdPrice, session: cmdSession, health: cmdHealth, dashboard: cmdDashboard,
-        regime: cmdRegime, coach: cmdCoach,
+        regime: cmdRegime, coach: cmdCoach, news: cmdNews,
         account: cmdAccount, paper: cmdPaper, dd: cmdDd, payout: cmdPayout, levels: cmdLevels,
       };
       if (map[verb]) { await map[verb](); return ackCallback(cq.id); }
@@ -2184,6 +2244,7 @@ const COMMANDS = {
   '/regime': cmdRegime, '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
   '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
   '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker, '/levels': cmdLevels,
+  '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,
   '/version': cmdVersion, '/dashboard': cmdDashboard,
   '/diagnose': cmdDiagnose, '/fix': cmdFix,
@@ -2247,12 +2308,31 @@ async function handleUpdate(update) {
   const cmd = '/' + m[1].toLowerCase();
   const arg = m[2] ? m[2].trim() : '';
   const handler = COMMANDS[cmd];
-  if (!handler) return send(`Unknown command: \`${cmd}\`\n\nSend \`/help\` for the list.`);
+  if (!handler) {
+    // In the group: silently ignore unknown commands so friends can chat
+    // freely without bot noise. In the owner DM: show help hint.
+    if (String(chatId) === String(CHAT_ID) && String(chatId) !== String(OWNER_ID)) return;
+    return send(`Unknown command: \`${cmd}\`\n\nSend \`/help\` for the list.`);
+  }
 
   // Owner-only gate for state-changing / heavy commands.
   if (OWNER_ONLY.has(cmd) && !owner) {
+    // Friend tried a state-changing command in the group → silent (no noise).
+    // If the owner typed it in the group, fall through (owner check above is
+    // "not owner" — won't reach here as owner).
+    if (String(chatId) === String(CHAT_ID) && String(chatId) !== String(OWNER_ID)) return;
     return send('🔒 *Owner only.* This command changes settings for everyone — ask the admin.');
   }
+
+  // Group chat allowlist — if the command isn't in GROUP_ALLOWED_COMMANDS
+  // and the source IS the group, redirect the reply to the owner DM.
+  // Friends in the group never see private/admin output.
+  const fromGroup = String(chatId) === String(CHAT_ID) && String(chatId) !== String(OWNER_ID);
+  if (fromGroup && !GROUP_ALLOWED_COMMANDS.has(cmd)) {
+    if (!owner) return;  // friend typed a non-allowlist command → silent
+    replyChat = OWNER_ID;  // owner typed it in group → reply goes to their DM
+  }
+
   try { await handler(arg); }
   catch (err) {
     console.error(`[bot] handler ${cmd} threw:`, err.message);
