@@ -94,6 +94,23 @@ function buildInstrumentCtx(instrument, panesByTf) {
   return ctx;
 }
 
+// Cache last-detect results keyed on the per-instrument anchor bar time.
+// The cloud_data_supplement cache returns the SAME pane objects within its 15s
+// TTL, so the 3s detector loop sees ~5 ticks of identical data per refresh
+// cycle. With identical inputs, evaluate() produces identical results that
+// dedup would block anyway. Short-circuiting these saves ~80% of CPU per
+// 15s window during the trading day.
+let _lastDetect = { sig: null, results: null };
+function signatureOf(panesByTf) {
+  const parts = [];
+  for (const inst of INSTRUMENTS) {
+    const anchor = ['15', '60', '5'].map((tf) => panesByTf.get(`${inst}|${tf}`)).find((p) => p?.bars?.length);
+    if (!anchor) continue;
+    parts.push(`${inst}:${anchor.bars[anchor.bars.length - 1].time}`);
+  }
+  return parts.join('|');
+}
+
 export async function detect() {
   let panesByTf;
   try {
@@ -104,6 +121,14 @@ export async function detect() {
     return [];
   }
   if (panesByTf.size === 0) return [];
+
+  // Skip the work if no instrument has a new anchor bar since the last call.
+  // Returns the cached result array so writeDetectSnapshot keeps the snapshot
+  // fresh (with stable contents) and downstream behavior is identical.
+  const sig = signatureOf(panesByTf);
+  if (sig && sig === _lastDetect.sig && _lastDetect.results) {
+    return _lastDetect.results;
+  }
 
   refreshConfig();
   refreshForexFactory().catch(() => {});
@@ -171,5 +196,6 @@ export async function detect() {
     renameSync(BIAS_SNAPSHOT + '.tmp', BIAS_SNAPSHOT);
   } catch { /* best-effort */ }
 
+  _lastDetect = { sig, results: filtered };
   return filtered;
 }
