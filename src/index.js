@@ -4,6 +4,7 @@ import { snapshot } from './tvClient.js';
 import * as alerter from './alerter.js';
 import * as dedup from './dedup.js';
 import { run, stop } from './loop.js';
+import { syncRegistryToConfig } from './lib/runtime_config.js';
 
 const verifyMode = process.argv.includes('--verify');
 
@@ -21,6 +22,12 @@ async function bestEffortSnapshot() {
 
 async function main() {
   log.info('starting', { verify: verifyMode, pid: process.pid, node: process.version });
+
+  // Auto-add any new strategies from the registry to runtime-config.json so
+  // they're enabled out of the box. Quiet no-op when the config already has them.
+  try { await syncRegistryToConfig(); } catch (err) {
+    log.warn('syncRegistryToConfig failed', { err: err.message });
+  }
 
   const ctx = await bestEffortSnapshot();
   const sent = await alerter.sendStartup({ symbol: ctx.symbol, timeframe: ctx.timeframe });
