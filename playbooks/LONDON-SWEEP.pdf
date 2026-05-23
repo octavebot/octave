@@ -33,9 +33,9 @@ BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 375.0 Td (Take profit) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 354.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 325.0 m 556 325.0 l S
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 307.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Trades: 59 · 1.31 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Win rate: 76% · Avg winner: 1.44 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 252.0 Td (Expectancy: 0.86 R per trade · Profit factor: 4.63) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Trades: 60 · 1.33 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Win rate: 72% · Avg winner: 1.40 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 252.0 Td (Expectancy: 0.72 R per trade · Profit factor: 3.53) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 235.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 206.0 m 556 206.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 196.0 Td (Octave Trading Signals · Strategy LONDON-SWEEP · generated 2026-05-23) Tj ET
