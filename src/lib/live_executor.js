@@ -4,7 +4,7 @@
  *
  * INERT BY DEFAULT. Live execution requires THREE independent conditions
  * to all be true:
- *   1. The account's mode === 'live' (set via `/risk auto live`)
+ *   1. The account's mode === 'live' (set via `/risk live`)
  *   2. brokerConfig.webhookUrl is set (via `/broker set-url <url>`)
  *   3. The signal passed risk_manager gates
  *
@@ -47,8 +47,8 @@ const DEFAULT_TEMPLATE = {
 };
 
 const DEFAULT_CONFIG = {
-  // Per-account webhook URLs. Either or both can be set; both default null.
-  webhooks: { auto: null, user: null },
+  // Per-account webhook URLs. Single-account era → just 'user'.
+  webhooks: { user: null },
   // JSON payload template (shared across accounts; account_id placeholder differentiates).
   template: DEFAULT_TEMPLATE,
   // Cooldown between fires per account (ms). Prevents runaway on flood.
@@ -64,7 +64,15 @@ function loadConfig() {
   }
   try {
     const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
-    return { ...DEFAULT_CONFIG, ...raw, webhooks: { ...DEFAULT_CONFIG.webhooks, ...(raw.webhooks || {}) }, template: { ...DEFAULT_TEMPLATE, ...(raw.template || {}) } };
+    const merged = { ...DEFAULT_CONFIG, ...raw, webhooks: { ...DEFAULT_CONFIG.webhooks, ...(raw.webhooks || {}) }, template: { ...DEFAULT_TEMPLATE, ...(raw.template || {}) } };
+    // Schema migration: legacy 'auto' webhook → 'user' (single-account era).
+    // If both are set, 'user' wins; 'auto' is dropped. If only 'auto' is set,
+    // migrate it to 'user' so the wiring keeps working post-consolidation.
+    if (merged.webhooks.auto) {
+      if (!merged.webhooks.user) merged.webhooks.user = merged.webhooks.auto;
+      delete merged.webhooks.auto;
+    }
+    return merged;
   } catch {
     return { ...DEFAULT_CONFIG };
   }
@@ -89,14 +97,16 @@ export function getConfig() { return JSON.parse(JSON.stringify(_cfg)); }
  * Refuses non-HTTPS URLs to prevent accidental http:// config.
  */
 export function setWebhook(accountId, url) {
-  if (!['auto', 'user'].includes(accountId)) return { ok: false, error: 'account must be auto|user' };
+  // Accept any account id present in ACCOUNT_IDS. 'auto' is silently aliased
+  // to the canonical id ('user') for backward compatibility.
+  const id = accountId === 'auto' ? 'user' : accountId;
   if (url === null || url === '' || url === 'off') {
-    _cfg.webhooks[accountId] = null;
+    _cfg.webhooks[id] = null;
     saveConfig();
     return { ok: true, cleared: true };
   }
   if (!/^https:\/\//i.test(url)) return { ok: false, error: 'URL must be HTTPS' };
-  _cfg.webhooks[accountId] = url;
+  _cfg.webhooks[id] = url;
   saveConfig();
   return { ok: true };
 }
@@ -120,7 +130,9 @@ export function setTemplate(template) {
 }
 
 // Per-account cooldown tracking.
-const _lastFireAt = { auto: 0, user: 0 };
+// Per-account last-fire timestamp for cooldown. Keys are added on demand —
+// no need to hardcode the account set here.
+const _lastFireAt = {};
 
 function logFire(row) {
   try {

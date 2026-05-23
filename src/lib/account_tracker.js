@@ -92,7 +92,7 @@ export function get(accountId) {
   return state.accounts[accountId];
 }
 
-/** Get all accounts as { auto, user }. */
+/** Get all accounts keyed by id. */
 export function getAll() {
   return { ...state.accounts };
 }

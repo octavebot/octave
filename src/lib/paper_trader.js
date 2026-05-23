@@ -161,7 +161,7 @@ export function confirm(accountId, setupId) {
 
 /**
  * Owner clicked "Skip" on the signal card. Cancels any still-open paper
- * trades for this setup across both accounts. Idempotent.
+ * trades for this setup across every enabled account. Idempotent.
  */
 export function skip(setupId) {
   try {
