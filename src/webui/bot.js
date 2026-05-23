@@ -24,7 +24,6 @@ const REPO_DIR = join(__dirname, '..', '..');
 const STATE_DIR = join(REPO_DIR, 'src', 'state');
 const CONFIG_FILE = join(STATE_DIR, 'runtime-config.json');
 const HEARTBEAT_FILE = join(STATE_DIR, 'cloud-heartbeat.json');
-const DRAWINGS_FILE = join(STATE_DIR, 'drawings.json');
 const SESSION_FILE = join(STATE_DIR, 'session.json');
 const TRADE_LOG = join(STATE_DIR, 'trades.jsonl');
 

@@ -26,7 +26,6 @@ const REPO_DIR = join(__dirname, '..', '..');
 const STATE_DIR = join(REPO_DIR, 'src', 'state');
 const CONFIG_FILE = join(STATE_DIR, 'runtime-config.json');
 const HEARTBEAT_FILE = join(STATE_DIR, 'cloud-heartbeat.json');
-const DRAWINGS_FILE = join(STATE_DIR, 'drawings.json');
 const SESSION_FILE = join(STATE_DIR, 'session.json');
 const LOG_DIR = '/Users/jqvier/Library/Logs/trading-alerts';
 const HTML_FILE = join(__dirname, 'index.html');
@@ -128,7 +127,6 @@ async function gatherState() {
     cloudAlive = cloudAgeMs < 8 * 60 * 1000 && cloud.status === 'ok';
   }
 
-  const drawings = readJson(DRAWINGS_FILE, { setups: {} });
   const session = readJson(SESSION_FILE, { lastSession: null });
 
   // Service PID + uptime — pgrep works on both macOS and Linux
@@ -171,8 +169,6 @@ async function gatherState() {
   } catch {}
 
   // Active follow-up count = source of truth for "live setups" in dashboard.
-  // tracked_setups (from drawings.json) is stale because drawings persist
-  // across days; follow_up.active() reflects only open positions.
   let activeSetups = 0;
   try {
     const fu = await import('../lib/follow_up.js');
@@ -207,7 +203,7 @@ async function gatherState() {
     trading_view: { pid: tvPid, cdp_open: cdpOpen },
     caffeinate: { active: caffActive },
     activity: {
-      tracked_setups: Object.keys(drawings.setups || {}).length,
+      tracked_setups: activeSetups,
       active_setups: activeSetups,
       current_session: session.lastSession,
       last_alert: lastAlert,

@@ -43,6 +43,23 @@ export const INSTRUMENT_META = {
   sp:     { label: 'S&P',    symbol: 'MES1!', tvFullSymbol: 'CME_MINI:MES1!' },
 };
 
+// Yahoo's 60m feed returns 11k+ bars per instrument; strategies only need a
+// few hundred for any indicator they compute. Trim panes lazily in ctx.pane()
+// so each evaluate() call sees a slim slice, not the full 2-year history.
+// WeakMap keyed on the source pane so the slim copy is GC'd when fetchAllPanes
+// refreshes the underlying pane (every ~15s) and the old one drops out of scope.
+const MAX_PANE_BARS = 400;
+const trimmedCache = new WeakMap();
+function trimmed(pane) {
+  if (!pane?.bars) return pane;
+  if (pane.bars.length <= MAX_PANE_BARS) return pane;
+  const cached = trimmedCache.get(pane);
+  if (cached) return cached;
+  const slim = { ...pane, bars: pane.bars.slice(-MAX_PANE_BARS) };
+  trimmedCache.set(pane, slim);
+  return slim;
+}
+
 function buildInstrumentCtx(instrument, panesByTf) {
   // Anchor on 15m of this instrument; fall back through 60/5/1/D.
   const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
@@ -61,16 +78,16 @@ function buildInstrumentCtx(instrument, panesByTf) {
     ts: Date.now(),
     barTime: lastBar.time,
     lastClose: lastBar.close,
-    panes: [...panesByTf.values()],
+    panes: [...panesByTf.values()].map(trimmed),
     panesByTf,
     anchorSymbol: INSTRUMENT_META[instrument].symbol,
     anchorResolution: anchor.resolution,
     dateKey: np.dateKey,
     dataSource: 'cloud',
   };
-  // ctx.pane(tf) returns THIS instrument's pane at the requested TF.
+  // ctx.pane(tf) returns THIS instrument's pane at the requested TF, trimmed.
   // Cross-asset strategies still reach into ctx.panesByTf.get('silver|15') etc.
-  ctx.pane = (tf) => panesByTf.get(`${instrument}|${tf}`);
+  ctx.pane = (tf) => trimmed(panesByTf.get(`${instrument}|${tf}`));
   return ctx;
 }
 

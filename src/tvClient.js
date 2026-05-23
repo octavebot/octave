@@ -17,8 +17,9 @@ async function loadMcp() {
     _chart = m.chart;
     _data = m.data;
     _available = true;
-  } catch (err) {
-    console.warn('[tvClient] tradingview-mcp not installed — TV-dependent features (drawings, snapshotPine) are disabled. This is expected on a VPS. Error:', err.message);
+  } catch {
+    // Expected on VPS — tradingview-mcp is a Mac-dev-only dependency.
+    // Silent: no TV-dependent code path runs without first checking isAvailable().
     _available = false;
   }
   return _available;

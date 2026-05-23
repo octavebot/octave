@@ -3,7 +3,6 @@ import { log } from './logger.js';
 import { detect } from './detector.js';
 import * as alerter from './alerter.js';
 import * as dedup from './dedup.js';
-import * as drawings from './lib/drawings.js';
 import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
 import * as journal from './lib/trade_journal.js';
@@ -182,13 +181,6 @@ async function tick() {
       // the follow-up tracker reports a 'filled' milestone (see below), so
       // invalidated / missed / unfilled setups never become phantom trades.
 
-      // Sync TradingView drawings regardless of whether Telegram was sent —
-      // user still sees the setup forming on the chart in real time.
-      try {
-        await drawings.syncDrawings(r);
-      } catch (err) {
-        log.warn('drawings sync threw', { err: err.message });
-      }
     }
   }
 

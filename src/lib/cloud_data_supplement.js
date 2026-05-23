@@ -1,21 +1,10 @@
 /**
- * Cloud data source for the LOCAL service.
+ * Cloud data source. `fetchAllPanes()` returns a fresh `panesByTf` Map with
+ * every pane any enabled strategy might need, sourced from Yahoo Finance.
+ * Cached in memory for ~15s so the 3s detector loop doesn't hammer Yahoo.
  *
- * Two modes:
- *   1. fetchAll() — PRIMARY data path. Always returns a fresh `panesByTf` Map
- *      with all the panes any enabled strategy might need, sourced from
- *      Yahoo Finance (with OANDA fallback). Cached in memory for 90s so the
- *      3s detector loop doesn't hammer Yahoo.
- *   2. supplement(panesByTf) — legacy/optional. Fills in missing keys in an
- *      existing map (e.g., if you also want to use some TV-CDP panes).
- *
- * Why cloud-primary: the user's TradingView chart layout shouldn't constrain
- * which strategies can run. Yahoo gives us everything (gold 1m/5m/15m/60m/1D
- * + silver 5m/15m + DXY 1D). Strategies that need silver or daily MACD work
- * even if the user only has GC1! 15m loaded — or no chart at all.
- *
- * TTL math: 90s × 8 panes ≈ 320 Yahoo requests/hour. Well under Yahoo's
- * unofficial ~2000/hour throttle. Tunable via OCTAVE_DATA_TTL_MS env var.
+ * Yahoo provides everything: gold 1m/5m/15m/60m/1D, silver 5m/15m, DXY 1D,
+ * nasdaq + sp 5m/15m/60m/1D. Tunable via OCTAVE_DATA_TTL_MS env var.
  */
 
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
@@ -53,8 +42,6 @@ const NEEDED_REQUESTS = [
 
 // Single in-memory cache for the full fetch
 let fullCache = { panes: null, fetchedAt: 0 };
-// Per-key cache (kept for legacy supplement() callers)
-const perKeyCache = new Map();
 let inflightFull = null;
 
 function shouldFetch(at) { return !at || (Date.now() - at) > TTL_MS; }
@@ -98,52 +85,3 @@ export async function fetchAllPanes() {
   return inflightFull.then((m) => new Map(m));
 }
 
-/**
- * Legacy: augment an existing panesByTf (from e.g. TV CDP) with cloud data
- * for any keys that are missing or under-populated.
- *
- * Kept for backward compat. Most callers should use fetchAllPanes() instead.
- */
-export async function supplement(panesByTf) {
-  const missing = [];
-  for (const [asset, tf] of NEEDED_REQUESTS) {
-    const key = `${asset}|${tf}`;
-    const existing = panesByTf.get(key);
-    if (!existing || !existing.bars || existing.bars.length < 30) {
-      missing.push([asset, tf, key]);
-    }
-  }
-  if (missing.length === 0) return panesByTf;
-
-  // First fill from per-key cache
-  const stillMissing = [];
-  for (const [asset, tf, key] of missing) {
-    const entry = perKeyCache.get(key);
-    if (entry && !shouldFetch(entry.fetchedAt)) {
-      panesByTf.set(key, { ...entry.pane, source: 'yahoo-cache' });
-    } else {
-      stillMissing.push([asset, tf, key]);
-    }
-  }
-  if (stillMissing.length === 0) return panesByTf;
-
-  // Fetch the missing ones from Yahoo
-  const fetched = await fetchYahoo(stillMissing.map(([a, t]) => [a, t])).catch(() => new Map());
-  const now = Date.now();
-  for (const [key, pane] of fetched) perKeyCache.set(key, { pane, fetchedAt: now });
-  for (const [asset, tf, key] of stillMissing) {
-    const pane = fetched.get(`${asset}|${tf}`);
-    if (pane?.bars?.length > 0) panesByTf.set(key, { ...pane, source: 'yahoo-supplement' });
-  }
-  return panesByTf;
-}
-
-/** Stats for /status etc. */
-export function cacheStats() {
-  return {
-    ttl_ms: TTL_MS,
-    full_age_ms: fullCache.fetchedAt ? Date.now() - fullCache.fetchedAt : null,
-    full_pane_count: fullCache.panes ? fullCache.panes.size : 0,
-    inflight: inflightFull != null,
-  };
-}
