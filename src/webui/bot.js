@@ -1027,7 +1027,7 @@ async function cmdActiveSetups() {
 
 async function cmdSetup(arg) {
   const key = resolveStrategy(arg);
-  if (!key) return send('Usage: `/setup <num>` (1-10) or `/setup <key>` (e.g. `TRINITY`)');
+  if (!key) return send('Usage: `/setup <num>` or `/setup <key>` (e.g. `LONDON-SWEEP`)');
   await send(`🔍 Checking *${key}*…`);
   const r = await runDetectChild();
   if (r.error) return send(`⚠️ ${r.error}`);

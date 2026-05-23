@@ -44,7 +44,7 @@ export async function buildAlertChartUrl(alert) {
     const lastPrice = bars[bars.length - 1].close;
     const dir = alert.direction;
     const dirEmoji = dir === 'LONG' ? '🟢' : '🔴';
-    const stratNum = strategyNum(alert.strategy);
+    const stratNum = await strategyNum(alert.strategy);
     const stratName = alert.strategy || '';
     const g = alert.geometry || {};
 
@@ -130,9 +130,18 @@ export async function buildAlertChartUrl(alert) {
   }
 }
 
-function strategyNum(name) {
-  const map = { USLS: '#1', 'ICT-SMC': '#2', 'ALGO-SMC': '#3', ADAPTIVE: '#4', ICT: '#5', SMT: '#6', TRINITY: '#7', AMN: '#8', TORI: '#9', WARRIOR: '#10' };
-  return map[name] || '#?';
+// Cache the strategy → display-number mapping. The registry order changes
+// when a backtest re-ranks by profit, so re-resolve on each call (cheap —
+// loadRegistry is itself cached after first read).
+async function strategyNum(name) {
+  try {
+    const { loadRegistry } = await import('./strategy_registry.js');
+    const reg = await loadRegistry();
+    const idx = reg.findIndex((s) => s.id === name);
+    return idx >= 0 ? `#${idx + 1}` : '#?';
+  } catch {
+    return '#?';
+  }
 }
 
 /**

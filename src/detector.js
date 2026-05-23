@@ -86,8 +86,11 @@ function buildInstrumentCtx(instrument, panesByTf) {
     dataSource: 'cloud',
   };
   // ctx.pane(tf) returns THIS instrument's pane at the requested TF, trimmed.
-  // Cross-asset strategies still reach into ctx.panesByTf.get('silver|15') etc.
+  // ctx.paneFor(asset, tf) is the cross-asset equivalent (silver SMT, DXY, etc).
+  // Both return panes capped at MAX_PANE_BARS; ctx.panesByTf is the raw Map
+  // for any caller that genuinely needs full history.
   ctx.pane = (tf) => trimmed(panesByTf.get(`${instrument}|${tf}`));
+  ctx.paneFor = (asset, tf) => trimmed(panesByTf.get(`${asset}|${tf}`));
   return ctx;
 }
 

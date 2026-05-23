@@ -20,12 +20,12 @@ const __dirname = dirname(__filename);
 const STATE_FILE = join(__dirname, '..', 'state', 'session.json');
 
 const SESSION_HINTS = {
-  asia: 'Asia open — watching for sweeps of prior NY PM range. Strategy #1 active.',
-  london: 'London open — Asia range now in play. Strategy #1 + #2 monitoring sweeps.',
-  ny_am: 'NY AM open — peak liquidity window. All 3 strategies live, ICT killzone bonus active 08:30–11:00 EST.',
-  lunch: 'Lunch chop (10:00–13:00 EST). Strategies stay alert but cleaner setups usually come later.',
-  ny_pm: 'NY PM open — NY AM range in play. Watching for late-day reversals.',
-  off: 'Between sessions. Strategies still scanning recent ranges for opportunity.',
+  asia: 'Asia open — Asian range building. DAILY-TREND-PB, EMA-CROSS, VWAP-REJ can fire on H1/D1 alignment.',
+  london: 'London open — LONDON-SWEEP active in the killzone (02:00–05:00 ET). ASIAN-BREAKOUT lines up after 02:00.',
+  ny_am: 'NY AM open — peak liquidity. NY-FVG active in killzone (07:00–10:00 ET), all trend strategies live.',
+  lunch: 'Lunch chop (10:00–13:00 ET). Strategies still scan but cleaner setups usually come pre-open or post-lunch.',
+  ny_pm: 'NY PM open — late-day continuations and reversals. VWAP-REJ and DAILY-TREND-PB still active.',
+  off: 'Between sessions. Strategies stay armed for the next session\'s open.',
 };
 
 function loadState() {
