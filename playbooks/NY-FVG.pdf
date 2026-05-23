@@ -34,7 +34,7 @@ BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 371.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x 
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 324.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 303.0 Td (Trades: 52 · 1.16 per day) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 286.0 Td (Win rate: 69% · Avg winner: 1.37 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Expectancy: 0.64 R per trade · Profit factor: 3.07) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 269.0 Td (Expectancy: 0.64 R per trade · Profit factor: 3.08) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 252.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 223.0 m 556 223.0 l S
 BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 213.0 Td (Octave Trading Signals · Strategy NY-FVG · generated 2026-05-23) Tj ET

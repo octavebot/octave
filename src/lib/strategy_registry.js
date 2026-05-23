@@ -20,7 +20,7 @@
  * a deploy-time concern, not a runtime one.
  */
 
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
@@ -28,8 +28,25 @@ import { pathToFileURL } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STRATEGY_DIR = join(__dirname, '..', 'strategies');
+const STATS_FILE = join(__dirname, '..', 'state', 'backtest-stats.json');
 
 let cached = null;
+
+/**
+ * Read the latest backtest stats and return { id → sumR } for ranking.
+ * Returns null if the file is missing or unreadable — registry falls
+ * back to alphabetical order in that case.
+ */
+function loadProfitMap() {
+  try {
+    const j = JSON.parse(readFileSync(STATS_FILE, 'utf8'));
+    const map = {};
+    for (const r of j.rows || []) {
+      if (typeof r.sumR === 'number') map[r.id] = r.sumR;
+    }
+    return Object.keys(map).length ? map : null;
+  } catch { return null; }
+}
 
 /** Load and return the full registry. Idempotent. */
 export async function loadRegistry() {
@@ -61,6 +78,20 @@ export async function loadRegistry() {
     } catch (err) {
       console.error(`[registry] ${f} failed to import: ${err.message}`);
     }
+  }
+  // Sort by 45-day backtest sumR, most profitable first. Strategies with no
+  // stats yet (a brand-new file that hasn't been backtested) sink to the end
+  // in alphabetical order — they slot into rank on the next backtest run.
+  const profitMap = loadProfitMap();
+  if (profitMap) {
+    out.sort((a, b) => {
+      const ra = profitMap[a.id], rb = profitMap[b.id];
+      const hasA = typeof ra === 'number', hasB = typeof rb === 'number';
+      if (hasA && hasB) return rb - ra;
+      if (hasA) return -1;
+      if (hasB) return 1;
+      return a.id.localeCompare(b.id);
+    });
   }
   cached = out;
   return out;
