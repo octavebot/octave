@@ -142,9 +142,17 @@ function tgEscape(s) {
   return String(s).replace(/([_*`\[])/g, '\\$1');
 }
 
+// Shorthand for eval/risk commands that should ONLY land in the owner DM,
+// regardless of which chat invoked them. Usage: `sendOwner(text)`.
+async function sendOwner(text, opts = {}) { return send(text, { ...opts, ownerOnly: true }); }
+
 async function send(text, opts = {}) {
+  // ownerOnly routes the reply to the owner DM regardless of which chat
+  // triggered it. Used for eval/risk commands so friends don't see the
+  // owner's account state when they happen to be in the same group.
+  const target = opts.ownerOnly ? OWNER_ID : replyTarget();
   const body = {
-    chat_id: replyTarget(), text,
+    chat_id: target, text,
     parse_mode: opts.html ? 'HTML' : 'Markdown',
     disable_web_page_preview: true,
   };
@@ -1358,7 +1366,7 @@ async function cmdAccount(arg) {
     if (acc.rulesViolated.length) lines.push(`Violations     ${acc.rulesViolated.join(', ')}`);
     lines.push('```');
   }
-  await send(lines.join('\n'));
+  await sendOwner(lines.join('\n'));
 }
 
 async function cmdRisk(arg) {
@@ -1372,7 +1380,7 @@ async function cmdRisk(arg) {
   // /risk per 250   → set risk-per-trade to $250
   if (parts.length === 0 || parts[0] === '' || parts[0] === 'status') {
     const a = at.get('auto'), u = at.get('user');
-    return send([
+    return sendOwner([
       header('⚙️', 'Risk control'),
       '',
       `*AUTO*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · mode: ${a.mode}`,
@@ -1386,29 +1394,29 @@ async function cmdRisk(arg) {
       bullet('`/risk reset auto` — wipe an account back to $50k'),
     ].join('\n'));
   }
-  if (parts[0] === 'on') { at.setEnabled('auto', true); at.setEnabled('user', true); return send('🟢 both accounts enabled'); }
-  if (parts[0] === 'off') { at.setEnabled('auto', false); at.setEnabled('user', false); return send('⚫ both accounts disabled'); }
+  if (parts[0] === 'on') { at.setEnabled('auto', true); at.setEnabled('user', true); return sendOwner('🟢 both accounts enabled'); }
+  if (parts[0] === 'off') { at.setEnabled('auto', false); at.setEnabled('user', false); return sendOwner('⚫ both accounts disabled'); }
   if (parts[0] === 'per' && parts[1]) {
     const pt = await import('../lib/paper_trader.js');
     pt.setRiskPerTrade(Number(parts[1]));
-    return send(`risk per trade set to $${pt.getRiskPerTrade()}`);
+    return sendOwner(`risk per trade set to $${pt.getRiskPerTrade()}`);
   }
   if (parts[0] === 'reset' && (parts[1] === 'auto' || parts[1] === 'user')) {
     at.reset(parts[1]);
-    return send(`${parts[1]} account reset to fresh $50k`);
+    return sendOwner(`${parts[1]} account reset to fresh $50k`);
   }
   if ((parts[0] === 'auto' || parts[0] === 'user') && parts[1]) {
     const id = parts[0];
-    if (parts[1] === 'on') { at.setEnabled(id, true); return send(`🟢 ${id} enabled`); }
-    if (parts[1] === 'off') { at.setEnabled(id, false); return send(`⚫ ${id} disabled`); }
-    if (parts[1] === 'paper' || parts[1] === 'live') { at.setMode(id, parts[1]); return send(`${id} → ${parts[1]} mode`); }
+    if (parts[1] === 'on') { at.setEnabled(id, true); return sendOwner(`🟢 ${id} enabled`); }
+    if (parts[1] === 'off') { at.setEnabled(id, false); return sendOwner(`⚫ ${id} disabled`); }
+    if (parts[1] === 'paper' || parts[1] === 'live') { at.setMode(id, parts[1]); return sendOwner(`${id} → ${parts[1]} mode`); }
     if (parts[1] === 'funded' || parts[1] === 'eval') {
       const acc = at.get(id);
       if (acc) { acc.phase = parts[1]; }
-      return send(`${id} phase → *${parts[1]}*\n${parts[1] === 'funded' ? 'Consistency rule + circuit breaker waived. Only EOD trailing DD enforced.' : 'Eval rules re-active.'}`);
+      return sendOwner(`${id} phase → *${parts[1]}*\n${parts[1] === 'funded' ? 'Consistency rule + circuit breaker waived. Only EOD trailing DD enforced.' : 'Eval rules re-active.'}`);
     }
   }
-  return send('unrecognized — try `/risk` with no args for help');
+  return sendOwner('unrecognized — try `/risk` with no args for help');
 }
 
 async function cmdPaper() {
@@ -1429,7 +1437,7 @@ async function cmdPaper() {
       lines.push('```');
     }
   }
-  await send(lines.join('\n'));
+  await sendOwner(lines.join('\n'));
 }
 
 async function cmdDd() {
@@ -1448,7 +1456,7 @@ async function cmdDd() {
     lines.push(`${bar} ${usedPct.toFixed(0)}%`);
     lines.push(`Used $${st.ddFromPeakEod.toFixed(0)} / $${rm.EVAL_RULES.maxDrawdown}  ·  $${st.ddRemaining.toFixed(0)} remaining`);
   }
-  await send(lines.join('\n'));
+  await sendOwner(lines.join('\n'));
 }
 
 async function cmdPayout() {
@@ -1480,7 +1488,7 @@ async function cmdPayout() {
       lines.push('```');
     }
   }
-  await send(lines.join('\n'));
+  await sendOwner(lines.join('\n'));
 }
 
 async function cmdShutdown(arg) {
@@ -1835,7 +1843,9 @@ async function cmdMenu() {
 
 // Inline-button kinds that change state — owner only. 'view' (navigation),
 // and 'act' verbs that just display info, are open to everyone in the group.
-const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt']);
+// 'pt' (paper-trader confirm/skip) is owner-only — only the account owner
+// should be able to promote a trade to live on their account.
+const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt', 'pt']);
 const OWNER_ONLY_ACTS = new Set(['restart', 'shutdown-confirm', 'shutdown-do']);
 
 async function handleCallback(cq) {
@@ -1910,6 +1920,31 @@ async function handleCallback(cq) {
       await editMessage(chatId, messageId, `⏳ Running ${days}-day backtest…`, { keyboard: [] });
       await ackCallback(cq.id);
       return cmdBacktest(String(days));
+    }
+
+    // Paper trader confirm/skip — callback_data format:
+    //   pt:exec:<accountId>:<setupId>   (accountId = 'auto' | 'user')
+    //   pt:skip:<setupId>
+    if (kind === 'pt') {
+      const [verb, ...rest3] = arg.split(':');
+      const pt = await import('../lib/paper_trader.js');
+      const at = await import('../lib/account_tracker.js');
+      if (verb === 'exec') {
+        const accountId = rest3[0];
+        const setupId = rest3.slice(1).join(':');
+        if (!['auto', 'user'].includes(accountId)) return ackCallback(cq.id, 'bad account');
+        const acc = at.get(accountId);
+        const promoted = pt.confirm(accountId, setupId);
+        if (!promoted) return ackCallback(cq.id, 'trade not open (may have already closed)');
+        const modeLabel = acc?.mode === 'live' ? 'LIVE BROKER' : 'live-tracked (paper P&L)';
+        return ackCallback(cq.id, `✅ ${accountId.toUpperCase()} → ${modeLabel}`);
+      }
+      if (verb === 'skip') {
+        const setupId = rest3.join(':');
+        pt.skip(setupId);
+        return ackCallback(cq.id, '⏭ skipped');
+      }
+      return ackCallback(cq.id, 'unknown pt verb');
     }
 
     if (kind === 'act') {

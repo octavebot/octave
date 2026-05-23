@@ -60,9 +60,15 @@ function intOr(key, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// OWNER_CHAT_ID is where private/risk/eval messages go (defaults to the
+// owner's user-id since DMs with a bot use the user's id as chat id).
+// TELEGRAM_CHAT_ID stays the group where friends receive signals.
+const ownerChat = env.OCTAVE_OWNER_CHAT_ID || env.OCTAVE_OWNER_ID || env.TELEGRAM_CHAT_ID;
+
 export const config = Object.freeze({
   telegramBotToken: required('TELEGRAM_BOT_TOKEN'),
-  telegramChatId: required('TELEGRAM_CHAT_ID'),
+  telegramChatId: required('TELEGRAM_CHAT_ID'),       // group: signals only
+  telegramOwnerChatId: ownerChat,                     // owner: signals + risk/buttons + all bot replies
   pollIntervalMs: intOr('POLL_INTERVAL_MS', 3000),
   reconnectIntervalMs: intOr('RECONNECT_INTERVAL_MS', 30000),
   lockSymbol: env.LOCK_SYMBOL || '',

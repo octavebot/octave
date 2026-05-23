@@ -64,32 +64,36 @@ function riskLabel(conf) {
 
 // ─── Transport ───────────────────────────────────────────────────────────
 
-async function postRaw(text) {
+async function postRaw(text, keyboard = null, chatId = null) {
   const gap = Date.now() - lastSendAt;
   if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
   lastSendAt = Date.now();
-  return sendViaQueue(config.telegramBotToken, 'sendMessage', {
-    chat_id: config.telegramChatId,
+  const body = {
+    chat_id: chatId || config.telegramChatId,
     text,
     parse_mode: 'Markdown',
     disable_web_page_preview: true,
-  });
+  };
+  if (keyboard) body.reply_markup = { inline_keyboard: keyboard };
+  return sendViaQueue(config.telegramBotToken, 'sendMessage', body);
 }
 
-async function postPhoto(photoUrl, caption) {
+async function postPhoto(photoUrl, caption, keyboard = null, chatId = null) {
   const gap = Date.now() - lastSendAt;
   if (gap < MIN_GAP_MS) await new Promise((r) => setTimeout(r, MIN_GAP_MS - gap));
   lastSendAt = Date.now();
   const full = caption || '';
   const fits = full.length <= TG_CAPTION_MAX;
   const shortCaption = fits ? full : full.slice(0, TG_CAPTION_MAX - 30) + '…';
-  const ok = await sendViaQueue(config.telegramBotToken, 'sendPhoto', {
-    chat_id: config.telegramChatId,
+  const body = {
+    chat_id: chatId || config.telegramChatId,
     photo: photoUrl,
     caption: shortCaption,
     parse_mode: 'Markdown',
-  });
-  if (ok && !fits) await postRaw(full);
+  };
+  if (keyboard) body.reply_markup = { inline_keyboard: keyboard };
+  const ok = await sendViaQueue(config.telegramBotToken, 'sendPhoto', body);
+  if (ok && !fits) await postRaw(full, keyboard, chatId);
   return ok;
 }
 
@@ -188,7 +192,45 @@ async function buildSignalCard(r, ctx) {
     lines.push('🤖 *Holy AI*');
     lines.push(`_${tgEscape(r.aiCommentary)}_`);
   }
+
+  // Paper-trader block — show per-account decision. Only added when paper
+  // trader has made decisions for this signal (i.e. at least one account is
+  // enabled). Quietly absent otherwise.
+  if (Array.isArray(r.paperDecisions) && r.paperDecisions.length) {
+    lines.push('');
+    lines.push('🏦 *Eval account status*');
+    for (const d of r.paperDecisions) {
+      const id = d.accountId.toUpperCase();
+      if (d.gateAllowed) {
+        lines.push(`  ${d.contracts >= 1 ? '✅' : '⚠️'} *${id}* — ${d.contracts}c · ~$${Math.round(d.riskUsdActual)} risk`);
+      } else {
+        const icon = d.gateSeverity === 'hard' ? '🛑' : '⚠️';
+        lines.push(`  ${icon} *${id}* — blocked: ${tgEscape(d.gateReason || 'gate')}`);
+      }
+    }
+  }
   return lines.join('\n');
+}
+
+/**
+ * Build the Telegram inline_keyboard for a signal. One row of [Execute Auto]
+ * [Execute User] [Skip] when at least one account is enabled with a passing
+ * gate. callback_data format: `pt:exec:auto:<setupId>`, `pt:exec:user:<...>`,
+ * `pt:skip:<setupId>`. The handler is in webui/bot.js.
+ */
+function buildSignalKeyboard(r) {
+  if (!Array.isArray(r.paperDecisions) || !r.paperDecisions.length) return null;
+  const row = [];
+  for (const d of r.paperDecisions) {
+    if (!d.gateAllowed || d.contracts <= 0) continue;
+    row.push({
+      text: `✅ ${d.accountId === 'auto' ? 'Auto' : 'User'} live`,
+      callback_data: `pt:exec:${d.accountId}:${r.setupId}`,
+    });
+  }
+  if (!row.length) return null;
+  row.push({ text: '⏭ Skip', callback_data: `pt:skip:${r.setupId}` });
+  return [row];
 }
 
 /**
@@ -207,23 +249,73 @@ export async function send(r, ctx = {}) {
   try { registerFollowUp(r); }
   catch (err) { log.warn('registerFollowUp threw', { err: err.message }); }
 
-  const card = await buildSignalCard(r, ctx);
+  // Two-chat routing:
+  //   GROUP   (config.telegramChatId)       — signal card only, NO paper-
+  //                                            trader metadata, NO buttons.
+  //                                            Friends in this chat see clean
+  //                                            signals to execute themselves.
+  //   OWNER   (config.telegramOwnerChatId)  — full card WITH paper-trader
+  //                                            metadata AND inline buttons
+  //                                            (Execute/Skip). Only the owner
+  //                                            uses these.
+  // If owner chat id == group chat id, we send only ONCE (single combined
+  // card with metadata + buttons — backward compat for single-chat setups).
+  const ownerChat = config.telegramOwnerChatId;
+  const groupChat = config.telegramChatId;
+  const sameChat = String(ownerChat) === String(groupChat);
 
-  // Chart image path — overlay entry/SL/TP on recent bars when enabled.
+  // Build the BASE card without paper-trader meta (for group).
+  // r.paperDecisions is temporarily stripped during build, then restored.
+  const decisions = r.paperDecisions;
+  r.paperDecisions = null;
+  const groupCard = await buildSignalCard(r, ctx);
+  r.paperDecisions = decisions;
+  // Owner card includes the meta + keyboard.
+  const ownerCard = sameChat ? groupCard : await buildSignalCard(r, ctx);
+  let ownerKeyboard = null;
+  try { ownerKeyboard = buildSignalKeyboard(r); }
+  catch (err) { log.warn('buildSignalKeyboard threw', { err: err.message }); }
+
   const cfg = getRuntimeConfig();
-  if (cfg?.alertChartImages !== false) {
-    try {
-      const photoUrl = await buildAlertChartUrl(r);
-      if (photoUrl) {
-        const ok = await postPhoto(photoUrl, card);
-        if (ok) return true;
-        log.warn('sendPhoto failed, falling back to text', {});
-      }
-    } catch (err) {
-      log.warn('chart image build threw', { err: err.message });
-    }
+  const wantPhoto = cfg?.alertChartImages !== false;
+  let photoUrl = null;
+  if (wantPhoto) {
+    try { photoUrl = await buildAlertChartUrl(r); }
+    catch (err) { log.warn('chart image build threw', { err: err.message }); }
   }
-  return postRaw(card);
+
+  // Send to group first. No metadata/keyboard. Never blocks owner send.
+  let groupOk = true;
+  if (sameChat) {
+    // Single-chat mode: ONE message with full card + keyboard.
+    if (photoUrl) {
+      groupOk = await postPhoto(photoUrl, ownerCard, ownerKeyboard, groupChat);
+      if (!groupOk) groupOk = await postRaw(ownerCard, ownerKeyboard, groupChat);
+    } else {
+      groupOk = await postRaw(ownerCard, ownerKeyboard, groupChat);
+    }
+    return groupOk;
+  }
+
+  if (photoUrl) {
+    groupOk = await postPhoto(photoUrl, groupCard, null, groupChat);
+    if (!groupOk) groupOk = await postRaw(groupCard, null, groupChat);
+  } else {
+    groupOk = await postRaw(groupCard, null, groupChat);
+  }
+
+  // Send to owner DM (best-effort — never causes the group send to be marked failed).
+  try {
+    if (photoUrl) {
+      const ok = await postPhoto(photoUrl, ownerCard, ownerKeyboard, ownerChat);
+      if (!ok) await postRaw(ownerCard, ownerKeyboard, ownerChat);
+    } else {
+      await postRaw(ownerCard, ownerKeyboard, ownerChat);
+    }
+  } catch (err) {
+    log.warn('owner-chat send threw', { err: err.message });
+  }
+  return groupOk;
 }
 
 // ─── Follow-up milestone alerts ──────────────────────────────────────────
@@ -287,6 +379,9 @@ export async function sendFollowUp({ setup, milestone, currentPrice }) {
 }
 
 // ─── Startup banner ──────────────────────────────────────────────────────
+// Operational banners (startup, shutdown, daily-report, session-change) go
+// to OWNER DM only — friends in the group chat see signals + follow-ups, not
+// system noise. See the chat-routing block at the top of `send()`.
 
 export async function sendStartup() {
   const cfg = getRuntimeConfig() || {};
@@ -299,9 +394,6 @@ export async function sendStartup() {
   } catch {}
   const muteSec = cfg.mute?.untilMs && cfg.mute.untilMs > Date.now()
     ? Math.round((cfg.mute.untilMs - Date.now()) / 1000) : 0;
-  // No closed box — emoji render wider than the border glyphs in Telegram's
-  // font, so a boxed title never lines up. Heavy rules + a centred title read
-  // clean because there is no right edge to misalign.
   const text = [
     '━━━━━━━━━━━━━━━━━━━━',
     '🎵   *O C T A V E   O N L I N E*',
@@ -314,23 +406,21 @@ export async function sendStartup() {
     '',
     '_Send /menu for the control panel._',
   ].join('\n');
-  return postRaw(text);
+  return postRaw(text, null, config.telegramOwnerChatId);
 }
 
 export async function sendDown(reason) {
-  return postRaw(`⚠️ *OCTAVE STOPPING*\n${tgEscape(reason || '')}`);
+  return postRaw(`⚠️ *OCTAVE STOPPING*\n${tgEscape(reason || '')}`, null, config.telegramOwnerChatId);
 }
 
-/** End-of-day report — pre-formatted text from lib/daily_report.js. */
+/** End-of-day report — pre-formatted text from lib/daily_report.js. Owner only. */
 export async function sendDailyReport(text) {
-  return postRaw(text);
+  return postRaw(text, null, config.telegramOwnerChatId);
 }
 
 // ─── Session-change banner ───────────────────────────────────────────────
 
 export async function sendSessionChange({ fromSession, toSession, nowLabel, hint }) {
-  // Session keys contain underscores (ny_am, ny_pm) — render them as spaces
-  // so they don't open stray Markdown italic entities and break the message.
   const fmtSess = (s) => String(s || '').toUpperCase().replace(/_/g, ' ');
   const text = [
     '🌍 *SESSION CHANGE*',
@@ -338,5 +428,5 @@ export async function sendSessionChange({ fromSession, toSession, nowLabel, hint
     nowLabel ? `⏰ ${tgEscape(nowLabel)}` : '',
     hint ? `ℹ️ ${tgEscape(hint)}` : '',
   ].filter(Boolean).join('\n');
-  return postRaw(text);
+  return postRaw(text, null, config.telegramOwnerChatId);
 }

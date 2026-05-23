@@ -152,6 +152,15 @@ async function tick() {
           if (cmt?.text) r.aiCommentary = cmt.text;
         } catch (err) { log.warn('holy_ai commentary threw', { setupId: r.setupId, err: err.message }); }
       }
+      // Paper trader runs BEFORE alerter.send so its per-account decisions
+      // can be displayed on the signal card. Decisions array is empty if
+      // no account is enabled, in which case the card looks identical to
+      // pre-Phase-2 behavior. Fully wrapped — never throws.
+      try { r.paperDecisions = paperTrader.onTriggered(r); }
+      catch (err) {
+        log.warn('paper_trader.onTriggered threw', { setupId: r.setupId, err: err.message });
+        r.paperDecisions = [];
+      }
       try {
         ok = await alerter.send(r, { symbol: r.symbol, timeframe: r.timeframe, lastClose: r.lastClose });
       } catch (err) {
@@ -181,11 +190,8 @@ async function tick() {
       // a limit order — it may never fill. The entry is journalled only when
       // the follow-up tracker reports a 'filled' milestone (see below), so
       // invalidated / missed / unfilled setups never become phantom trades.
-
-      // Paper trader — shadow-execute against the eval account(s). Fully
-      // wrapped: a paper-trader bug must never affect alerting.
-      try { paperTrader.onTriggered(r); }
-      catch (err) { log.warn('paper_trader.onTriggered threw', { setupId: r.setupId, err: err.message }); }
+      // Paper trader runs ABOVE (pre-alerter.send) so its decisions can be
+      // shown on the card. No second hook here.
     }
   }
 

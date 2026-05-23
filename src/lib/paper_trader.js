@@ -108,6 +108,57 @@ export function onTriggered(signal) {
 }
 
 /**
+ * Owner clicked "Execute Auto" or "Execute User" on the signal card.
+ * Promotes the existing paper trade to live (still tracked via paper P&L,
+ * but marked so downstream knows to consider it real-money).
+ *
+ * Idempotent: clicking twice has no effect.
+ * Returns true if the trade was found and promoted; false if not (e.g.
+ * already closed by SL/TP between alert and click).
+ */
+export function confirm(accountId, setupId) {
+  try {
+    const acc = accounts.get(accountId);
+    if (!acc) return false;
+    const t = acc.openTrades.find((x) => x.setupId === setupId);
+    if (!t) return false;
+    if (t.live) return true;  // already promoted
+    accounts.markLive(accountId, setupId);
+    logTrade({
+      event: 'promote-live', accountId, setupId,
+      strategy: t.strategy, contracts: t.contracts, riskUsd: t.riskUsd,
+    });
+    return true;
+  } catch (err) {
+    log.warn('paper_trader.confirm threw', { accountId, setupId, err: err.message });
+    return false;
+  }
+}
+
+/**
+ * Owner clicked "Skip" on the signal card. Cancels any still-open paper
+ * trades for this setup across both accounts. Idempotent.
+ */
+export function skip(setupId) {
+  try {
+    for (const id of ['auto', 'user']) {
+      const acc = accounts.get(id);
+      if (!acc?.enabled) continue;
+      const t = acc.openTrades.find((x) => x.setupId === setupId);
+      if (t) {
+        if (t.live) continue;  // can't skip an already-promoted live trade
+        accounts.cancelOpen(id, setupId);
+        logTrade({ event: 'skip', accountId: id, setupId, strategy: t.strategy });
+      }
+    }
+    return true;
+  } catch (err) {
+    log.warn('paper_trader.skip threw', { setupId, err: err.message });
+    return false;
+  }
+}
+
+/**
  * Called by the loop when follow-up tracker fires a terminal milestone.
  * Computes the dollar P&L and closes the trade on every enabled account
  * that has it open.
