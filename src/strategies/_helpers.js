@@ -167,7 +167,6 @@ const DEFAULT_WIN_RATES = {
   'EMA-CROSS': 0.62,
   'LONDON-SWEEP': 0.72,
   'NY-FVG': 0.68,
-  'VPOC-RETEST': 0.50,
   'VWAP-REJ': 0.55,
 };
 let _winRates = { rates: null, at: 0 };
