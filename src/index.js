@@ -36,7 +36,7 @@ async function main() {
   // service restarts. Wrapped so a bad import never blocks startup.
   try {
     const at = await import('./lib/account_tracker.js');
-    for (const id of ['auto', 'user']) {
+    for (const id of at.ACCOUNT_IDS) {
       const acc = at.get(id);
       if (acc && !acc.enabled && (acc.mode || 'paper') === 'paper') {
         at.setEnabled(id, true);

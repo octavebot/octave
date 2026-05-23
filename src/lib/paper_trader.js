@@ -57,7 +57,7 @@ export function onTriggered(signal) {
   try {
     if (!signal || !signal.entryPlan) return decisions;
     accounts.maybeRollDay();
-    for (const accId of ['auto', 'user']) {
+    for (const accId of accounts.ACCOUNT_IDS) {
       const acc = accounts.get(accId);
       if (!acc?.enabled) continue;
       // Sizing (target risk per trade)
@@ -165,7 +165,7 @@ export function confirm(accountId, setupId) {
  */
 export function skip(setupId) {
   try {
-    for (const id of ['auto', 'user']) {
+    for (const id of accounts.ACCOUNT_IDS) {
       const acc = accounts.get(id);
       if (!acc?.enabled) continue;
       const t = acc.openTrades.find((x) => x.setupId === setupId);
@@ -200,7 +200,7 @@ export function onMilestone(setup, milestone, exitPrice) {
     // Expired = close at last known price; treat as 0 if no exit price
     if (isFlat) {
       // No fill happened — just remove from open list with 0 P&L
-      for (const accId of ['auto', 'user']) {
+      for (const accId of accounts.ACCOUNT_IDS) {
         const acc = accounts.get(accId);
         if (!acc?.enabled) continue;
         if (acc.openTrades.find((t) => t.setupId === setup.setupId)) {
@@ -216,7 +216,7 @@ export function onMilestone(setup, milestone, exitPrice) {
     const dpp = INSTRUMENT_DOLLARS_PER_POINT[setup.instrument] || 1;
     const entry = setup.entry, stop = setup.stop;
     const riskPoints = Math.abs(entry - stop);
-    for (const accId of ['auto', 'user']) {
+    for (const accId of accounts.ACCOUNT_IDS) {
       const acc = accounts.get(accId);
       if (!acc?.enabled) continue;
       const open = acc.openTrades.find((t) => t.setupId === setup.setupId);

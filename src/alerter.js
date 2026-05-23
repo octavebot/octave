@@ -173,18 +173,16 @@ async function buildSignalCard(r, ctx) {
     lines.push(`🤖 _${tgEscape(r.aiCommentary)}_`);
   }
 
-  // Paper-trader block — only shown when at least one account participated.
+  // Paper-trader block — only shown when the account participated.
+  // Single-account era: collapse to one line.
   if (Array.isArray(r.paperDecisions) && r.paperDecisions.length) {
     lines.push('');
-    lines.push('🏦 *Eval accounts*');
-    for (const d of r.paperDecisions) {
-      const id = d.accountId.toUpperCase();
-      if (d.gateAllowed) {
-        lines.push(`  ${d.contracts >= 1 ? '✅' : '⚠️'} ${id} — ${d.contracts}c · ~$${Math.round(d.riskUsdActual)}`);
-      } else {
-        const icon = d.gateSeverity === 'hard' ? '🛑' : '⚠️';
-        lines.push(`  ${icon} ${id} — ${tgEscape(d.gateReason || 'blocked')}`);
-      }
+    const d = r.paperDecisions[0];  // single account
+    if (d.gateAllowed) {
+      lines.push(`🏦 *Paper trade* — ${d.contracts}c · ~$${Math.round(d.riskUsdActual)} risk`);
+    } else {
+      const icon = d.gateSeverity === 'hard' ? '🛑' : '⚠️';
+      lines.push(`${icon} *Paper blocked* — ${tgEscape(d.gateReason || 'gate')}`);
     }
     // Copy-paste block for the Octave Levels Pine indicator.
     lines.push('');
@@ -197,10 +195,10 @@ async function buildSignalCard(r, ctx) {
 }
 
 /**
- * Build the Telegram inline_keyboard for a signal. One row of [Execute Auto]
- * [Execute User] [Skip] when at least one account is enabled with a passing
- * gate. callback_data format: `pt:exec:auto:<setupId>`, `pt:exec:user:<...>`,
- * `pt:skip:<setupId>`. The handler is in webui/bot.js.
+ * Build the Telegram inline_keyboard for a signal. One row of [Mark Live]
+ * [Skip] for each account with a passing gate. callback_data format:
+ *   pt:exec:<accountId>:<setupId>  ·  pt:skip:<setupId>
+ * Handler in webui/bot.js.
  */
 function buildSignalKeyboard(r) {
   if (!Array.isArray(r.paperDecisions) || !r.paperDecisions.length) return null;
@@ -208,7 +206,7 @@ function buildSignalKeyboard(r) {
   for (const d of r.paperDecisions) {
     if (!d.gateAllowed || d.contracts <= 0) continue;
     row.push({
-      text: `✅ ${d.accountId === 'auto' ? 'Auto' : 'User'} live`,
+      text: '✅ Mark Live',
       callback_data: `pt:exec:${d.accountId}:${r.setupId}`,
     });
   }

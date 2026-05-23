@@ -1347,7 +1347,7 @@ async function cmdAccount(arg) {
   const at = await import('../lib/account_tracker.js');
   at.maybeRollDay();
   const which = (arg || '').toLowerCase().trim();
-  const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+  const ids = at.ACCOUNT_IDS.includes(which) ? [which] : at.ACCOUNT_IDS;
   const lines = [header('🏦', 'Lucid Flex 50k status')];
   for (const id of ids) {
     const acc = at.get(id);
@@ -1379,71 +1379,75 @@ async function cmdAccount(arg) {
 
 async function cmdRisk(arg) {
   const at = await import('../lib/account_tracker.js');
-  const parts = (arg || '').toLowerCase().trim().split(/\s+/);
-  // /risk           → show
-  // /risk on        → enable both accounts
-  // /risk off       → disable both
-  // /risk auto on   → enable just auto
-  // /risk user live → set user account to live mode
-  // /risk per 250   → set risk-per-trade to $250
+  const ID = at.ACCOUNT_IDS[0];  // single account
+  // Single-account era: `auto` is a deprecated alias accepted silently.
+  const parts = (arg || '').toLowerCase().trim().split(/\s+/)
+    .map((p) => p === 'auto' ? ID : p)
+    .filter(Boolean);
+
+  // /risk            → show
+  // /risk on         → enable
+  // /risk off        → disable
+  // /risk live       → live mode (requires webhook)
+  // /risk paper      → paper mode
+  // /risk funded     → mark account as funded
+  // /risk eval       → mark account back to eval
+  // /risk per 250    → set risk-per-trade USD
+  // /risk reset      → wipe back to fresh $50k
   if (parts.length === 0 || parts[0] === '' || parts[0] === 'status') {
-    const a = at.get('auto'), u = at.get('user');
+    const a = at.get(ID);
     return sendOwner([
       header('⚙️', 'Risk control'),
       '',
-      `*AUTO*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · mode: ${a.mode}`,
-      `*USER*  ${u.enabled ? '🟢 active' : '⚫ disabled'} · mode: ${u.mode}`,
+      `*${ID.toUpperCase()}*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · ${a.mode} · ${a.phase}`,
       '',
       'Commands:',
-      bullet('`/risk on` · `/risk off` — toggle both'),
-      bullet('`/risk auto on` · `/risk user on` — toggle one'),
-      bullet('`/risk auto live` · `/risk auto paper` — switch mode'),
+      bullet('`/risk on` · `/risk off` — enable/disable'),
+      bullet('`/risk paper` · `/risk live` — switch mode'),
+      bullet('`/risk eval` · `/risk funded` — phase'),
       bullet('`/risk per 250` — set risk-per-trade USD'),
-      bullet('`/risk reset auto` — wipe an account back to $50k'),
+      bullet('`/risk reset` — wipe back to fresh $50k'),
     ].join('\n'));
   }
-  if (parts[0] === 'on') { at.setEnabled('auto', true); at.setEnabled('user', true); return sendOwner('🟢 both accounts enabled'); }
-  if (parts[0] === 'off') { at.setEnabled('auto', false); at.setEnabled('user', false); return sendOwner('⚫ both accounts disabled'); }
+  if (parts[0] === 'on')  { at.setEnabled(ID, true);  return sendOwner('🟢 enabled'); }
+  if (parts[0] === 'off') { at.setEnabled(ID, false); return sendOwner('⚫ disabled'); }
   if (parts[0] === 'per' && parts[1]) {
     const pt = await import('../lib/paper_trader.js');
     pt.setRiskPerTrade(Number(parts[1]));
     return sendOwner(`risk per trade set to $${pt.getRiskPerTrade()}`);
   }
-  if (parts[0] === 'reset' && (parts[1] === 'auto' || parts[1] === 'user')) {
-    at.reset(parts[1]);
-    return sendOwner(`${parts[1]} account reset to fresh $50k`);
+  if (parts[0] === 'reset' || (parts[0] === 'reset' && parts[1] === ID)) {
+    at.reset(ID);
+    return sendOwner(`account reset to fresh $50k`);
   }
-  if ((parts[0] === 'auto' || parts[0] === 'user') && parts[1]) {
-    const id = parts[0];
-    if (parts[1] === 'on') { at.setEnabled(id, true); return sendOwner(`🟢 ${id} enabled`); }
-    if (parts[1] === 'off') { at.setEnabled(id, false); return sendOwner(`⚫ ${id} disabled`); }
-    if (parts[1] === 'paper' || parts[1] === 'live') {
-      if (parts[1] === 'live') {
-        // Safety: don't allow 'live' without a configured webhook unless the
-        // user explicitly forces it. Catches typo'd commands and forgotten setup.
-        const le = await import('../lib/live_executor.js');
-        const cfg = le.getConfig();
-        if (!cfg.webhooks[id] && parts[2] !== 'force') {
-          return sendOwner([
-            `⚠️ *${id} live mode refused* — no webhook configured`,
-            '',
-            `Configure first:  \`/broker set-url ${id} <https-url>\``,
-            `Test it:          \`/broker test ${id}\``,
-            `Then enable:      \`/risk ${id} live\``,
-            '',
-            `Override (no execution will happen until webhook set):`,
-            `  \`/risk ${id} live force\``,
-          ].join('\n'));
-        }
+  if (parts[0] === 'paper' || parts[0] === 'live') {
+    if (parts[0] === 'live') {
+      const le = await import('../lib/live_executor.js');
+      const cfg = le.getConfig();
+      if (!cfg.webhooks[ID] && parts[1] !== 'force') {
+        return sendOwner([
+          `⚠️ *live mode refused* — no webhook configured`,
+          '',
+          `Configure first:  \`/broker set-url <https-url>\``,
+          `Test it:          \`/broker test\``,
+          `Then enable:      \`/risk live\``,
+          '',
+          `Override (no execution until webhook set):`,
+          `  \`/risk live force\``,
+        ].join('\n'));
       }
-      at.setMode(id, parts[1]);
-      return sendOwner(`${id} → *${parts[1]}* mode${parts[1] === 'live' ? '\n🚀 Live execution active. Every passing signal will fire to broker.' : ''}`);
     }
-    if (parts[1] === 'funded' || parts[1] === 'eval') {
-      const acc = at.get(id);
-      if (acc) { acc.phase = parts[1]; }
-      return sendOwner(`${id} phase → *${parts[1]}*\n${parts[1] === 'funded' ? 'Consistency rule + circuit breaker waived. Only EOD trailing DD enforced.' : 'Eval rules re-active.'}`);
-    }
+    at.setMode(ID, parts[0]);
+    return sendOwner(`mode → *${parts[0]}*${parts[0] === 'live' ? '\n🚀 Live execution active. Every passing signal will fire to broker.' : ''}`);
+  }
+  if (parts[0] === 'funded' || parts[0] === 'eval') {
+    const acc = at.get(ID);
+    if (acc) acc.phase = parts[0];
+    return sendOwner(`phase → *${parts[0]}*\n${parts[0] === 'funded' ? 'Consistency rule + circuit breaker waived. Only EOD trailing DD enforced.' : 'Eval rules re-active.'}`);
+  }
+  // Backward-compat: `/risk <id> <subcmd>` where id was 'user' or 'auto'.
+  if (parts[0] === ID && parts[1]) {
+    return cmdRisk(parts.slice(1).join(' '));
   }
   return sendOwner('unrecognized — try `/risk` with no args for help');
 }
@@ -1452,7 +1456,7 @@ async function cmdPaper() {
   const at = await import('../lib/account_tracker.js');
   at.maybeRollDay();
   const lines = [header('📑', 'Paper trader status')];
-  for (const id of ['auto', 'user']) {
+  for (const id of at.ACCOUNT_IDS) {
     const acc = at.get(id);
     if (!acc.enabled) { lines.push(`*${id}* — disabled (\`/risk ${id} on\` to start)`); continue; }
     lines.push('');
@@ -1474,7 +1478,7 @@ async function cmdDd() {
   const at = await import('../lib/account_tracker.js');
   at.maybeRollDay();
   const lines = [header('📉', 'Drawdown status (EOD trailing)')];
-  for (const id of ['auto', 'user']) {
+  for (const id of at.ACCOUNT_IDS) {
     const acc = at.get(id);
     const st = rm.evalStatus(acc);
     const usedPct = st.ddFromPeakEod / rm.EVAL_RULES.maxDrawdown * 100;
@@ -1493,7 +1497,7 @@ async function cmdPayout() {
   const at = await import('../lib/account_tracker.js');
   at.maybeRollDay();
   const lines = [header('💵', 'Payout status')];
-  for (const id of ['auto', 'user']) {
+  for (const id of at.ACCOUNT_IDS) {
     const acc = at.get(id);
     const st = rm.evalStatus(acc);
     lines.push('');
@@ -1523,7 +1527,7 @@ async function cmdPayout() {
 async function cmdLevels(arg) {
   const at = await import('../lib/account_tracker.js');
   const which = (arg || '').toLowerCase().trim();
-  const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+  const ids = at.ACCOUNT_IDS.includes(which) ? [which] : at.ACCOUNT_IDS;
   const lines = [header('📊', 'TV indicator levels')];
   let any = false;
   for (const id of ids) {
@@ -1545,56 +1549,63 @@ async function cmdLevels(arg) {
 
 async function cmdBroker(arg) {
   const le = await import('../lib/live_executor.js');
+  const at = await import('../lib/account_tracker.js');
   const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
   const subcmd = parts[0]?.toLowerCase();
+  // Single-account era: alias 'auto' → 'user' so old commands keep working.
+  const resolveId = (raw) => {
+    const id = (raw || '').toLowerCase();
+    if (id === 'auto') return 'user';
+    return at.ACCOUNT_IDS.includes(id) ? id : null;
+  };
 
   // /broker → status
   if (!subcmd || subcmd === 'status') {
     const cfg = le.getConfig();
     const lines = [header('🔌', 'Broker bridge status')];
     lines.push('');
-    for (const id of ['auto', 'user']) {
+    for (const id of at.ACCOUNT_IDS) {
       const url = cfg.webhooks[id];
       lines.push(`*${id.toUpperCase()}*  webhook: ${url ? '✅ set' : '⚫ none'}`);
       if (url) {
-        // Mask URL for display: show host + last 6 of path
         const masked = url.replace(/^(https:\/\/[^/]+).*$/, '$1/…' + url.slice(-6));
         lines.push(`  \`${masked}\``);
       }
     }
     lines.push('');
-    lines.push(`Cooldown: ${cfg.cooldownMs / 1000}s between fires per account`);
+    lines.push(`Cooldown: ${cfg.cooldownMs / 1000}s between fires`);
     lines.push(`Auth:     ${cfg.authHeader ? 'header set' : 'none'}`);
     lines.push('');
     lines.push('Commands:');
-    lines.push(bullet('`/broker set-url auto <https-url>` — set webhook for auto'));
-    lines.push(bullet('`/broker set-url user <https-url>`'));
-    lines.push(bullet('`/broker set-url auto off` — clear webhook'));
-    lines.push(bullet('`/broker test auto|user` — fire a test ping'));
+    lines.push(bullet('`/broker set-url <https-url>` — set webhook'));
+    lines.push(bullet('`/broker set-url off` — clear webhook'));
+    lines.push(bullet('`/broker test` — fire a test ping'));
     lines.push(bullet('`/broker set-auth <header>` — set authorization header'));
     lines.push(bullet('`/broker set-cooldown <ms>` — between-fire cooldown'));
     lines.push('');
     lines.push('🛑 *Live fires* require ALL three:');
-    lines.push('  1. `/risk auto live` (account mode)');
-    lines.push('  2. `/broker set-url auto <url>`');
+    lines.push('  1. `/risk live` (account mode)');
+    lines.push('  2. `/broker set-url <url>`');
     lines.push('  3. Signal passes risk gates');
     return sendOwner(lines.join('\n'));
   }
 
   if (subcmd === 'set-url') {
-    const id = parts[1]?.toLowerCase();
-    const url = parts[2];
-    if (!['auto', 'user'].includes(id)) return sendOwner('account must be `auto` or `user`');
-    if (!url) return sendOwner('usage: `/broker set-url <auto|user> <https-url|off>`');
+    // Single-account: accept `set-url <url>` (account inferred) OR legacy
+    // `set-url <id> <url>`.
+    let id = at.ACCOUNT_IDS[0];
+    let url = parts[1];
+    if (parts.length >= 3) { id = resolveId(parts[1]) || id; url = parts[2]; }
+    if (!url) return sendOwner('usage: `/broker set-url <https-url|off>`');
     const r = le.setWebhook(id, url);
     if (!r.ok) return sendOwner(`⚠️ ${r.error}`);
-    if (r.cleared) return sendOwner(`✅ ${id} webhook cleared`);
-    return sendOwner(`✅ ${id} webhook set\n_Type \`/broker test ${id}\` to verify it works before going live._`);
+    if (r.cleared) return sendOwner(`✅ webhook cleared`);
+    return sendOwner(`✅ webhook set\n_Type \`/broker test\` to verify it works before going live._`);
   }
 
   if (subcmd === 'test') {
-    const id = parts[1]?.toLowerCase();
-    if (!['auto', 'user'].includes(id)) return sendOwner('usage: `/broker test <auto|user>`');
+    // Single-account: no arg needed; legacy `test <id>` still accepted.
+    const id = resolveId(parts[1]) || at.ACCOUNT_IDS[0];
     await sendOwner(`⏳ Firing test ping to ${id} webhook…`);
     const r = await le.testPing(id);
     if (r.ok) return sendOwner(`✅ Test OK — HTTP ${r.status}\n\`\`\`\n${(r.body || '(no body)').slice(0, 300)}\n\`\`\``);
@@ -1914,15 +1925,16 @@ async function buildMainMenu() {
   try { const us = await import('../lib/user_strategies.js'); userCount = us.list().length; } catch {}
   const total = STRATEGIES.length + userCount;
 
-  // Eval account snapshot — show in main menu so /menu doubles as a glance
-  // at how the paper traders are doing without an extra tap.
+  // Eval account snapshot — single line glance.
   let acctLine = '';
   try {
     const at = await import('../lib/account_tracker.js');
     at.maybeRollDay();
-    const a = at.get('auto'), u = at.get('user');
+    const a = at.get(at.ACCOUNT_IDS[0]);
     const fmt = (v) => '$' + Math.round(v).toLocaleString('en-US');
-    acctLine = `🏦 AUTO ${fmt(a.balance)} · USER ${fmt(u.balance)}`;
+    const profit = a.balance - 50000;
+    const pSign = profit >= 0 ? '+' : '−';
+    acctLine = `🏦 ${fmt(a.balance)} · ${pSign}${fmt(Math.abs(profit)).replace('$', '$')} · today ${a.dailyPnl >= 0 ? '+' : '−'}${fmt(Math.abs(a.dailyPnl)).replace('$', '$')}`;
   } catch {}
 
   const sessLabel = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
@@ -2122,7 +2134,7 @@ async function handleCallback(cq) {
       if (verb === 'exec') {
         const accountId = rest3[0];
         const setupId = rest3.slice(1).join(':');
-        if (!['auto', 'user'].includes(accountId)) return ackCallback(cq.id, 'bad account');
+        if (!at.ACCOUNT_IDS.includes(accountId)) return ackCallback(cq.id, 'bad account');
         const acc = at.get(accountId);
         const promoted = pt.confirm(accountId, setupId);
         if (!promoted) return ackCallback(cq.id, 'trade not open (may have already closed)');

@@ -22,7 +22,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STATE_FILE = join(__dirname, '..', 'state', 'accounts.json');
 
-const ACCOUNT_IDS = ['auto', 'user'];
+// Single paper-trading account. Stays an array so iteration code remains
+// generic (cheap to add a second account back if needed). 'auto' is
+// accepted as an alias for 'user' by the bot for backward compat.
+export const ACCOUNT_IDS = ['user'];
 
 function defaultAccount(id) {
   return {
@@ -58,6 +61,10 @@ function load() {
     // Backfill any missing fields when schema evolves.
     for (const id of ACCOUNT_IDS) {
       raw.accounts[id] = { ...defaultAccount(id), ...(raw.accounts[id] || {}) };
+    }
+    // Drop deprecated account ids (e.g. 'auto' from the old 2-account era).
+    for (const id of Object.keys(raw.accounts)) {
+      if (!ACCOUNT_IDS.includes(id)) delete raw.accounts[id];
     }
     return raw;
   } catch {

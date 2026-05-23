@@ -518,7 +518,7 @@ async function renderAccounts() {
     const data = await r.json();
     const fmt = (n) => '$' + Math.round(n).toLocaleString('en-US');
     const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n).replace('$', n >= 0 ? '$' : '-$').replace('-$-', '-$');
-    const html = ['auto', 'user'].map((id) => {
+    const html = Object.keys(data.accounts || {}).map((id) => {
       const a = data.accounts[id] || {};
       const profit = (a.balance || 0) - 50000;
       const peak = a.peakEod || 50000;

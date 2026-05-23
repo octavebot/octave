@@ -28,8 +28,7 @@
   .actions { display: flex; gap: 12px; }
   .link { color: var(--muted); text-decoration: none; font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; transition: all 0.15s; }
   .link:hover { color: var(--text); border-color: var(--text); }
-  .accounts { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
-  @media (max-width: 720px) { .accounts { grid-template-columns: 1fr; } }
+  .accounts { display: grid; gap: 16px; grid-template-columns: 1fr; max-width: 720px; margin: 0 auto; }
   .account {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; min-height: 200px;
@@ -88,7 +87,6 @@
   </div>
 </div>
 <div id="root" class="accounts">
-  <div class="account"><div class="empty">Loading…</div></div>
   <div class="account"><div class="empty">Loading…</div></div>
 </div>
 <div class="footer"><span class="pulse"></span>Auto-refreshing every 3s · last update <span id="last">—</span></div>
@@ -187,7 +185,8 @@ async function refresh() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const root = document.getElementById('root');
-    root.innerHTML = ['auto', 'user'].map((id) => renderAccount(id, data.accounts[id])).join('');
+    // Render every account the API returned (single-account era → just one).
+    root.innerHTML = Object.keys(data.accounts || {}).map((id) => renderAccount(id, data.accounts[id])).join('');
     document.getElementById('last').textContent = new Date(data.at).toLocaleTimeString();
   } catch (err) {
     console.error('refresh failed', err);

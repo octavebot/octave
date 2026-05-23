@@ -327,7 +327,7 @@ const server = createServer(async (req, res) => {
         const cd = await import('../lib/cloud_data_supplement.js');
         at.maybeRollDay();
         const which = (url.searchParams.get('account') || '').toLowerCase();
-        const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+        const ids = which === 'auto' || which === 'user' ? [which] : at.ACCOUNT_IDS;
         // Current price per instrument (latest 15m close)
         let prices = {};
         try {
