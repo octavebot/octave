@@ -67,9 +67,7 @@ export async function fetchAllPanes() {
       const panes = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
       // Tag the panes so downstream code can tell where bars came from
       for (const [, p] of panes) p.source = p.source || 'yahoo';
-      // Update both caches
       fullCache = { panes, fetchedAt: Date.now() };
-      for (const [k, p] of panes) perKeyCache.set(k, { pane: p, fetchedAt: Date.now() });
       // Heartbeat — the dashboard's "market-data" tile reads this so the
       // user knows live data is flowing (even if no alerts fire).
       heartbeat('market-data', {
