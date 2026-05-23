@@ -80,6 +80,11 @@ async function fetchAllPanes() {
 function trimToWindow(panesByTf, sinceUnix) {
   const out = new Map();
   for (const [k, p] of panesByTf) {
+    const tf = k.split('|')[1];
+    // HTF context panes (1D, 60) are looked up at evaluation time as historical
+    // reference — they should never be cut by the anchor's lookback window.
+    // Keep them full and let `buildCtxFromMaps` cap context size per call.
+    if (tf === '1D' || tf === '60') { out.set(k, p); continue; }
     const bars = p.bars.filter((b) => b.time >= sinceUnix);
     if (bars.length >= 30) out.set(k, { ...p, bars });
   }

@@ -118,14 +118,14 @@ export const STOP_PAD = 0.35;  // widen the structural stop by 35%
  */
 export function buildTriggered({
   strategy, setupId, direction, setupName, summary, confidence, timeframe,
-  entry, stop,
+  entry, stop, t1Mult, t2Mult,
 }) {
   const sign = direction === 'LONG' ? 1 : -1;
   const structuralRisk = Math.abs(entry - stop);
   const risk = structuralRisk * (1 + STOP_PAD);
   const widenedStop = entry - sign * risk;
-  const t1 = entry + sign * TP1_R * risk;
-  const t2 = entry + sign * TP2_R * risk;
+  const t1 = entry + sign * (t1Mult ?? TP1_R) * risk;
+  const t2 = entry + sign * (t2Mult ?? TP2_R) * risk;
   stop = widenedStop;
   return {
     strategy,
@@ -158,12 +158,13 @@ export function clamp01(x) {
 // the system is accurate even before the first cache refresh.
 const CACHE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'backtest-cache.json');
 const DEFAULT_WIN_RATES = {
-  'ASIAN-BREAKOUT': 0.67,
-  'EMA-CROSS': 0.71,
-  'LONDON-SWEEP': 0.95,
-  'NY-FVG': 0.70,
-  'VPOC-RETEST': 0.55,
-  'VWAP-REJ': 0.73,
+  'ASIAN-BREAKOUT': 0.63,
+  'DAILY-TREND-PB': 0.58,
+  'EMA-CROSS': 0.61,
+  'LONDON-SWEEP': 0.76,
+  'NY-FVG': 0.69,
+  'VPOC-RETEST': 0.50,
+  'VWAP-REJ': 0.55,
 };
 let _winRates = { rates: null, at: 0 };
 

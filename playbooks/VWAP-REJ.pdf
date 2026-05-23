@@ -13,32 +13,36 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
 endobj
 5 0 obj
-<< /Length 2288 >>
+<< /Length 2730 >>
 stream
 BT /F2 22 Tf 0.10 0.10 0.12 rg 56.0 730.0 Td (VWAP Rejection · Intraday Continuation) Tj ET
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 680.0 Td (Concept) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 659.0 Td (VWAP is the volume-weighted "fair price" of the day. Institutions defend it. When price) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 644.0 Td (   pulls back to VWAP from the trending side and rejects \(wick into VWAP, body away\), that's) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 629.0 Td (   continuation. Skip this if price is sitting ON VWAP — no edge.) Tj ET
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 594.0 Td (Rules) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 573.0 Td (•  Day direction — Last 6 closed 15m bars: open > close on session start vs current close) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 558.0 Td (   defines bias.) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 541.0 Td (•  Touch — Bar's wick crosses VWAP, body closes on the trending side.) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 524.0 Td (•  Distance — Close > 0.5 × ATR away from VWAP \(not lingering on it\).) Tj ET
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 489.0 Td (Entry) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 468.0 Td (•  Limit at VWAP + 0.25 × ATR \(or - for shorts\).) Tj ET
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 433.0 Td (Stop loss) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 412.0 Td (•  1.0 × ATR beyond VWAP on the opposite side.) Tj ET
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 377.0 Td (Take profit) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 356.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
-0.80 0.80 0.84 RG 0.7 w 56 327.0 m 556 327.0 l S
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 309.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 288.0 Td (Trades: 153 · 3.40 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 271.0 Td (Win rate: 70% · Avg winner: 1.15 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 254.0 Td (Expectancy: 0.50 R per trade · Profit factor: 2.68) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 237.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
-0.80 0.80 0.84 RG 0.7 w 56 208.0 m 556 208.0 l S
-BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 198.0 Td (Octave Trading Signals · Strategy VWAP-REJ · generated 2026-05-22) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 659.0 Td (VWAP is the volume-weighted "fair price" of the day — institutions defend it.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 642.0 Td (A clean rejection \(wick into VWAP, body back on the trending side, with a) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 625.0 Td (pin or engulfing close\) is a continuation trade. The H1 50-EMA trend filter) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 608.0 Td (keeps us on the right side of higher-timeframe flow.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 573.0 Td (Rules) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 552.0 Td (•  H1 trend — H1 close above/below the 50-EMA, EMA sloping the same way.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 535.0 Td (•  Touch — Bar's wick crosses VWAP, body closes back on the trending side.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 518.0 Td (•  Displacement — Close  0.3 × ATR away from VWAP \(not lingering on it\).) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 501.0 Td (•  Confirmation — Last bar is a pin bar OR engulfing in the trade direction.) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 466.0 Td (Entry) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 445.0 Td (•  Market at trigger close \(no retracement limit\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 410.0 Td (Stop loss) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 389.0 Td (•  0.5 × ATR beyond the wick extreme \(then widened by STOP_PAD\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 354.0 Td (Take profit) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 333.0 Td (•  TP1: 1.2 × risk · TP2: 1.8 × risk \(uniform reward profile\).) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 298.0 Td (When to skip) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 277.0 Td (•  H1 trend disagrees with the day's VWAP side.) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 260.0 Td (•  Range-bound tape \(ATR-15m < 0.4 × ATR-H1\).) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 231.0 m 556 231.0 l S
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 213.0 Td (Backtest Results \(3-day walk-forward\)) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 192.0 Td (Trades: 8 · 2.67 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 175.0 Td (Win rate: 63% · Avg winner: 0.83 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 158.0 Td (Expectancy: 0.17 R per trade · Profit factor: 1.47) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 141.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+0.80 0.80 0.84 RG 0.7 w 56 112.0 m 556 112.0 l S
+BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 102.0 Td (Octave Trading Signals · Strategy VWAP-REJ · generated 2026-05-23) Tj ET
 endstream
 endobj
 6 0 obj
@@ -52,9 +56,9 @@ xref
 0000000121 00000 n 
 0000000218 00000 n 
 0000000320 00000 n 
-0000002659 00000 n 
+0000003101 00000 n 
 trailer
 << /Size 7 /Root 1 0 R >>
 startxref
-2795
+3237
 %%EOF

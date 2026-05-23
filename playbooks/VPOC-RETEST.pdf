@@ -13,7 +13,7 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
 endobj
 5 0 obj
-<< /Length 2334 >>
+<< /Length 2338 >>
 stream
 BT /F2 22 Tf 0.10 0.10 0.12 rg 56.0 730.0 Td (Volume POC · Retest) Tj ET
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 680.0 Td (Concept) Tj ET
@@ -33,13 +33,13 @@ BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 397.0 Td (•  1.0 × ATR beyond POC on the w
 BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 362.0 Td (Take profit) Tj ET
 BT /F1 10.5 Tf 0.15 0.15 0.15 rg 70.0 341.0 Td (•  TP1: 1.1 x risk · TP2: 1.5 x risk · SL: 1.0 x risk) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 312.0 m 556 312.0 l S
-BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 294.0 Td (Backtest Results \(45-day walk-forward\)) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 273.0 Td (Trades: 50 · 1.11 per day) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 256.0 Td (Win rate: 60% · Avg winner: 1.11 RR) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 239.0 Td (Expectancy: 0.28 R per trade · Profit factor: 1.72) Tj ET
-BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 222.0 Td (Result vs target \(60% win, 1.2 RR\): PASS) Tj ET
+BT /F2 13 Tf 0.15 0.25 0.45 rg 56.0 294.0 Td (Backtest Results \(3-day walk-forward\)) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 273.0 Td (Trades: 1 · 0.33 per day) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 256.0 Td (Win rate: 0% · Avg winner: 0.00 RR) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 239.0 Td (Expectancy: -1.00 R per trade · Profit factor: 0.00) Tj ET
+BT /F1 10.5 Tf 0.15 0.15 0.15 rg 56.0 222.0 Td (Result vs target \(60% win, 1.2 RR\): LOW-SAMPLE) Tj ET
 0.80 0.80 0.84 RG 0.7 w 56 193.0 m 556 193.0 l S
-BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 183.0 Td (Octave Trading Signals · Strategy VPOC-RETEST · generated 2026-05-22) Tj ET
+BT /F1 8.5 Tf 0.45 0.45 0.45 rg 56.0 183.0 Td (Octave Trading Signals · Strategy VPOC-RETEST · generated 2026-05-23) Tj ET
 endstream
 endobj
 6 0 obj
@@ -53,9 +53,9 @@ xref
 0000000121 00000 n 
 0000000218 00000 n 
 0000000320 00000 n 
-0000002705 00000 n 
+0000002709 00000 n 
 trailer
 << /Size 7 /Root 1 0 R >>
 startxref
-2841
+2845
 %%EOF
