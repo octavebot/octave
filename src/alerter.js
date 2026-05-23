@@ -208,6 +208,14 @@ async function buildSignalCard(r, ctx) {
         lines.push(`  ${icon} *${id}* — blocked: ${tgEscape(d.gateReason || 'gate')}`);
       }
     }
+    // Copy-paste block for the Octave Levels PineScript indicator on TV.
+    // Tap the code block in Telegram → it copies to clipboard; paste 4
+    // numbers into the indicator's Settings panel to draw lines on chart.
+    lines.push('');
+    lines.push('📊 *TV indicator levels*');
+    lines.push('```');
+    lines.push(`OCTAVE  ${r.direction}  ${ep.entry} / ${ep.stop} / ${ep.t1} / ${ep.t2}`);
+    lines.push('```');
   }
   return lines.join('\n');
 }

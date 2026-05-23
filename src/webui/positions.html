@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Octave · Trade Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #121620;
+    --border: #1e2330;
+    --muted: #6e7787;
+    --text: #d4d7df;
+    --accent: #4cc38a;
+    --danger: #e85a71;
+    --warn: #f0b941;
+    --long: #4cc38a;
+    --short: #e85a71;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 16px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .accounts { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .accounts { grid-template-columns: 1fr; } }
+  .account {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; min-height: 200px;
+  }
+  .account-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
+  }
+  .account-name { font-size: 18px; font-weight: 700; letter-spacing: 0.02em; }
+  .account-status { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .account-status .live { color: var(--accent); }
+  .account-status .paper { color: var(--warn); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+  .stat-value { font-size: 16px; font-weight: 600; }
+  .stat-value.pos { color: var(--accent); }
+  .stat-value.neg { color: var(--danger); }
+  .trades-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 12px; margin-bottom: 8px; }
+  .empty { font-size: 13px; color: var(--muted); padding: 16px 0; text-align: center; }
+  .trade {
+    padding: 12px; background: #0e1219; border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .trade-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .trade-name { font-weight: 600; }
+  .trade-dir { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; }
+  .trade-dir.long { background: rgba(76, 195, 138, 0.15); color: var(--long); }
+  .trade-dir.short { background: rgba(232, 90, 113, 0.15); color: var(--short); }
+  .trade-live { background: var(--accent); color: #000; }
+  .level-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 12px; }
+  .level { padding: 6px 8px; border-radius: 4px; background: #181c26; }
+  .level .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .level .val { font-weight: 600; font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+  .level.entry { border-left: 3px solid var(--text); }
+  .level.sl { border-left: 3px solid var(--danger); }
+  .level.tp1 { border-left: 3px solid var(--accent); }
+  .level.tp2 { border-left: 3px solid var(--accent); opacity: 0.85; }
+  .progress {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-top: 8px; overflow: hidden; position: relative;
+  }
+  .progress > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+  .progress > div.neg { background: var(--danger); }
+  .meta { font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; gap: 12px; }
+  .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+</style>
+</head>
+<body>
+<h1>Octave · Trade Panel</h1>
+<div id="root" class="accounts">
+  <div class="account"><div class="empty">Loading…</div></div>
+  <div class="account"><div class="empty">Loading…</div></div>
+</div>
+<div class="footer"><span class="pulse"></span>Auto-refreshing every 3s · last update <span id="last">—</span></div>
+
+<script>
+const fmt$ = (n) => {
+  if (n == null || !isFinite(n)) return '—';
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const fmtP = (n) => (n == null ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+function distancePct(price, level, direction) {
+  // For long: progress from entry to TP = positive when price > entry
+  // For short: positive when price < entry
+  if (price == null || level == null) return null;
+  const pct = ((price - level) / level) * 100;
+  return direction === 'SHORT' ? -pct : pct;
+}
+
+function tradeProgress(t) {
+  // Position progress 0..1 from entry to TP1 (or to SL if losing)
+  if (t.currentPrice == null) return { pct: 0, neg: false };
+  const isLong = t.direction === 'LONG';
+  const winning = isLong ? t.currentPrice > t.entry : t.currentPrice < t.entry;
+  if (winning) {
+    const target = t.t1;
+    const span = Math.abs(target - t.entry);
+    const moved = Math.abs(t.currentPrice - t.entry);
+    return { pct: Math.min(100, (moved / span) * 100), neg: false };
+  } else {
+    const span = Math.abs(t.entry - t.stop);
+    const moved = Math.abs(t.currentPrice - t.entry);
+    return { pct: Math.min(100, (moved / span) * 100), neg: true };
+  }
+}
+
+function renderTrade(t) {
+  const dir = t.direction.toLowerCase();
+  const prog = tradeProgress(t);
+  const live = t.live;
+  return `
+    <div class="trade">
+      <div class="trade-head">
+        <span class="trade-name">${t.strategy} · ${t.instrument.toUpperCase()}</span>
+        <span>
+          ${live ? '<span class="trade-dir trade-live">LIVE</span> ' : ''}
+          <span class="trade-dir ${dir}">${t.direction}</span>
+        </span>
+      </div>
+      <div class="level-grid">
+        <div class="level entry"><div class="lbl">Entry</div><div class="val">${fmtP(t.entry)}</div></div>
+        <div class="level sl"><div class="lbl">Stop</div><div class="val">${fmtP(t.stop)}</div></div>
+        <div class="level tp1"><div class="lbl">TP1</div><div class="val">${fmtP(t.t1)}</div></div>
+        <div class="level tp2"><div class="lbl">TP2</div><div class="val">${fmtP(t.t2)}</div></div>
+      </div>
+      <div class="progress"><div class="${prog.neg ? 'neg' : ''}" style="width: ${prog.pct}%"></div></div>
+      <div class="meta">
+        <span>${t.contracts} contract${t.contracts > 1 ? 's' : ''}</span>
+        <span>Risk $${Math.round(t.riskUsd)}</span>
+        <span>Current ${t.currentPrice == null ? '—' : fmtP(t.currentPrice)}</span>
+        ${t.openedAt ? '<span>Opened ' + new Date(t.openedAt).toLocaleTimeString() + '</span>' : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderAccount(id, acc) {
+  const profit = acc.balance - 50000;
+  const ddFromPeak = (acc.peakEod || 50000) - acc.balance;
+  return `
+    <div class="account">
+      <div class="account-head">
+        <div class="account-name">${id.toUpperCase()}</div>
+        <div class="account-status">
+          ${acc.enabled ? '<span class="' + acc.mode + '">' + acc.mode.toUpperCase() + '</span>' : '<span>DISABLED</span>'}
+          · ${acc.phase}
+        </div>
+      </div>
+      <div class="stats">
+        <div><div class="stat-label">Balance</div><div class="stat-value">${fmt$(acc.balance)}</div></div>
+        <div><div class="stat-label">Profit</div><div class="stat-value ${profit >= 0 ? 'pos' : 'neg'}">${fmt$(profit)}</div></div>
+        <div><div class="stat-label">Today</div><div class="stat-value ${acc.dailyPnl >= 0 ? 'pos' : 'neg'}">${fmt$(acc.dailyPnl)}</div></div>
+      </div>
+      <div class="trades-head">Open trades · ${acc.openTrades.length}</div>
+      ${acc.openTrades.length === 0
+        ? '<div class="empty">No open positions</div>'
+        : acc.openTrades.map(renderTrade).join('')
+      }
+    </div>
+  `;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/positions');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const root = document.getElementById('root');
+    root.innerHTML = ['auto', 'user'].map((id) => renderAccount(id, data.accounts[id])).join('');
+    document.getElementById('last').textContent = new Date(data.at).toLocaleTimeString();
+  } catch (err) {
+    console.error('refresh failed', err);
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

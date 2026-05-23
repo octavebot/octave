@@ -1,0 +1,71 @@
+//@version=5
+indicator("Octave Levels", overlay = true, max_lines_count = 8, max_labels_count = 8)
+
+// ═════════════════════════════════════════════════════════════════════════
+// OCTAVE TRADE LEVELS — draws entry / stop / TP1 / TP2 lines on the chart
+// for the trade the bot just signalled.
+//
+// Usage:
+//   1. In TradingView, open Pine Editor (bottom panel) → New → Indicator
+//   2. Paste this whole file, click "Save", name it "Octave Levels"
+//   3. Click "Add to chart"
+//   4. When a signal fires, the Telegram alert includes a one-line block
+//      like:  📊 OCTAVE  LONG  4500 / 4510 / 4485 / 4475
+//      → open this indicator's Settings (gear icon) and update the 5 inputs
+//   5. Lines + labels appear on the chart, color-coded by direction
+//
+// To clear: set Direction → NONE
+// ═════════════════════════════════════════════════════════════════════════
+
+dir   = input.string("NONE", "Direction",  options=["LONG", "SHORT", "NONE"], inline = "d")
+strat = input.string("",     "Strategy",                                       inline = "d")
+entry = input.float(0.0,     "Entry",                                  group = "Levels", inline = "e")
+stop  = input.float(0.0,     "Stop",                                   group = "Levels", inline = "e")
+tp1   = input.float(0.0,     "TP1",                                    group = "Levels", inline = "t")
+tp2   = input.float(0.0,     "TP2",                                    group = "Levels", inline = "t")
+hide  = input.bool(false,    "Hide labels (lines only)",               group = "Display")
+
+// Color palette per direction
+isLong   = dir == "LONG"
+isShort  = dir == "SHORT"
+active   = (isLong or isShort) and entry > 0
+entryCol = color.new(color.white,   0)
+stopCol  = color.new(color.red,     0)
+tpCol    = isLong ? color.new(#4cc38a, 0) : color.new(#4cc38a, 0)
+tp2Col   = color.new(tpCol, 30)
+
+// Each script run rebuilds the lines so input changes apply immediately.
+// We only draw at the last bar; lines extend with the right edge.
+if barstate.islast and active
+    rightX = bar_index + 50
+
+    // Entry — solid
+    line.new(bar_index - 50, entry, rightX, entry, color = entryCol, style = line.style_solid, width = 2)
+    if not hide
+        label.new(rightX, entry, "  Entry " + str.tostring(entry, format.mintick), style = label.style_label_left, color = color.new(color.gray, 80), textcolor = entryCol, size = size.small)
+
+    // Stop — solid red
+    if stop > 0
+        line.new(bar_index - 50, stop, rightX, stop, color = stopCol, style = line.style_solid, width = 2)
+        if not hide
+            label.new(rightX, stop, "  SL " + str.tostring(stop, format.mintick), style = label.style_label_left, color = color.new(color.red, 75), textcolor = stopCol, size = size.small)
+
+    // TP1 — solid green
+    if tp1 > 0
+        line.new(bar_index - 50, tp1, rightX, tp1, color = tpCol, style = line.style_solid, width = 2)
+        if not hide
+            label.new(rightX, tp1, "  TP1 " + str.tostring(tp1, format.mintick), style = label.style_label_left, color = color.new(tpCol, 80), textcolor = tpCol, size = size.small)
+
+    // TP2 — dashed green
+    if tp2 > 0
+        line.new(bar_index - 50, tp2, rightX, tp2, color = tp2Col, style = line.style_dashed, width = 1)
+        if not hide
+            label.new(rightX, tp2, "  TP2 " + str.tostring(tp2, format.mintick), style = label.style_label_left, color = color.new(tp2Col, 85), textcolor = tp2Col, size = size.small)
+
+    // Strategy + direction tag in upper-right
+    if not hide and strat != ""
+        label.new(rightX, entry, "  " + dir + " · " + strat, style = label.style_label_left, color = color.new(isLong ? #4cc38a : #e85a71, 75), textcolor = color.white, size = size.normal, yloc = yloc.price)
+
+// Background tint while trade is active
+bgcolor(active and isLong  ? color.new(#4cc38a, 95) : na, title = "Long bias bg")
+bgcolor(active and isShort ? color.new(#e85a71, 95) : na, title = "Short bias bg")

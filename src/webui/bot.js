@@ -1512,6 +1512,29 @@ async function cmdPayout() {
   await sendOwner(lines.join('\n'));
 }
 
+async function cmdLevels(arg) {
+  const at = await import('../lib/account_tracker.js');
+  const which = (arg || '').toLowerCase().trim();
+  const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+  const lines = [header('📊', 'TV indicator levels')];
+  let any = false;
+  for (const id of ids) {
+    const acc = at.get(id);
+    for (const t of acc.openTrades) {
+      any = true;
+      lines.push('');
+      lines.push(`*${id.toUpperCase()}* · ${t.strategy} · ${t.direction} ${t.instrument.toUpperCase()}${t.live ? ' · LIVE' : ''}`);
+      lines.push('```');
+      lines.push(`OCTAVE  ${t.direction}  ${t.entry} / ${t.stop} / ${t.t1} / ${t.t2}`);
+      lines.push('```');
+      lines.push(`_Paste into the Octave Levels Pine indicator settings:_`);
+      lines.push(`_Direction = *${t.direction}*  ·  Entry = *${t.entry}*  ·  Stop = *${t.stop}*  ·  TP1 = *${t.t1}*  ·  TP2 = *${t.t2}*_`);
+    }
+  }
+  if (!any) lines.push('', '_No open trades._');
+  await sendOwner(lines.join('\n'));
+}
+
 async function cmdBroker(arg) {
   const le = await import('../lib/live_executor.js');
   const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
@@ -2147,7 +2170,7 @@ const COMMANDS = {
   '/ai': cmdAi, '/clearchat': cmdClearChat,
   '/regime': cmdRegime, '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
   '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
-  '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker,
+  '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker, '/levels': cmdLevels,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,
   '/version': cmdVersion, '/dashboard': cmdDashboard,
   '/diagnose': cmdDiagnose, '/fix': cmdFix,

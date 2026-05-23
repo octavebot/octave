@@ -318,6 +318,53 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, state);
     }
 
+    // ─── Trade Panel ────────────────────────────────────────────────────
+    // GET /api/positions[?account=auto|user]  → JSON of open trades for the
+    //     account(s) with current price snapshot. Polled by the panel HTML.
+    if (req.method === 'GET' && url.pathname === '/api/positions') {
+      try {
+        const at = await import('../lib/account_tracker.js');
+        const cd = await import('../lib/cloud_data_supplement.js');
+        at.maybeRollDay();
+        const which = (url.searchParams.get('account') || '').toLowerCase();
+        const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+        // Current price per instrument (latest 15m close)
+        let prices = {};
+        try {
+          const panes = await cd.fetchAllPanes();
+          for (const inst of ['gold', 'nasdaq', 'sp']) {
+            const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
+            const last = p?.bars?.[p.bars.length - 1];
+            if (last) prices[inst] = { close: last.close, time: last.time };
+          }
+        } catch {}
+        const out = {};
+        for (const id of ids) {
+          const acc = at.get(id);
+          out[id] = {
+            enabled: acc.enabled, mode: acc.mode, phase: acc.phase,
+            balance: acc.balance, dailyPnl: acc.dailyPnl, peakEod: acc.peakEodBalance,
+            openTrades: (acc.openTrades || []).map((t) => ({
+              ...t,
+              currentPrice: prices[t.instrument]?.close ?? null,
+            })),
+          };
+        }
+        return sendJson(res, 200, { accounts: out, prices, at: Date.now() });
+      } catch (err) {
+        return sendJson(res, 500, { error: err.message });
+      }
+    }
+
+    // GET /positions  → HTML trade panel (auto-refreshing every 3s).
+    if (req.method === 'GET' && url.pathname === '/positions') {
+      const html = readFileSync(join(__dirname, 'positions.html'), 'utf8');
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.setHeader('cache-control', 'no-store');
+      return res.end(html);
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/config') {
       const body = await readBody(req).catch(() => null);
       if (!body) return sendJson(res, 400, { error: 'bad json' });
