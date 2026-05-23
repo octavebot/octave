@@ -26,3 +26,5 @@ src/state/trade-journal.jsonl
 /src/state/backtest-cache.json
 /src/state/last-bias.json
 /src/state/last-detect.json
+/src/state/accounts.json
+/src/state/paper-trades.jsonl

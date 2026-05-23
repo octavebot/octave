@@ -11,6 +11,7 @@ import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
+import * as paperTrader from './lib/paper_trader.js';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -181,6 +182,10 @@ async function tick() {
       // the follow-up tracker reports a 'filled' milestone (see below), so
       // invalidated / missed / unfilled setups never become phantom trades.
 
+      // Paper trader — shadow-execute against the eval account(s). Fully
+      // wrapped: a paper-trader bug must never affect alerting.
+      try { paperTrader.onTriggered(r); }
+      catch (err) { log.warn('paper_trader.onTriggered threw', { setupId: r.setupId, err: err.message }); }
     }
   }
 
@@ -256,6 +261,14 @@ async function tick() {
         }
       } catch (err) {
         log.warn('auto-journal milestone threw', { setupId: m.setup.setupId, milestone: m.milestone, err: err.message });
+      }
+
+      // Paper trader close — fully wrapped, never throws into the loop.
+      try {
+        const inst = m.setup.instrument || 'gold';
+        paperTrader.onMilestone(m.setup, m.milestone, priceMap[inst]);
+      } catch (err) {
+        log.warn('paper_trader.onMilestone threw', { setupId: m.setup.setupId, milestone: m.milestone, err: err.message });
       }
     }
   }

@@ -1324,6 +1324,165 @@ async function cmdRestart(arg) {
   setTimeout(cmdHealth, 4000);
 }
 
+// ── Eval / paper-trading commands ──
+
+async function cmdAccount(arg) {
+  const rm = await import('../lib/risk_manager.js');
+  const at = await import('../lib/account_tracker.js');
+  at.maybeRollDay();
+  const which = (arg || '').toLowerCase().trim();
+  const ids = which === 'auto' || which === 'user' ? [which] : ['auto', 'user'];
+  const lines = [header('🏦', 'Lucid Flex 50k status')];
+  for (const id of ids) {
+    const acc = at.get(id);
+    const st = rm.evalStatus(acc);
+    lines.push('');
+    lines.push(`*${id.toUpperCase()}* · ${acc.mode} · ${acc.enabled ? '🟢 active' : '⚫ disabled'} · ${st.phase}`);
+    lines.push('```');
+    lines.push(`Balance        $${st.balance.toFixed(2)}`);
+    lines.push(`Peak (EOD)     $${st.peakEod.toFixed(2)}`);
+    lines.push(`Profit         $${st.profit.toFixed(2)}  (target $${rm.EVAL_RULES.profitTarget})`);
+    lines.push(`DD from peak   $${st.ddFromPeakEod.toFixed(2)}  (cap $${rm.EVAL_RULES.maxDrawdown}, ${st.ddRemaining.toFixed(0)} remaining)`);
+    lines.push(`Today P&L      $${st.dailyPnl.toFixed(2)}`);
+    if (st.phase === 'eval') {
+      lines.push(`Consistency    largest day $${st.largestProfitableDay.toFixed(0)} / $${st.consistencyCap} cap`);
+      lines.push(`               today has $${st.consistencyRoom.toFixed(0)} room before cap`);
+      lines.push(`Circuit-break  $${rm.EVAL_RULES.dailyCircuitBreaker}/day (our safety)`);
+    } else {
+      lines.push(`Max payout     $${st.maxPayoutRequest.toFixed(0)}  (50% of profit, capped $${rm.PAYOUT_RULES.maxRequestUsd})`);
+      lines.push(`Payout floor   $${rm.PAYOUT_RULES.minRequestUsd}`);
+    }
+    lines.push(`Open trades    ${st.openTrades}`);
+    lines.push(`Closed trades  ${acc.closedTrades}   W:${acc.wins} L:${acc.losses}`);
+    lines.push(`Status         ${st.passed ? '✅ PASSED' : st.blown ? '🛑 BLOWN' : '🟡 in progress'}`);
+    if (acc.rulesViolated.length) lines.push(`Violations     ${acc.rulesViolated.join(', ')}`);
+    lines.push('```');
+  }
+  await send(lines.join('\n'));
+}
+
+async function cmdRisk(arg) {
+  const at = await import('../lib/account_tracker.js');
+  const parts = (arg || '').toLowerCase().trim().split(/\s+/);
+  // /risk           → show
+  // /risk on        → enable both accounts
+  // /risk off       → disable both
+  // /risk auto on   → enable just auto
+  // /risk user live → set user account to live mode
+  // /risk per 250   → set risk-per-trade to $250
+  if (parts.length === 0 || parts[0] === '' || parts[0] === 'status') {
+    const a = at.get('auto'), u = at.get('user');
+    return send([
+      header('⚙️', 'Risk control'),
+      '',
+      `*AUTO*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · mode: ${a.mode}`,
+      `*USER*  ${u.enabled ? '🟢 active' : '⚫ disabled'} · mode: ${u.mode}`,
+      '',
+      'Commands:',
+      bullet('`/risk on` · `/risk off` — toggle both'),
+      bullet('`/risk auto on` · `/risk user on` — toggle one'),
+      bullet('`/risk auto live` · `/risk auto paper` — switch mode'),
+      bullet('`/risk per 250` — set risk-per-trade USD'),
+      bullet('`/risk reset auto` — wipe an account back to $50k'),
+    ].join('\n'));
+  }
+  if (parts[0] === 'on') { at.setEnabled('auto', true); at.setEnabled('user', true); return send('🟢 both accounts enabled'); }
+  if (parts[0] === 'off') { at.setEnabled('auto', false); at.setEnabled('user', false); return send('⚫ both accounts disabled'); }
+  if (parts[0] === 'per' && parts[1]) {
+    const pt = await import('../lib/paper_trader.js');
+    pt.setRiskPerTrade(Number(parts[1]));
+    return send(`risk per trade set to $${pt.getRiskPerTrade()}`);
+  }
+  if (parts[0] === 'reset' && (parts[1] === 'auto' || parts[1] === 'user')) {
+    at.reset(parts[1]);
+    return send(`${parts[1]} account reset to fresh $50k`);
+  }
+  if ((parts[0] === 'auto' || parts[0] === 'user') && parts[1]) {
+    const id = parts[0];
+    if (parts[1] === 'on') { at.setEnabled(id, true); return send(`🟢 ${id} enabled`); }
+    if (parts[1] === 'off') { at.setEnabled(id, false); return send(`⚫ ${id} disabled`); }
+    if (parts[1] === 'paper' || parts[1] === 'live') { at.setMode(id, parts[1]); return send(`${id} → ${parts[1]} mode`); }
+    if (parts[1] === 'funded' || parts[1] === 'eval') {
+      const acc = at.get(id);
+      if (acc) { acc.phase = parts[1]; }
+      return send(`${id} phase → *${parts[1]}*\n${parts[1] === 'funded' ? 'Consistency rule + circuit breaker waived. Only EOD trailing DD enforced.' : 'Eval rules re-active.'}`);
+    }
+  }
+  return send('unrecognized — try `/risk` with no args for help');
+}
+
+async function cmdPaper() {
+  const at = await import('../lib/account_tracker.js');
+  at.maybeRollDay();
+  const lines = [header('📑', 'Paper trader status')];
+  for (const id of ['auto', 'user']) {
+    const acc = at.get(id);
+    if (!acc.enabled) { lines.push(`*${id}* — disabled (\`/risk ${id} on\` to start)`); continue; }
+    lines.push('');
+    lines.push(`*${id.toUpperCase()}* — ${acc.openTrades.length} open · ${acc.closedTrades} closed · $${acc.balance.toFixed(2)}`);
+    if (acc.openTrades.length) {
+      lines.push('```');
+      lines.push('Open:');
+      for (const t of acc.openTrades.slice(0, 5)) {
+        lines.push(`  ${t.strategy} ${t.direction} ${t.instrument} ${t.contracts}c @${t.entry.toFixed(2)} SL ${t.stop.toFixed(2)} ($${t.riskUsd.toFixed(0)} risk)`);
+      }
+      lines.push('```');
+    }
+  }
+  await send(lines.join('\n'));
+}
+
+async function cmdDd() {
+  const rm = await import('../lib/risk_manager.js');
+  const at = await import('../lib/account_tracker.js');
+  at.maybeRollDay();
+  const lines = [header('📉', 'Drawdown status (EOD trailing)')];
+  for (const id of ['auto', 'user']) {
+    const acc = at.get(id);
+    const st = rm.evalStatus(acc);
+    const usedPct = st.ddFromPeakEod / rm.EVAL_RULES.maxDrawdown * 100;
+    const bars = Math.floor(usedPct / 5);
+    const bar = '█'.repeat(Math.max(0, Math.min(20, bars))) + '░'.repeat(Math.max(0, 20 - bars));
+    lines.push('');
+    lines.push(`*${id.toUpperCase()}*  ·  peak EOD $${st.peakEod.toFixed(0)}  ·  bal $${st.balance.toFixed(0)}`);
+    lines.push(`${bar} ${usedPct.toFixed(0)}%`);
+    lines.push(`Used $${st.ddFromPeakEod.toFixed(0)} / $${rm.EVAL_RULES.maxDrawdown}  ·  $${st.ddRemaining.toFixed(0)} remaining`);
+  }
+  await send(lines.join('\n'));
+}
+
+async function cmdPayout() {
+  const rm = await import('../lib/risk_manager.js');
+  const at = await import('../lib/account_tracker.js');
+  at.maybeRollDay();
+  const lines = [header('💵', 'Payout status')];
+  for (const id of ['auto', 'user']) {
+    const acc = at.get(id);
+    const st = rm.evalStatus(acc);
+    lines.push('');
+    lines.push(`*${id.toUpperCase()}* · ${st.phase}`);
+    if (st.phase === 'eval') {
+      lines.push(`Eval in progress — payouts unlock once funded.`);
+      lines.push(`Profit to pass: $${st.profitRemaining.toFixed(0)} of $${rm.EVAL_RULES.profitTarget}`);
+    } else {
+      lines.push(`Eligible: ${st.payoutEligible ? '✅ yes' : '⚫ not yet'}`);
+      lines.push(`Max request: $${st.maxPayoutRequest.toFixed(0)}  (50% of $${st.profit.toFixed(0)} profit, capped $${rm.PAYOUT_RULES.maxRequestUsd})`);
+      lines.push(`Min request: $${rm.PAYOUT_RULES.minRequestUsd}`);
+    }
+    const recent = (acc.dailyHistory || []).slice(-7);
+    if (recent.length) {
+      lines.push('```');
+      lines.push('Last 7 days:');
+      for (const d of recent) {
+        const mark = d.pnl > 0 ? '+' : d.pnl < 0 ? '-' : ' ';
+        lines.push(`  ${mark} ${d.dateKey}  $${d.pnl.toFixed(2)}  (${d.trades} trades, EOD $${(d.eodBalance || 0).toFixed(0)})`);
+      }
+      lines.push('```');
+    }
+  }
+  await send(lines.join('\n'));
+}
+
 async function cmdShutdown(arg) {
   if (arg !== 'confirm') {
     return send([
@@ -1857,6 +2016,8 @@ const COMMANDS = {
   '/note': cmdJournalNote, '/journal': cmdJournal,
   '/ai': cmdAi, '/clearchat': cmdClearChat,
   '/regime': cmdRegime, '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
+  '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
+  '/dd': cmdDd, '/payout': cmdPayout,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,
   '/version': cmdVersion, '/dashboard': cmdDashboard,
   '/diagnose': cmdDiagnose, '/fix': cmdFix,
