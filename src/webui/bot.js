@@ -1856,23 +1856,35 @@ async function buildMainMenu() {
   try { const us = await import('../lib/user_strategies.js'); userCount = us.list().length; } catch {}
   const total = STRATEGIES.length + userCount;
 
-  // Session keys carry underscores (ny_am, ny_pm) — render with spaces so
-  // they never open a stray Markdown italic and break the whole message.
+  // Eval account snapshot — show in main menu so /menu doubles as a glance
+  // at how the paper traders are doing without an extra tap.
+  let acctLine = '';
+  try {
+    const at = await import('../lib/account_tracker.js');
+    at.maybeRollDay();
+    const a = at.get('auto'), u = at.get('user');
+    const fmt = (v) => '$' + Math.round(v).toLocaleString('en-US');
+    acctLine = `🏦 AUTO ${fmt(a.balance)} · USER ${fmt(u.balance)}`;
+  } catch {}
+
   const sessLabel = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
   const text = [
     header('🎵', 'Octave'),
     '',
     `${muteMin > 0 ? '🔕 Muted ' + muteMin + 'm' : '🔔 Live'} · ${onCount}/${total} strategies · ${sessLabel} session`,
+    acctLine,
   ].filter(Boolean).join('\n');
 
   const keyboard = [
-    [{ text: '🧭 Bias',     callback_data: 'act:bias' }, { text: '🎯 Setups',  callback_data: 'act:setups' }],
-    [{ text: '📊 Today',    callback_data: 'act:today' }, { text: '🔔 Last',   callback_data: 'act:last' }],
-    [{ text: '💰 Price',    callback_data: 'act:price' }, { text: '🌍 Session', callback_data: 'act:session' }],
-    [{ text: '🎚 Strategies', callback_data: 'view:strategies' }, { text: '🔕 Mute', callback_data: 'view:mute' }],
-    [{ text: '📈 Backtest', callback_data: 'view:backtest' }, { text: '🌐 Dashboard', callback_data: 'act:dashboard' }],
-    [{ text: '🩺 Health',   callback_data: 'act:health' }, { text: '⚙️ Settings', callback_data: 'view:settings' }],
-    [{ text: '🔄 Refresh',  callback_data: 'view:main' }],
+    [{ text: '🧭 Bias',     callback_data: 'act:bias' },     { text: '🎯 Setups',  callback_data: 'act:setups' }],
+    [{ text: '📊 Today',    callback_data: 'act:today' },    { text: '🔔 Last',    callback_data: 'act:last' }],
+    [{ text: '🏦 Accounts', callback_data: 'act:account' },  { text: '📑 Paper',   callback_data: 'act:paper' }],
+    [{ text: '📉 DD',       callback_data: 'act:dd' },       { text: '💵 Payout',  callback_data: 'act:payout' }],
+    [{ text: '💰 Price',    callback_data: 'act:price' },    { text: '🌍 Session', callback_data: 'act:session' }],
+    [{ text: '🎚 Strategies', callback_data: 'view:strategies' }, { text: '🔕 Mute',  callback_data: 'view:mute' }],
+    [{ text: '📈 Backtest', callback_data: 'view:backtest' },{ text: '📊 Levels',  callback_data: 'act:levels' }],
+    [{ text: '🌐 Dashboard',callback_data: 'act:dashboard' },{ text: '🩺 Health',  callback_data: 'act:health' }],
+    [{ text: '⚙️ Settings', callback_data: 'view:settings' },{ text: '🔄 Refresh', callback_data: 'view:main' }],
   ];
   return { text, keyboard };
 }
@@ -2071,6 +2083,7 @@ async function handleCallback(cq) {
         bias: cmdBias, setups: cmdActiveSetups, today: cmdToday, last: cmdLast,
         price: cmdPrice, session: cmdSession, health: cmdHealth, dashboard: cmdDashboard,
         regime: cmdRegime, coach: cmdCoach,
+        account: cmdAccount, paper: cmdPaper, dd: cmdDd, payout: cmdPayout, levels: cmdLevels,
       };
       if (map[verb]) { await map[verb](); return ackCallback(cq.id); }
       if (verb === 'restart') { await cmdRestart(rest2[0]); return ackCallback(cq.id, `Restarting ${rest2[0]}…`); }

@@ -8,7 +8,7 @@
  * and reports per-strategy win rate / R-sum / setup frequency.
  *
  * Two invocation modes:
- *   1. CLI: `node src/backtest.js` (or `--weekly`, `--strategy TRINITY`, etc.)
+ *   1. CLI: `node src/backtest.js` (or `--weekly`, `--strategy LONDON-SWEEP`, etc.)
  *   2. Programmatic: `import { runBacktest } from './backtest.js'`
  *
  * Limitations to be honest about:
@@ -251,7 +251,7 @@ export async function runBacktest(opts = {}) {
   const enabledNames = opts.strategies?.length
     ? opts.strategies
     : Object.entries(cfg.strategies).filter(([, v]) => v).map(([k]) => k);
-  // Accept multiple identifiers per strategy: full key (TRINITY), display num
+  // Accept multiple identifiers per strategy: full key (LONDON-SWEEP), display num
   // (1..10), or any case variant. Normalize before matching.
   const requested = new Set(enabledNames.map((n) => String(n).toUpperCase()));
   const ALL = await getAllStrategies();
@@ -538,7 +538,7 @@ export async function runBacktest(opts = {}) {
       }, 'backtest');
     }
 
-    // Per-instrument breakdown so reports can show "USLS on gold: 8W/3L, nasdaq: 2W/2L".
+    // Per-instrument breakdown so reports can show "LONDON-SWEEP on gold: 8W/3L, nasdaq: 2W/2L".
     s.byInstrument = {};
     for (const inst of INSTRUMENTS) {
       const sub = trades.filter((t) => t.instrument === inst);

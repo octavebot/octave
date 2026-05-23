@@ -23,7 +23,11 @@
     background: var(--bg); color: var(--text);
     font: 14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   }
-  h1 { font-size: 14px; font-weight: 600; margin: 0 0 16px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .actions { display: flex; gap: 12px; }
+  .link { color: var(--muted); text-decoration: none; font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; transition: all 0.15s; }
+  .link:hover { color: var(--text); border-color: var(--text); }
   .accounts { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
   @media (max-width: 720px) { .accounts { grid-template-columns: 1fr; } }
   .account {
@@ -76,7 +80,13 @@
 </style>
 </head>
 <body>
-<h1>Octave · Trade Panel</h1>
+<div class="topbar">
+  <h1>🎵 Octave · Trade Panel</h1>
+  <div class="actions">
+    <a href="/" class="link">Dashboard</a>
+    <a href="https://www.tradingview.com/chart/" target="_blank" class="link">TradingView ↗</a>
+  </div>
+</div>
 <div id="root" class="accounts">
   <div class="account"><div class="empty">Loading…</div></div>
   <div class="account"><div class="empty">Loading…</div></div>

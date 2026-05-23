@@ -129,92 +129,68 @@ async function buildSignalCard(r, ctx) {
     ? r.confirmations
     : [r.setupName || 'Strategy trigger'];
 
-  const lines = [];
-  lines.push('╭───────────────────────╮');
-  lines.push('│   ⚡ *OCTAVE SIGNAL* ⚡   │');
-  lines.push('╰───────────────────────╯');
-  lines.push('');
-  lines.push(`${dirIcon} *${r.direction}*   ·   *${inst.label.toUpperCase()}*`);
-  lines.push(`\`${inst.symbol}\``);
-  lines.push('');
-  // Limit vs market: a LONG fills on a dip to entry, a SHORT on a rally to
-  // entry. If the current price is already at/through the entry it's a market
-  // fill; otherwise it's a resting limit and you wait for the FILLED alert.
   const last = ctx.lastClose;
-  let entryMode = '';
-  if (last != null) {
-    const fillsNow = r.direction === 'LONG' ? last <= ep.entry : last >= ep.entry;
-    entryMode = fillsNow
-      ? '  🟢 Market — fillable now'
-      : '  ⏳ Limit — wait for price to reach the zone';
-  }
-  lines.push('┌ *Entry Zone* ──────────');
-  lines.push(`  \`${fmtPrice(zLo)}\` — \`${fmtPrice(zHi)}\``);
-  if (entryMode) lines.push(entryMode);
-  lines.push('');
-  lines.push('├ *Take Profit* ─────────');
-  if (ep.t1 != null) lines.push(`  🎯 TP1  →  \`${fmtPrice(ep.t1)}\``);
-  if (ep.t2 != null) lines.push(`  🎯 TP2  →  \`${fmtPrice(ep.t2)}\``);
-  lines.push('');
-  lines.push('├ *Stop Loss* ───────────');
-  lines.push(`  ❌  \`${fmtPrice(ep.stop)}\``);
-  lines.push('');
-  // Position size — contracts to risk the configured $/trade given this
-  // setup's stop distance. The widened risk is in price points; convert to
-  // dollars with the micro-future point value.
+  const fillsNow = last != null && (r.direction === 'LONG' ? last <= ep.entry : last >= ep.entry);
   const DOLLAR_PER_POINT = { gold: 10, nasdaq: 2, sp: 5 };
   const dpp = DOLLAR_PER_POINT[r.instrument] || 1;
   const perContract = risk * dpp;
   const riskBudget = Number(cfg.riskPerTradeUsd) > 0 ? Number(cfg.riskPerTradeUsd) : 250;
-  if (perContract > 0) {
-    const contracts = Math.floor(riskBudget / perContract);
-    lines.push('├ *Position Size* ───────');
-    if (contracts >= 1) {
-      lines.push(`  📐  *${contracts}* contract${contracts > 1 ? 's' : ''}  ·  risks ~$${Math.round(contracts * perContract)}`);
-    } else {
-      lines.push(`  📐  *1* contract  ·  risks ~$${Math.round(perContract)}  _(stop wide — over your $${riskBudget})_`);
-    }
-    lines.push('');
-  }
-  lines.push('├ *Trade Data* ──────────');
-  lines.push(`  ⏰ TF     →  ${tfLabel(r.timeframe || ctx.timeframe)}`);
-  lines.push(`  📊 Conf   →  ${confPct}%`);
-  lines.push(`  ⚠️ Risk   →  ${riskLabel(conf)}`);
-  if (rr != null) lines.push(`  💎 RR     →  1:${rr.toFixed(1)}`);
+  const contracts = perContract > 0 ? Math.max(1, Math.floor(riskBudget / perContract)) : 0;
+  const sizeUsd = contracts * perContract;
+
+  const lines = [];
+
+  // Header — single clean line, no ASCII box (emoji width breaks alignment).
+  lines.push(`${dirIcon} *${r.direction} · ${inst.label.toUpperCase()}*  \`${inst.symbol}\``);
+  lines.push(`_${tgEscape(name)}_  ·  ${tfLabel(r.timeframe || ctx.timeframe)}  ·  ${fillsNow ? '🟢 fillable now' : '⏳ resting limit'}`);
   lines.push('');
-  lines.push('├ *Confirmation* ────────');
-  lines.push(`  _${tgEscape(name)}_`);
-  for (const c of confirmations.slice(0, 4)) lines.push(`  ✓ ${tgEscape(c)}`);
-  lines.push('╰───────────────────────╯');
+
+  // Levels — one block, monospace for alignment. Telegram renders ``` perfectly.
+  lines.push('```');
+  lines.push(`Entry   ${fmtPrice(zLo).padStart(10)} — ${fmtPrice(zHi)}`);
+  lines.push(`Stop    ${fmtPrice(ep.stop).padStart(10)}`);
+  if (ep.t1 != null) lines.push(`TP1     ${fmtPrice(ep.t1).padStart(10)}`);
+  if (ep.t2 != null) lines.push(`TP2     ${fmtPrice(ep.t2).padStart(10)}`);
+  lines.push('```');
+
+  // Trade data — one tight row.
+  const dataLine = [
+    `📐 ${contracts}c (~$${Math.round(sizeUsd)})`,
+    `📊 ${confPct}%`,
+    rr != null ? `💎 1:${rr.toFixed(1)}` : null,
+    `⚠️ ${riskLabel(conf)} risk`,
+  ].filter(Boolean).join('  ·  ');
+  lines.push(dataLine);
+
+  // Confirmations — bulleted, no nested-tree characters.
+  if (confirmations.length) {
+    lines.push('');
+    for (const c of confirmations.slice(0, 4)) lines.push(`  ✓ ${tgEscape(c)}`);
+  }
 
   if (r.aiCommentary) {
     lines.push('');
-    lines.push('🤖 *Holy AI*');
-    lines.push(`_${tgEscape(r.aiCommentary)}_`);
+    lines.push(`🤖 _${tgEscape(r.aiCommentary)}_`);
   }
 
-  // Paper-trader block — show per-account decision. Only added when paper
-  // trader has made decisions for this signal (i.e. at least one account is
-  // enabled). Quietly absent otherwise.
+  // Paper-trader block — only shown when at least one account participated.
   if (Array.isArray(r.paperDecisions) && r.paperDecisions.length) {
     lines.push('');
-    lines.push('🏦 *Eval account status*');
+    lines.push('🏦 *Eval accounts*');
     for (const d of r.paperDecisions) {
       const id = d.accountId.toUpperCase();
       if (d.gateAllowed) {
-        lines.push(`  ${d.contracts >= 1 ? '✅' : '⚠️'} *${id}* — ${d.contracts}c · ~$${Math.round(d.riskUsdActual)} risk`);
+        lines.push(`  ${d.contracts >= 1 ? '✅' : '⚠️'} ${id} — ${d.contracts}c · ~$${Math.round(d.riskUsdActual)}`);
       } else {
         const icon = d.gateSeverity === 'hard' ? '🛑' : '⚠️';
-        lines.push(`  ${icon} *${id}* — blocked: ${tgEscape(d.gateReason || 'gate')}`);
+        lines.push(`  ${icon} ${id} — ${tgEscape(d.gateReason || 'blocked')}`);
       }
     }
-    // Copy-paste block for the Octave Levels PineScript indicator on TV.
-    // Tap the code block in Telegram → it copies to clipboard; paste 4
-    // numbers into the indicator's Settings panel to draw lines on chart.
+    // Copy-paste block for the Octave Levels Pine indicator.
     lines.push('');
-    lines.push('📊 *TV indicator levels*');
+    lines.push('📊 _TV levels (tap to copy)_');
     lines.push('```');
-    lines.push(`OCTAVE  ${r.direction}  ${ep.entry} / ${ep.stop} / ${ep.t1} / ${ep.t2}`);
+    lines.push(`${r.direction}  ${ep.entry} / ${ep.stop} / ${ep.t1} / ${ep.t2}`);
     lines.push('```');
   }
   return lines.join('\n');

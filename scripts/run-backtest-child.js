@@ -7,7 +7,7 @@
  *
  * Usage:
  *   node scripts/run-backtest-child.js --days 30
- *   node scripts/run-backtest-child.js --days 60 --strategy TRINITY
+ *   node scripts/run-backtest-child.js --days 60 --strategy LONDON-SWEEP
  *   node scripts/run-backtest-child.js --days 30 --post   (also sends to Telegram)
  *
  * Output: structured "RESULT:<json>" line on stdout when complete, plus a
