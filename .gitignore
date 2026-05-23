@@ -28,3 +28,5 @@ src/state/trade-journal.jsonl
 /src/state/last-detect.json
 /src/state/accounts.json
 /src/state/paper-trades.jsonl
+/src/state/broker-config.json
+/src/state/live-executions.jsonl

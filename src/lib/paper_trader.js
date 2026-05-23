@@ -19,6 +19,7 @@
 import { log } from '../logger.js';
 import * as accounts from './account_tracker.js';
 import { computeSize, checkGates, INSTRUMENT_DOLLARS_PER_POINT } from './risk_manager.js';
+import * as liveExecutor from './live_executor.js';
 
 // One log line per executed paper trade — JSONL for /paper trades.
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -80,7 +81,7 @@ export function onTriggered(signal) {
         continue;
       }
       if (sizing.contracts <= 0) continue;
-      // Open the paper trade
+      // Open the paper trade (tracks P&L regardless of live/paper mode).
       accounts.openTrade(accId, {
         setupId: signal.setupId,
         instrument: signal.instrument,
@@ -92,6 +93,7 @@ export function onTriggered(signal) {
         contracts: sizing.contracts,
         riskUsd: sizing.riskUsdActual,
         strategy: signal.strategy,
+        live: false,  // set true if live execution succeeds below
       });
       logTrade({
         event: 'open', accountId: accId, setupId: signal.setupId,
@@ -99,7 +101,29 @@ export function onTriggered(signal) {
         direction: signal.direction, contracts: sizing.contracts,
         riskUsd: sizing.riskUsdActual, entry: signal.entryPlan.entry,
         stop: signal.entryPlan.stop, t1: signal.entryPlan.t1, t2: signal.entryPlan.t2,
+        mode: acc.mode,
       });
+
+      // LIVE EXECUTION — fully autonomous when account.mode === 'live'.
+      // Three independent conditions ALL required (defense in depth):
+      //   acc.mode === 'live'  (default 'paper'; requires /risk auto live)
+      //   webhook URL configured (/broker set-url <url>)
+      //   gate already passed (above)
+      // Fires asynchronously; result handled via owner Telegram notification.
+      // markLive() called only on success — paper P&L tracks all trades
+      // regardless of execution outcome.
+      if (acc.mode === 'live') {
+        liveExecutor.fireLive(accId, signal, sizing)
+          .then((result) => {
+            if (result.fired) accounts.markLive(accId, signal.setupId);
+            logTrade({
+              event: result.fired ? 'live-fired' : 'live-skipped',
+              accountId: accId, setupId: signal.setupId,
+              reason: result.reason, status: result.status,
+            });
+          })
+          .catch((err) => log.warn('fireLive promise rejected', { err: err.message }));
+      }
     }
   } catch (err) {
     log.warn('paper_trader.onTriggered threw', { err: err.message, setupId: signal?.setupId });
