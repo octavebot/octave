@@ -113,7 +113,25 @@ async function tryTelegramCall(call) {
  * @param {object} body  the JSON payload to POST
  * @returns {Promise<boolean>}  true if delivered immediately, false if queued
  */
+// Telegram caps sendMessage at 4096 chars and sendPhoto caption at 1024.
+// Anything longer 400s with "message is too long" and tg-queue drops it as
+// a permanent failure. Trim at a line boundary so the Markdown stays balanced.
+const TG_LIMITS = { sendMessage: 4000, sendPhoto: 1000 };
+function maybeTruncate(method, body) {
+  const cap = TG_LIMITS[method];
+  if (!cap) return body;
+  const key = method === 'sendPhoto' ? 'caption' : 'text';
+  const txt = body?.[key];
+  if (typeof txt !== 'string' || txt.length <= cap) return body;
+  const slice = txt.slice(0, cap);
+  const cutAt = slice.lastIndexOf('\n');
+  const trimmed = (cutAt > cap - 400 ? slice.slice(0, cutAt) : slice)
+    + '\n\n_…(truncated — message exceeded Telegram length cap)_';
+  return { ...body, [key]: trimmed };
+}
+
 export async function send(token, method, body) {
+  body = maybeTruncate(method, body);
   let res = await tryTelegramCall({ token, method, body });
   if (res.ok) {
     // Best-effort log: if we just sent to the signal group, record the
