@@ -98,8 +98,15 @@ const OWNER_ONLY = new Set([
 // see private state like account balances). The owner can still use
 // everything from the group; the reply just goes to their DM.
 const GROUP_ALLOWED_COMMANDS = new Set([
-  '/bias', '/news', '/last', '/levels', '/setups',
-  '/chatid', '/id',
+  // Market intel
+  '/bias', '/setups', '/setup', '/news', '/price', '/session',
+  '/regime', '/levels', '/killzones',
+  // Signal history (no account info — just the alert stream)
+  '/last', '/today', '/yesterday', '/range', '/summary', '/history',
+  // Strategy info (read-only — toggle is owner only via /enable /disable)
+  '/strategies', '/playbook',
+  // Help / discovery
+  '/help', '/menu', '/start', '/chatid', '/id',
 ]);
 
 function mergedEnv() {
@@ -1858,7 +1865,7 @@ const HELP_TOPICS = {
   ai: [
     header('🤖', 'AI assistant'),
     '',
-    'Just send any non-command text and Gemini handles it. Examples:',
+    'Just send any non-command text and the AI handles it. Examples:',
     bullet('"I entered MGC long at 4520 with 2 contracts"'),
     bullet('"what\'s my win rate this week?"'),
     bullet('"create a strategy that fades RSI extremes on 1h"'),
@@ -1904,12 +1911,13 @@ function buildGroupMenu() {
   const text = [
     header('🎵', 'Octave · Signals'),
     '',
-    'Signals fire automatically. Useful read-only commands:',
+    'Signals fire automatically. Tap to pull live market intel:',
   ].join('\n');
   const keyboard = [
-    [{ text: '🧭 Bias',   callback_data: 'act:bias' },   { text: '🎯 Setups', callback_data: 'act:setups' }],
-    [{ text: '📰 News',   callback_data: 'act:news' },   { text: '🔔 Last',   callback_data: 'act:last' }],
-    [{ text: '📊 Levels', callback_data: 'act:levels' }],
+    [{ text: '🧭 Bias',    callback_data: 'act:bias' },    { text: '🎯 Setups',  callback_data: 'act:setups' }],
+    [{ text: '💰 Price',   callback_data: 'act:price' },   { text: '🌍 Session', callback_data: 'act:session' }],
+    [{ text: '📰 News',    callback_data: 'act:news' },    { text: '🌡 Regime',  callback_data: 'act:regime' }],
+    [{ text: '📊 Levels',  callback_data: 'act:levels' },  { text: '🔔 Last',    callback_data: 'act:last' }],
   ];
   return { text, keyboard };
 }
@@ -1946,15 +1954,11 @@ async function buildMainMenu() {
   ].filter(Boolean).join('\n');
 
   const keyboard = [
-    [{ text: '🧭 Bias',     callback_data: 'act:bias' },     { text: '🎯 Setups',  callback_data: 'act:setups' }],
-    [{ text: '📊 Today',    callback_data: 'act:today' },    { text: '🔔 Last',    callback_data: 'act:last' }],
-    [{ text: '🏦 Accounts', callback_data: 'act:account' },  { text: '📑 Paper',   callback_data: 'act:paper' }],
-    [{ text: '📉 DD',       callback_data: 'act:dd' },       { text: '💵 Payout',  callback_data: 'act:payout' }],
-    [{ text: '💰 Price',    callback_data: 'act:price' },    { text: '🌍 Session', callback_data: 'act:session' }],
-    [{ text: '🎚 Strategies', callback_data: 'view:strategies' }, { text: '🔕 Mute',  callback_data: 'view:mute' }],
-    [{ text: '📈 Backtest', callback_data: 'view:backtest' },{ text: '📊 Levels',  callback_data: 'act:levels' }],
-    [{ text: '🌐 Dashboard',callback_data: 'act:dashboard' },{ text: '🩺 Health',  callback_data: 'act:health' }],
-    [{ text: '⚙️ Settings', callback_data: 'view:settings' },{ text: '🔄 Refresh', callback_data: 'view:main' }],
+    [{ text: '🧭 Bias',       callback_data: 'act:bias' },        { text: '🎯 Setups',  callback_data: 'act:setups' }],
+    [{ text: '🏦 Accounts',   callback_data: 'act:account' },     { text: '🌍 Session', callback_data: 'act:session' }],
+    [{ text: '🎚 Strategies', callback_data: 'view:strategies' }, { text: '📈 Backtest', callback_data: 'view:backtest' }],
+    [{ text: '🌐 Dashboard',  callback_data: 'act:dashboard' },   { text: '🩺 Health',  callback_data: 'act:health' }],
+    [{ text: '⚙️ Settings',   callback_data: 'view:settings' },   { text: '🔄 Refresh', callback_data: 'view:main' }],
   ];
   return { text, keyboard };
 }
@@ -1988,11 +1992,22 @@ function buildMuteView() {
 }
 
 function buildBacktestView() {
-  const text = [header('📈', 'Backtest'), '', 'Pick a window. Runs in isolated process — bot stays responsive.'].join('\n');
+  const cache = readJson(join(STATE_DIR, 'backtest-cache.json'), null);
+  const ageH = cache?.generatedAt ? Math.round((Date.now() - cache.generatedAt) / 3_600_000) : null;
+  const cacheLabel = cache?.tg
+    ? `📊 Latest cached (${cache.days}d · ${ageH}h ago)`
+    : '📊 Latest cached (none yet)';
+  const text = [
+    header('📈', 'Backtest'),
+    '',
+    'Live runs use an isolated process — bot stays responsive.',
+    'Anything beyond 14d is served from the nightly cache (the VPS is too slow to run a 30d backtest within the command window).',
+  ].join('\n');
   const keyboard = [
-    [{ text: '7 days', callback_data: 'bt:7' }, { text: '30 days', callback_data: 'bt:30' }, { text: '60 days', callback_data: 'bt:60' }],
-    [{ text: 'All enabled (30d)', callback_data: 'bt:30' }],
-    [{ text: '« Back', callback_data: 'view:main' }],
+    [{ text: '7 days (live)',  callback_data: 'bt:7' },
+     { text: '14 days (live)', callback_data: 'bt:14' }],
+    [{ text: cacheLabel,       callback_data: 'bt:cached' }],
+    [{ text: '« Back',         callback_data: 'view:main' }],
   ];
   return { text, keyboard };
 }
@@ -2118,7 +2133,11 @@ async function handleCallback(cq) {
     }
 
     if (kind === 'bt') {
-      const days = parseInt(arg, 10) || 30;
+      if (arg === 'cached') {
+        await ackCallback(cq.id);
+        return cmdBacktest('');
+      }
+      const days = parseInt(arg, 10) || 7;
       await editMessage(chatId, messageId, `⏳ Running ${days}-day backtest…`, { keyboard: [] });
       await ackCallback(cq.id);
       return cmdBacktest(String(days));

@@ -41,8 +41,23 @@ export function providerLabel() {
 export async function chatWithTools({ system, messages, tools, toolHandlers, maxRounds = 6 }) {
   const provider = pickProvider();
   if (!provider) throw new Error('no-llm-key');
-  if (provider === 'groq') return _groqChat({ system, messages, tools, toolHandlers, maxRounds });
+  if (provider === 'groq') {
+    try {
+      return await _groqChat({ system, messages, tools, toolHandlers, maxRounds });
+    } catch (err) {
+      // Groq free-tier TPM (12k/min on llama-3.3-70b) blows up on tool-heavy
+      // multi-round chats. Fall through to Gemini instead of killing the turn.
+      if (_isTransientGroqFail(err) && process.env.GEMINI_API_KEY) {
+        return _geminiChat({ system, messages, tools, toolHandlers, maxRounds });
+      }
+      throw err;
+    }
+  }
   return _geminiChat({ system, messages, tools, toolHandlers, maxRounds });
+}
+
+function _isTransientGroqFail(err) {
+  return /^Groq HTTP (429|5\d\d)/.test(err?.message || '');
 }
 
 // ── Groq (OpenAI-compatible) ────────────────────────────────────────────
@@ -230,7 +245,16 @@ async function _geminiChat({ system, messages, tools, toolHandlers, maxRounds })
 export async function oneShot({ system, userParts, maxTokens = 1024 }) {
   const provider = pickProvider();
   if (!provider) throw new Error('no-llm-key');
-  if (provider === 'groq') return _groqOneShot({ system, userParts, maxTokens });
+  if (provider === 'groq') {
+    try {
+      return await _groqOneShot({ system, userParts, maxTokens });
+    } catch (err) {
+      if (_isTransientGroqFail(err) && process.env.GEMINI_API_KEY) {
+        return _geminiOneShot({ system, userParts, maxTokens });
+      }
+      throw err;
+    }
+  }
   return _geminiOneShot({ system, userParts, maxTokens });
 }
 
