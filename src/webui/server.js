@@ -27,7 +27,17 @@ const STATE_DIR = join(REPO_DIR, 'src', 'state');
 const CONFIG_FILE = join(STATE_DIR, 'runtime-config.json');
 const HEARTBEAT_FILE = join(STATE_DIR, 'cloud-heartbeat.json');
 const SESSION_FILE = join(STATE_DIR, 'session.json');
-const LOG_DIR = '/Users/jqvier/Library/Logs/trading-alerts';
+// Platform-aware log dir resolution. Mac (dev) writes via LaunchAgent
+// stdout; VPS writes via systemd to ~/.octave-logs. Pick whichever exists.
+const LOG_DIR_CANDIDATES = [
+  process.env.OCTAVE_LOG_DIR,
+  '/home/octave/.octave-logs',
+  process.env.HOME ? `${process.env.HOME}/.octave-logs` : null,
+  '/Users/jqvier/Library/Logs/trading-alerts',
+].filter(Boolean);
+const LOG_DIR = LOG_DIR_CANDIDATES.find((p) => existsSync(p)) || LOG_DIR_CANDIDATES[0];
+const STDOUT_LOG_NAME = existsSync(join(LOG_DIR, 'signal-engine.log'))
+  ? 'signal-engine.log' : 'stdout.log';
 const HTML_FILE = join(__dirname, 'index.html');
 const PORT = parseInt(process.env.OCTAVE_WEBUI_PORT || '7345', 10);
 
@@ -154,10 +164,11 @@ async function gatherState() {
     caffActive = caffR.code === 0 && /state\s*=\s*running/.test(caffR.out);
   }
 
-  // Last alert from stdout log
+  // Last alert from the signal-engine stdout log. STDOUT_LOG_NAME resolves
+  // to 'signal-engine.log' on the VPS (systemd) and 'stdout.log' on Mac dev.
   let lastAlert = null;
   try {
-    const out = readFileSync(join(LOG_DIR, 'stdout.log'), 'utf8');
+    const out = readFileSync(join(LOG_DIR, STDOUT_LOG_NAME), 'utf8');
     const lines = out.trim().split('\n');
     for (let i = lines.length - 1; i >= Math.max(0, lines.length - 500); i--) {
       if (lines[i].includes('"alert fired"')) {
@@ -488,15 +499,37 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/open-logs') {
+      // Only meaningful on Mac dev (opens Finder at the log dir). On the
+      // VPS the logs are on the server's filesystem — surface the path
+      // instead of pretending to "open" them.
+      if (!isMac) return sendJson(res, 200, { ok: false, logDir: LOG_DIR, message: `Server logs live at ${LOG_DIR} on the VPS` });
       await exec('/usr/bin/open', [LOG_DIR]);
       return sendJson(res, 200, { ok: true });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/shutdown') {
       const { spawn } = await import('node:child_process');
+      if (isLinux) {
+        // Stop each octave-* systemd unit. Bot last so this response can
+        // still come back before its own service dies.
+        const units = ['octave-signal-engine', 'octave-watchdog', 'octave-tunnel', 'octave-tunnel-watcher', 'octave-webui', 'octave-telegram'];
+        for (const u of units) spawn('systemctl', ['stop', u], { detached: true, stdio: 'ignore' }).unref();
+        return sendJson(res, 200, { ok: true, stopped: units });
+      }
+      // Mac dev — local Octave.app launcher.
       spawn('/Users/jqvier/Desktop/Octave.app/Contents/MacOS/octave', ['shutdown'], {
         detached: true, stdio: 'ignore',
       }).unref();
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/launch-tv') {
+      // Mac-only concept (TradingView Desktop). Stub on Linux to keep the
+      // dashboard from logging UNCAUGHT spawn errors if a stale button or
+      // an old client hits this endpoint.
+      if (!isMac) return sendJson(res, 200, { ok: false, message: 'TradingView Desktop is Mac-only — VPS has no GUI' });
+      const { spawn } = await import('node:child_process');
+      spawn('/usr/bin/open', ['-a', 'TradingView'], { detached: true, stdio: 'ignore' }).unref();
       return sendJson(res, 200, { ok: true });
     }
 

@@ -161,11 +161,23 @@ function tgEscape(s) {
 // regardless of which chat invoked them. Usage: `sendOwner(text)`.
 async function sendOwner(text, opts = {}) { return send(text, { ...opts, ownerOnly: true }); }
 
+// Telegram hard cap is 4096; leave headroom for the truncation marker.
+const TG_MAX_LEN = 4000;
+
 async function send(text, opts = {}) {
   // ownerOnly routes the reply to the owner DM regardless of which chat
   // triggered it. Used for eval/risk commands so friends don't see the
   // owner's account state when they happen to be in the same group.
   const target = opts.ownerOnly ? OWNER_ID : replyTarget();
+  // Long replies (cached backtest, large /summary, etc.) would otherwise
+  // hit Telegram's 4096-char limit and 400. Truncate cleanly at a line
+  // boundary so the Markdown stays balanced.
+  if (typeof text === 'string' && text.length > TG_MAX_LEN) {
+    const slice = text.slice(0, TG_MAX_LEN);
+    const cutAt = slice.lastIndexOf('\n');
+    text = (cutAt > TG_MAX_LEN - 400 ? slice.slice(0, cutAt) : slice)
+      + '\n\n_…(truncated — message exceeded Telegram length cap)_';
+  }
   const body = {
     chat_id: target, text,
     parse_mode: opts.html ? 'HTML' : 'Markdown',
@@ -1674,14 +1686,28 @@ async function cmdShutdown(arg) {
     return send([
       header('⚠️', 'Shutdown'),
       '',
-      'Use `/shutdown confirm` to stop everything:',
-      bullet('alerts service'),
-      bullet('caffeinate (Mac can sleep)'),
-      bullet('TradingView'),
-      bullet('web UI / bot'),
+      'Use `/shutdown confirm` to stop every Octave service:',
+      bullet('signal engine'),
+      bullet('telegram bot'),
+      bullet('dashboard (webui)'),
+      bullet('watchdog'),
+      '',
+      '_You\'ll have to bring services back manually with `systemctl start octave-*` on the VPS._',
     ].join('\n'));
   }
   await send('⏸ Shutting down…');
+  // Linux: stop each systemd unit. The webui unit goes last because it's
+  // serving the dashboard the user may be watching. The bot stops itself
+  // by exiting cleanly after this command via the SIGTERM path.
+  if (process.platform === 'linux') {
+    const units = ['octave-signal-engine', 'octave-watchdog', 'octave-tunnel', 'octave-webui'];
+    for (const u of units) {
+      spawn('systemctl', ['stop', u], { detached: true, stdio: 'ignore' }).unref();
+    }
+    spawn('systemctl', ['stop', 'octave-telegram'], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  // Mac dev path — kept for local debugging only.
   spawn('/Users/jqvier/Desktop/Octave.app/Contents/MacOS/octave', ['shutdown'], { detached: true, stdio: 'ignore' }).unref();
 }
 

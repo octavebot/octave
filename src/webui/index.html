@@ -796,8 +796,11 @@ document.addEventListener('change', async (e) => {
 
 async function openLogs() {
   try {
-    await fetch('/api/open-logs', { method: 'POST' });
-    toast('📂 Opening logs in Finder');
+    const r = await fetch('/api/open-logs', { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (data.ok) { toast('📂 Opening logs in Finder'); return; }
+    // VPS path — server is Linux, no GUI. Show where the logs live.
+    toast(data.message || `Logs at ${data.logDir || '/home/octave/.octave-logs'}`);
   } catch (e) {
     toast('✗ Could not open logs');
   }
@@ -909,8 +912,7 @@ async function runAutoHeal() {
 }
 
 function confirmShutdown() {
-  if (!confirm('Shut down Octave completely?\n\n• Trading alerts service (LaunchAgent)\n• Caffeinate (Mac can sleep again)\n• TradingView Desktop\n• Claude Code processes\n\nClick the Octave icon again to restart.')) return;
-  // Trigger the same shutdown path the Octave.app launcher uses
+  if (!confirm('Shut down Octave completely?\n\n• Signal engine\n• Telegram bot\n• Dashboard\n• Watchdog\n• Tunnel\n\nYou\'ll have to restart manually with systemctl on the VPS.')) return;
   fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
   toast('Shutdown requested…');
 }
@@ -981,13 +983,6 @@ async function restartService(key) {
     else toast(`✓ Restart kicked: ${data.restarted}`);
     setTimeout(fetchServices, 3000);
   } catch (e) { toast(`✗ ${e.message}`); }
-}
-
-async function launchTV() {
-  toast('Launching TradingView…');
-  try {
-    await fetch('/api/launch-tv', { method: 'POST' });
-  } catch (e) { toast('✗ Could not launch TV'); }
 }
 
 // Load the strategy list first so the first render has accurate folders.
