@@ -1338,29 +1338,44 @@ async function runAiChat(userText) {
 
 // ── System ──
 
+// Service name → (linux systemd unit, mac launchd label). Keep in sync with
+// the LINUX_UNITS / MAC_LABELS maps in webui/server.js /api/restart.
 const SERVICE_LABELS = {
-  all:       null,
-  signal:    'com.jqvier.trading-alerts',
-  signals:   'com.jqvier.trading-alerts',
-  bot:       'com.jqvier.octave-telegram',
-  webui:     'com.jqvier.octave-webui',
-  dashboard: 'com.jqvier.octave-webui',
-  watchdog:  'com.jqvier.octave-watchdog',
+  signal:    { linux: 'octave-signal-engine', mac: 'com.jqvier.trading-alerts' },
+  signals:   { linux: 'octave-signal-engine', mac: 'com.jqvier.trading-alerts' },
+  bot:       { linux: 'octave-telegram',      mac: 'com.jqvier.octave-telegram' },
+  telegram:  { linux: 'octave-telegram',      mac: 'com.jqvier.octave-telegram' },
+  webui:     { linux: 'octave-webui',         mac: 'com.jqvier.octave-webui' },
+  dashboard: { linux: 'octave-webui',         mac: 'com.jqvier.octave-webui' },
+  watchdog:  { linux: 'octave-watchdog',      mac: 'com.jqvier.octave-watchdog' },
 };
+
+function restartUnit(unit) {
+  if (process.platform === 'linux') {
+    spawn('systemctl', ['restart', unit.linux], { detached: true, stdio: 'ignore' }).unref();
+  } else {
+    spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${unit.mac}`], { detached: true, stdio: 'ignore' }).unref();
+  }
+}
 
 async function cmdRestart(arg) {
   const key = (arg || 'all').trim().toLowerCase();
   if (key === 'all') {
     await send('🔄 Restarting all services…');
-    for (const label of ['com.jqvier.trading-alerts', 'com.jqvier.octave-telegram', 'com.jqvier.octave-webui', 'com.jqvier.octave-watchdog']) {
-      spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+    // Each entry only restarted once — the map has aliases so dedupe by unit.
+    const seen = new Set();
+    for (const u of Object.values(SERVICE_LABELS)) {
+      const k = u.linux;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      restartUnit(u);
     }
     return setTimeout(cmdHealth, 5000);
   }
-  const label = SERVICE_LABELS[key];
-  if (!label) return send('Unknown service. Try: `/restart all` · `/restart bot` · `/restart signals` · `/restart webui` · `/restart watchdog`');
-  await send(`🔄 Restarting \`${label}\`…`);
-  spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${label}`], { detached: true, stdio: 'ignore' }).unref();
+  const unit = SERVICE_LABELS[key];
+  if (!unit) return send('Unknown service. Try: `/restart all` · `/restart bot` · `/restart signals` · `/restart webui` · `/restart watchdog`');
+  await send(`🔄 Restarting *${key}*…`);
+  restartUnit(unit);
   setTimeout(cmdHealth, 4000);
 }
 
