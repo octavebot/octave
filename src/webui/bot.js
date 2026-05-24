@@ -653,6 +653,11 @@ async function cmdSummary(arg) {
       for (const ln of readFileSync(TRADE_LOG, 'utf8').split('\n').filter(Boolean)) {
         try {
           const t = JSON.parse(ln);
+          // Live rows only. Without this filter /summary stats include
+          // every simulated backtest trade (the file accumulates 25k+ of
+          // those for every /backtest run) — daily_report.js does the
+          // same filter for the same reason.
+          if (t.source !== 'live') continue;
           const ts = Date.parse(t.opened_at || t.ts || '') || 0;
           if (ts >= sinceMs) trades.push(t);
         } catch {}
@@ -1700,7 +1705,9 @@ async function cmdShutdown(arg) {
   // serving the dashboard the user may be watching. The bot stops itself
   // by exiting cleanly after this command via the SIGTERM path.
   if (process.platform === 'linux') {
-    const units = ['octave-signal-engine', 'octave-watchdog', 'octave-tunnel', 'octave-webui'];
+    // Matches the unit list in webui/server.js /api/shutdown — keep these
+    // in sync so bot and dashboard stop the same set.
+    const units = ['octave-signal-engine', 'octave-watchdog', 'octave-tunnel', 'octave-tunnel-watcher', 'octave-webui'];
     for (const u of units) {
       spawn('systemctl', ['stop', u], { detached: true, stdio: 'ignore' }).unref();
     }

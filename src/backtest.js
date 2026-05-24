@@ -26,7 +26,7 @@ import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_s
 import { loadRegistry } from './lib/strategy_registry.js';
 import { nyParts } from './lib/time.js';
 import { get as getRuntimeConfig } from './lib/runtime_config.js';
-import { appendTrade, sessionLabel } from './lib/trade_log.js';
+import { sessionLabel } from './lib/trade_log.js';
 
 function userStrategyEntry(spec) {
   return {
@@ -513,30 +513,11 @@ export async function runBacktest(opts = {}) {
       ? trades.filter((t) => (t.confidence || 0) >= 0.85 && t.win).length / s.aPlusCount
       : 0;
 
-    // Append each trade to the JSONL log in the requested format
-    for (const t of trades) {
-      const meta = INSTRUMENT_META[t.instrument] || { pair: 'UNKNOWN', dollarPerPoint: 1 };
-      appendTrade({
-        strategy: name,
-        instrument: t.instrument,
-        pair: meta.pair,
-        direction: t.direction,
-        entry: t.entry,
-        sl: t.stop,
-        tp: t.t1,
-        risk_reward: t.risk > 0 ? Math.abs(t.t1 - t.entry) / t.risk : null,
-        result_R: t.R,
-        result_dollars: t.R * (t.risk || 0) * meta.dollarPerPoint,
-        result_pips: t.instrument === 'gold' ? Math.round(t.R * (t.risk || 0) * 100) : null,
-        duration_minutes: (t.exitIdx - t.openIdx) * ANCHOR_MIN,
-        session: sessionLabel(t.openTime || 0),
-        outcome: t.win ? 'WIN' : (t.R === 0 ? 'BREAKEVEN' : 'LOSS'),
-        exit_reason: t.exitReason || 'unknown',
-        confidence: t.confidence,
-        opened_at: new Date((t.openTime || 0) * 1000).toISOString(),
-        closed_at: new Date((t.placedTime || t.openTime || 0) * 1000).toISOString(),
-      }, 'backtest');
-    }
+    // Backtest used to also append every simulated trade to trades.jsonl
+    // (the live trade log). That polluted /summary stats (25k backtest sims
+    // dwarfed the handful of live trades) AND caused EACCES spam when the
+    // tune scripts ran as a different user. Backtest results live in the
+    // return value + backtest-cache.json; they don't belong in the live log.
 
     // Per-instrument breakdown so reports can show "LONDON-SWEEP on gold: 8W/3L, nasdaq: 2W/2L".
     s.byInstrument = {};

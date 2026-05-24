@@ -328,6 +328,10 @@ export async function run() {
     reconnectMs: config.reconnectIntervalMs,
     lockSymbol: config.lockSymbol || '(follow active)',
   });
+  // Drop closed setups >7d old + stale-open setups >36h old on startup.
+  // prune() existed in follow_up.js but was never called anywhere — closed
+  // entries accumulated forever in follow-ups.json.
+  try { followUp.prune(); } catch (err) { log.warn('follow-up prune threw', { err: err.message }); }
   while (!stopping) await tick();
   log.info('loop stopped');
 }
