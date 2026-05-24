@@ -707,19 +707,27 @@ export function formatTelegramSummary({ stats, panesSummary, window }, suggestio
 // ---------- CLI ----------
 
 async function sendTelegram(text) {
-  // Read creds from .env (works in both LaunchAgent and manual run contexts)
-  const { readFileSync } = await import('node:fs');
-  let TOKEN = '', CHAT = '';
-  try {
-    const env = Object.fromEntries(
-      readFileSync('/Users/jqvier/.config/trading-alerts/.env', 'utf8')
-        .split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
-    );
-    TOKEN = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
-    CHAT  = env.TELEGRAM_CHAT_ID   || process.env.TELEGRAM_CHAT_ID   || '';
-  } catch {
-    TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-    CHAT  = process.env.TELEGRAM_CHAT_ID || '';
+  // Read creds from .env (works in both LaunchAgent and systemd contexts).
+  // Try common locations; whichever exists wins.
+  const { readFileSync, existsSync } = await import('node:fs');
+  const ENV_CANDIDATES = [
+    process.env.OCTAVE_ENV_FILE,
+    '/home/octave/.config/trading-alerts/.env',
+    process.env.HOME ? `${process.env.HOME}/.config/trading-alerts/.env` : null,
+    '/Users/jqvier/.config/trading-alerts/.env',
+  ].filter(Boolean);
+  let TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+  let CHAT  = process.env.TELEGRAM_CHAT_ID   || '';
+  for (const p of ENV_CANDIDATES) {
+    if (!existsSync(p)) continue;
+    try {
+      const env = Object.fromEntries(
+        readFileSync(p, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
+      );
+      TOKEN = TOKEN || env.TELEGRAM_BOT_TOKEN || '';
+      CHAT  = CHAT  || env.TELEGRAM_CHAT_ID   || '';
+      if (TOKEN && CHAT) break;
+    } catch {}
   }
   if (!TOKEN || !CHAT) {
     console.error('No Telegram creds available');
