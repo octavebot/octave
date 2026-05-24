@@ -16,7 +16,7 @@ export const meta = {
   name: 'VWAP Rejection · Intraday',
   concept: 'HTF-trend-aligned rejection of session VWAP with a confirmation candle',
   window: 'Any session hour',
-  timeframes: ['15', '60'],
+  timeframes: ['15', '60', '1D'],
   defaultEnabled: true,
 };
 
@@ -30,9 +30,10 @@ keeps us on the right side of higher-timeframe flow.
 
 ## Rules
 1. **H1 trend** — H1 close above/below the 50-EMA, EMA sloping the same way.
-2. **Touch** — Bar's wick crosses VWAP, body closes back on the trending side.
-3. **Displacement** — Close ≥ 0.3 × ATR away from VWAP (not lingering on it).
-4. **Confirmation** — Last bar is a pin bar OR engulfing in the trade direction.
+2. **D1 macro (longs only)** — D1 close above the 20-EMA before taking a long. Shorts are symmetric (no D1 gate) because they generalize without it.
+3. **Touch** — Bar's wick crosses VWAP, body closes back on the trending side.
+4. **Displacement** — Close ≥ 0.3 × ATR away from VWAP (not lingering on it).
+5. **Confirmation** — Last bar is a pin bar OR engulfing in the trade direction.
 
 ## Entry
 - Market at trigger close (no retracement limit).
@@ -52,6 +53,7 @@ export function evaluate(ctx) {
   const out = [];
   const tf = ctx.pane('15');
   const tf60 = ctx.pane('60');
+  const dPane = ctx.pane('1D');
   if (!tf?.bars || tf.bars.length < 30) return out;
   if (!tf60?.bars || tf60.bars.length < 55) return out;
 
@@ -61,6 +63,18 @@ export function evaluate(ctx) {
   // defending it. Drop the whole window rather than half-fix it.
   const np = nyParts(ctx.barTime);
   if (np.h >= 12 && np.h < 16) return out;
+
+  // Asymmetric D1 filter — applied to LONGS only. 68d tune split (2026-03
+  // → 2026-05) showed structural long-side weakness: 52%/45% (train/test)
+  // for longs vs 74%/60% for shorts. Shorts ride macro drift, longs fight
+  // it. Require D1 close > 20-EMA before taking a long; shorts unchanged.
+  let dailyUp = false;
+  if (dPane?.bars && dPane.bars.length >= 25) {
+    const d20 = ema(dPane.bars, 20);
+    const d20last = d20[d20.length - 1];
+    const dlast = dPane.bars[dPane.bars.length - 1];
+    if (d20last != null) dailyUp = dlast.close > d20last;
+  }
 
   const bars = tf.bars;
   const sessStart = nyDayStartUnix(ctx.barTime);
@@ -88,7 +102,8 @@ export function evaluate(ctx) {
   if (!trendUp && !trendDown) return out;
 
   // LONG: H1 up + wick crossed VWAP from above + close back above + confirmation
-  if (trendUp && last.low <= vwapVal && last.close > vwapVal + 0.3 * a
+  //       + D1 macro support (asymmetric filter — see comment above)
+  if (trendUp && dailyUp && last.low <= vwapVal && last.close > vwapVal + 0.3 * a
       && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'))) {
     const entry = last.close;
     const stop  = last.low - 0.5 * a;
