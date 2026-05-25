@@ -149,7 +149,10 @@ LA_DIR="$HOME/Library/LaunchAgents"
 mkdir -p "$LA_DIR"
 NODE_BIN="$(command -v node)"
 
-# Agent 1: launch TradingView with CDP at login.
+# Agent 1: persistent watchdog that keeps TradingView running with CDP enabled.
+# KeepAlive=true because the watchdog itself is the long-running process now
+# (the previous one-shot launch wasn't resilient — TV auto-relaunches by macOS
+# without the debug flag silently killed the bridge).
 TV_PLIST="$LA_DIR/com.octave.tv-cdp.plist"
 cat > "$TV_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -163,7 +166,8 @@ cat > "$TV_PLIST" <<EOF
     <string>$REPO_DIR/scripts/launch-tv-cdp.sh</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
   <key>StandardOutPath</key><string>$LOG_DIR/tv-cdp.log</string>
   <key>StandardErrorPath</key><string>$LOG_DIR/tv-cdp.err</string>
 </dict>
