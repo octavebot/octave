@@ -2786,6 +2786,15 @@ async function pollLoop() {
   console.log('[bot] poll loop stopped');
 }
 
+// Initialize creds + strategy maps WITHOUT starting the poll loop. Lets a test
+// harness drive handleUpdate through the real code path (same as start() minus
+// polling), so commands can be exercised exactly as a user would.
+export async function initForTest() {
+  if (!loadCreds()) throw new Error('loadCreds failed — env not found');
+  await loadStrategies();
+  return { CHAT_ID, OWNER_ID };
+}
+
 export async function start() {
   if (!loadCreds()) {
     console.error('[bot] missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — disabled');
