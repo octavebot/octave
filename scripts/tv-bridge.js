@@ -60,7 +60,9 @@ function currentVpsUrl() {
 }
 const SECRET = process.env.TV_BRIDGE_SECRET;
 const POLL_MS = parseInt(process.env.TV_POLL_MS || '3000', 10);
-const BARS_PER_PUSH = parseInt(process.env.TV_BARS_PER_PUSH || '200', 10);
+// 400 5m bars ≈ 33h → 133 aggregated 15m bars, enough for the bias read's
+// ~114-bar volatility-percentile window so bias can run on the TV feed too.
+const BARS_PER_PUSH = parseInt(process.env.TV_BARS_PER_PUSH || '400', 10);
 const BLIND_ALERT_MS = parseInt(process.env.TV_BLIND_ALERT_MS || String(5 * 60 * 1000), 10);
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
@@ -83,6 +85,17 @@ const SYMBOL_TO_ASSET = {
 
 // Lifted from the TradingView MCP — internal path to the in-memory bars buffer.
 const BARS_PATH = 'window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars()';
+const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
+
+// The exact charts the bot needs. The bridge enforces these on every tab so
+// the always-on Mac is fully turn-key — no manual chart setup, and it
+// self-heals if TradingView resets a chart or reopens to a default symbol.
+const REQUIRED = [
+  { symbol: 'MGC1!', asset: 'gold' },
+  { symbol: 'MNQ1!', asset: 'nasdaq' },
+  { symbol: 'MES1!', asset: 'sp' },
+];
+const REQUIRED_TF = '5';
 
 // One CDP client per TV tab; key = CDP target.id
 const clients = new Map();
@@ -150,6 +163,76 @@ async function getTabBars(client, count) {
   `);
 }
 
+async function getTabResolution(client) {
+  try { return String(await evalJS(client, `(function(){ try { return ${CHART_API}.resolution(); } catch(e){ return null; } })()`)); }
+  catch { return null; }
+}
+
+async function setTabSymbol(client, symbol) {
+  await evalJS(client, `
+    (function() {
+      try { ${CHART_API}.setSymbol(${JSON.stringify(symbol)}, {}); return true; } catch(e) { return false; }
+    })()
+  `);
+}
+
+async function setTabResolution(client, tf) {
+  await evalJS(client, `
+    (function() {
+      try { ${CHART_API}.setResolution(${JSON.stringify(tf)}, {}); return true; } catch(e) { return false; }
+    })()
+  `);
+}
+
+// Make the open tabs show exactly the symbols the bot needs, each at 5m. This
+// is what makes the Mac turn-key: the user never has to set up charts, and if
+// TradingView reopens to a default chart after an update/restart, the bridge
+// fixes it within one cycle. Strategy: figure out which required symbols are
+// already covered, then assign each missing one to a tab that isn't showing a
+// required symbol. Tabs are matched by CDP target id (stable within a session).
+async function ensureCharts(targets) {
+  // Read current symbol per target.
+  const state = [];
+  for (const t of targets) {
+    let client;
+    try { client = await connectTarget(t); } catch { continue; }
+    const symbol = await getTabSymbol(client);
+    const base = (symbol || '').split(':').pop();
+    state.push({ target: t, client, base });
+  }
+  if (!state.length) return;
+
+  const covered = new Set(state.map((s) => s.base).filter((b) => REQUIRED.some((r) => r.symbol === b)));
+  const missing = REQUIRED.filter((r) => !covered.has(r.symbol));
+  // Tabs not already showing a required symbol are free to reassign.
+  const freeTabs = state.filter((s) => !REQUIRED.some((r) => r.symbol === s.base));
+
+  for (const req of missing) {
+    const tab = freeTabs.shift();
+    if (!tab) {
+      errlog(`cannot place ${req.symbol} — only ${state.length} TV tab(s) open, need ${REQUIRED.length}. Open more tabs in TradingView.`);
+      continue;
+    }
+    log(`setting a tab to ${req.symbol} @ ${REQUIRED_TF}m (was ${tab.base || 'unknown'})`);
+    try {
+      await setTabSymbol(tab.client, req.symbol);
+      await new Promise((r) => setTimeout(r, 800));
+      await setTabResolution(tab.client, REQUIRED_TF);
+      tab.base = req.symbol;
+    } catch (err) { errlog(`failed to set ${req.symbol}:`, err.message); }
+  }
+
+  // Ensure every required tab is on the 5m timeframe.
+  for (const s of state) {
+    if (!REQUIRED.some((r) => r.symbol === s.base)) continue;
+    const tf = await getTabResolution(s.client);
+    if (tf !== REQUIRED_TF) {
+      log(`fixing ${s.base} timeframe ${tf} → ${REQUIRED_TF}m`);
+      try { await setTabResolution(s.client, REQUIRED_TF); } catch {}
+    }
+  }
+}
+
 // 5m → 15m aggregation, bucket-aligned to the 15-minute UTC wall clock so it
 // matches Yahoo's / Databento's bar boundaries (and the existing strategies).
 function aggregate(bars, bucketSec) {
@@ -202,9 +285,19 @@ async function sendBlindAlert(reason) {
   } catch (err) { errlog('blind alert post failed:', err.message); }
 }
 
+let lastEnsureAt = 0;
+const ENSURE_EVERY_MS = 30 * 1000;
+
 async function cycle() {
   const targets = await listTargets();
   if (!targets.length) throw new Error('no TradingView CDP targets — is TV running with --remote-debugging-port=9222 and a chart open?');
+
+  // Periodically enforce the required charts so the Mac stays turn-key without
+  // hammering CDP on every 3s tick.
+  if (Date.now() - lastEnsureAt > ENSURE_EVERY_MS) {
+    try { await ensureCharts(targets); } catch (err) { errlog('ensureCharts failed:', err.message); }
+    lastEnsureAt = Date.now();
+  }
 
   const bars5mByAsset = {};
   for (const target of targets) {
