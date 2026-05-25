@@ -158,6 +158,153 @@ export async function fetchBiasPanes() {
   return inflightBias.then((m) => (m ? new Map(m) : null));
 }
 
+// ─── Real-time futures-accurate quotes ──────────────────────────────────────
+// For price DISPLAY commands (/price, /session). Yahoo gives the exact futures
+// price the user trades but freezes when CME is closed; OANDA spot stays live
+// but sits a basis below the future. So: use Yahoo's futures quote while it's
+// fresh, and when it's frozen, estimate the live future as OANDA spot + the
+// measured futures-vs-spot basis (median over recent overlapping 15m bars) so
+// the number still tick-matches the user's TradingView futures chart.
+const QUOTE_INSTRUMENTS = [
+  { key: 'gold',   yh: 'MGC=F', sym: 'MGC1!', label: 'Micro Gold' },
+  { key: 'nasdaq', yh: 'MNQ=F', sym: 'MNQ1!', label: 'Micro Nasdaq' },
+  { key: 'sp',     yh: 'MES=F', sym: 'MES1!', label: 'Micro S&P' },
+];
+// Yahoo's futures quote is "live" only if its last actual BAR is recent.
+// NOTE: meta.regularMarketTime keeps ticking even when CME is closed (it's the
+// poll time, not the last trade), so it can't gauge freshness — the last bar's
+// timestamp can. 25min ≈ 1.6× the 15m bar so an open in-progress bar still
+// reads fresh, but a frozen weekend/overnight feed (hours/days old) does not.
+const FUTURES_FRESH_MS = 25 * 60 * 1000;
+
+// Last good basis per instrument — reused if a transient Yahoo failure means we
+// can't measure it this call, so the estimate stays accurate instead of blanking.
+const lastBasis = {};
+// Short result cache so rapid /price + /session presses don't hammer Yahoo.
+let quoteCache = { at: 0, map: null };
+const QUOTE_TTL_MS = 10 * 1000;
+
+function median(nums) {
+  if (!nums.length) return null;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+async function fetchYahooQuote(yh) {
+  // 15m/5d gives both the live meta (price/prevClose/time) and enough bars to
+  // overlap with OANDA for the basis measurement, in one request.
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yh)}?interval=15m&range=5d&includePrePost=false`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 OctaveBot' } });
+  if (!res.ok) throw new Error(`Yahoo quote ${yh}: HTTP ${res.status}`);
+  const data = await res.json();
+  const r = data?.chart?.result?.[0];
+  const meta = r?.meta || null;
+  const ts = r?.timestamp || [];
+  const q = r?.indicators?.quote?.[0] || {};
+  const bars = [];
+  for (let i = 0; i < ts.length; i++) {
+    const c = q.close?.[i];
+    if (c == null) continue;
+    bars.push({ time: ts[i], close: +c });
+  }
+  return { meta, bars };
+}
+
+/**
+ * Real-time, futures-accurate price per instrument for display commands.
+ * @returns {Promise<Map<string, {
+ *   sym, label, price, change, changePct, source, estimated, basis,
+ *   stale, ageMs, asOfMs }>>}
+ *   - source 'yahoo'        → live futures print (exact)
+ *   - source 'oanda+basis'  → estimated future = OANDA spot + basis (market closed)
+ *   - source 'yahoo-stale'  → OANDA unavailable, last futures print (flagged stale)
+ */
+export async function getLiveFuturesQuotes() {
+  if (quoteCache.map && (Date.now() - quoteCache.at) < QUOTE_TTL_MS) {
+    return new Map(quoteCache.map);
+  }
+  const biasPanes = await fetchBiasPanes().catch(() => null);
+  const now = Date.now();
+  const out = new Map();
+
+  await Promise.all(QUOTE_INSTRUMENTS.map(async (inst) => {
+    let yMeta = null, yBars = [];
+    try { ({ meta: yMeta, bars: yBars } = await fetchYahooQuote(inst.yh)); }
+    catch { /* Yahoo may rate-limit; OANDA path below still works */ }
+
+    // OANDA: freshest spot from M1 (≈1min), plus 15m bars (shared cache) for
+    // basis. If M1 fails, fall back to the last 15m bar as the spot price.
+    let oM1Last = null, oM15 = [];
+    try {
+      const m1 = await fetchOandaBars(inst.key, '1', 1);
+      oM1Last = m1?.bars?.length ? m1.bars[m1.bars.length - 1] : null;
+    } catch { /* no-op */ }
+    oM15 = biasPanes?.get(`${inst.key}|15`)?.bars || [];
+    const oSpot = oM1Last || (oM15.length ? oM15[oM15.length - 1] : null);
+
+    // Basis = median(yahoo futures close − oanda spot close) over overlapping 15m
+    // bars. If we can't measure it this call (e.g. Yahoo rate-limited), reuse the
+    // last good basis so the estimate stays accurate rather than disappearing.
+    let basis = null;
+    if (yBars.length && oM15.length) {
+      const oMap = new Map(oM15.map((b) => [b.time, b.close]));
+      const diffs = [];
+      for (const b of yBars.slice(-16)) {
+        const o = oMap.get(b.time);
+        if (o != null) diffs.push(b.close - o);
+      }
+      basis = median(diffs);
+    }
+    if (basis != null) lastBasis[inst.key] = basis;
+    else if (lastBasis[inst.key] != null) basis = lastBasis[inst.key];
+
+    // Freshness from the last real BAR, not meta.regularMarketTime (see note above).
+    const yBarTimeMs = yBars.length ? yBars[yBars.length - 1].time * 1000 : null;
+    const yFresh = yBarTimeMs != null && (now - yBarTimeMs) < FUTURES_FRESH_MS;
+    const prevClose = yMeta?.chartPreviousClose ?? null;
+    const yLivePrice = yMeta?.regularMarketPrice ?? (yBars.length ? yBars[yBars.length - 1].close : null);
+
+    let entry = null;
+    if (yFresh && yLivePrice != null) {
+      entry = {
+        price: yLivePrice,
+        change: prevClose != null ? yLivePrice - prevClose : null,
+        source: 'yahoo', estimated: false, basis: null,
+        stale: false, ageMs: now - yBarTimeMs, asOfMs: yBarTimeMs,
+      };
+    } else if (oSpot && basis != null) {
+      const price = oSpot.close + basis;
+      const oAgeMs = now - oSpot.time * 1000;
+      // Reference the last actual futures close (Yahoo's frozen tail) so the
+      // change reads as "move since CME closed", not a multi-day span vs the
+      // prior daily settlement.
+      const lastFutClose = yBars.length ? yBars[yBars.length - 1].close : prevClose;
+      entry = {
+        price,
+        change: lastFutClose != null ? price - lastFutClose : null,
+        source: 'oanda+basis', estimated: true, basis,
+        // OANDA is live, so this is NOT stale even though Yahoo is frozen.
+        stale: false, ageMs: oAgeMs, asOfMs: oSpot.time * 1000,
+      };
+    } else if (yLivePrice != null) {
+      entry = {
+        price: yLivePrice,
+        change: prevClose != null ? yLivePrice - prevClose : null,
+        source: 'yahoo-stale', estimated: false, basis: null,
+        stale: true, ageMs: yBarTimeMs != null ? now - yBarTimeMs : null, asOfMs: yBarTimeMs,
+      };
+    }
+    if (!entry) return;
+    entry.changePct = (entry.change != null && entry.price - entry.change !== 0)
+      ? (entry.change / (entry.price - entry.change)) * 100 : null;
+    out.set(inst.key, { sym: inst.sym, label: inst.label, ...entry });
+  }));
+
+  if (out.size) quoteCache = { at: Date.now(), map: out };
+  return new Map(out);
+}
+
 // ─── Higher-TF synthesis ──────────────────────────────────────────────────
 
 const INSTRUMENTS_FOR_SYNTH = ['gold', 'nasdaq', 'sp'];

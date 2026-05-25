@@ -292,7 +292,10 @@ async function buildRegimeSnapshot() {
   // cloud_data_supplement already does.
   try {
     const cd = await import('./cloud_data_supplement.js');
-    const panes = await cd.fetchAllPanes();
+    // Prefer OANDA's real-time feed (Yahoo freezes overnight/weekends/holidays
+    // and would classify a frozen market). Regime is directional, so OANDA
+    // spot is fine. Fall back to Yahoo panes if OANDA is unavailable.
+    const panes = (await cd.fetchBiasPanes().catch(() => null)) || await cd.fetchAllPanes();
     const lines = [];
     for (const inst of ['gold', 'nasdaq', 'sp']) {
       const p60 = panes.get(`${inst}|60`);

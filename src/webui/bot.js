@@ -513,43 +513,67 @@ async function cmdPerf() {
 
 async function cmdSession() {
   const session = readJson(SESSION_FILE, { lastSession: null });
-  const hb = readJson(HEARTBEAT_FILE, null);
   const s = (session.lastSession || 'closed').toUpperCase().replace(/_/g, ' ');
   const open = s !== 'CLOSED' && s !== '—';
+
+  // Live, futures-accurate gold price (Yahoo when fresh, else OANDA spot+basis).
+  let goldLine = '';
+  try {
+    const { getLiveFuturesQuotes } = await import('../lib/cloud_data_supplement.js');
+    const g = (await getLiveFuturesQuotes()).get('gold');
+    if (g) {
+      const tag = g.source === 'oanda+basis' ? ' _(est.)_' : g.stale ? ' _(stale)_' : '';
+      goldLine = `Gold: $${g.price.toFixed(2)}${tag}`;
+    } else {
+      const hb = readJson(HEARTBEAT_FILE, null);
+      goldLine = hb?.anchor ? `Gold: $${Number(hb.anchor.close).toFixed(2)} _(last known)_` : '';
+    }
+  } catch { /* leave goldLine blank */ }
+
   await send([
     header(open ? '🟢' : '⚫', `${s} session`),
     `NY time: ${nyHHmm(Date.now())}`,
-    hb?.anchor ? `Gold: $${Number(hb.anchor.close).toFixed(2)}` : '',
+    goldLine,
   ].filter(Boolean).join('\n'));
 }
 
 async function cmdPrice() {
-  const INSTRUMENTS = [
-    { sym: 'MGC1!', yh: 'MGC%3DF', label: 'Micro Gold' },
-    { sym: 'MNQ1!', yh: 'MNQ%3DF', label: 'Micro Nasdaq' },
-    { sym: 'MES1!', yh: 'MES%3DF', label: 'Micro S&P' },
-  ];
+  const { getLiveFuturesQuotes } = await import('../lib/cloud_data_supplement.js');
   const sign = (n) => n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2);
-  const fetches = await Promise.all(INSTRUMENTS.map(async (i) => {
-    try {
-      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${i.yh}?interval=1m&range=1d`,
-        { headers: { 'User-Agent': 'Mozilla/5.0' } });
-      const data = await res.json().catch(() => null);
-      const meta = data?.chart?.result?.[0]?.meta;
-      if (!meta) return { ...i, ok: false };
-      return { ...i, ok: true, price: meta.regularMarketPrice,
-               change: meta.regularMarketPrice - meta.chartPreviousClose };
-    } catch { return { ...i, ok: false }; }
-  }));
+  let quotes;
+  try { quotes = await getLiveFuturesQuotes(); }
+  catch { quotes = new Map(); }
 
+  const ORDER = ['gold', 'nasdaq', 'sp'];
+  const FALLBACK = {
+    gold:   { sym: 'MGC1!', label: 'Micro Gold' },
+    nasdaq: { sym: 'MNQ1!', label: 'Micro Nasdaq' },
+    sp:     { sym: 'MES1!', label: 'Micro S&P' },
+  };
+  let anyEst = false, anyStale = false;
   const lines = [header('💰', 'Live prices'), ''];
-  for (const r of fetches) {
-    if (!r.ok) { lines.push(`${r.label} \`${r.sym}\` · _no data_`); continue; }
-    const pct = (r.change / (r.price - r.change)) * 100;
-    const dot = r.change >= 0 ? '🟢' : '🔴';
-    lines.push(`${dot} *${r.label}* \`${r.sym}\` · *$${r.price.toFixed(2)}* · ${sign(r.change)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`);
+  for (const key of ORDER) {
+    const q = quotes.get(key);
+    if (!q) { const f = FALLBACK[key]; lines.push(`*${f.label}* \`${f.sym}\` · _no data_`); continue; }
+    const dot = q.stale ? '🕒' : (q.change == null ? '⚪' : q.change >= 0 ? '🟢' : '🔴');
+    const chg = q.change != null
+      ? ` · ${sign(q.change)}${q.changePct != null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}%)` : ''}`
+      : '';
+    let tag = '';
+    if (q.source === 'oanda+basis') { anyEst = true; tag = ' · _est. (spot+basis)_'; }
+    else if (q.stale) { anyStale = true; tag = ' · _stale_'; }
+    lines.push(`${dot} *${q.label}* \`${q.sym}\` · *$${q.price.toFixed(2)}*${chg}${tag}`);
   }
-  lines.push('', '_Source: Yahoo (tick-matches TradingView micro-futures)._');
+  lines.push('');
+  if (quotes.size === 0) {
+    lines.push('_All price feeds unavailable right now — try again shortly._');
+  } else if (anyEst) {
+    lines.push('_Live futures estimated from OANDA spot + measured basis (CME closed). Tick-matches your TradingView futures within a few pts._');
+  } else if (anyStale) {
+    lines.push('_⚠️ Yahoo feed frozen and OANDA unavailable — prices are last-known, not live._');
+  } else {
+    lines.push('_Source: Yahoo (tick-matches TradingView micro-futures)._');
+  }
   await send(lines.join('\n'));
 }
 
