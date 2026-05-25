@@ -30,16 +30,19 @@ function loadCreds() {
   // Read the .env FILE first — it is the live source of truth. process.env
   // can hold a stale token from a systemd EnvironmentFile loaded at an old
   // start time (this is exactly what sent URLs to the retired bot).
+  // Dashboard URL refresh goes to the OWNER DM only — the group doesn't need
+  // to see infra noise; the owner is the only one who'd actually open it.
   try {
     const env = Object.fromEntries(
       readFileSync(ENV_FILE, 'utf8').split('\n').filter((l) => l.includes('=')).map((l) => l.split('=', 2))
     );
     const token = (env.TELEGRAM_BOT_TOKEN || '').trim();
-    const chat = (env.TELEGRAM_CHAT_ID || '').trim();
+    const chat = (env.OCTAVE_OWNER_CHAT_ID || env.OCTAVE_OWNER_ID || '').trim();
     if (token && chat) return { token, chat };
   } catch {}
-  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-    return { token: process.env.TELEGRAM_BOT_TOKEN, chat: process.env.TELEGRAM_CHAT_ID };
+  const envChat = process.env.OCTAVE_OWNER_CHAT_ID || process.env.OCTAVE_OWNER_ID;
+  if (process.env.TELEGRAM_BOT_TOKEN && envChat) {
+    return { token: process.env.TELEGRAM_BOT_TOKEN, chat: envChat };
   }
   return { token: null, chat: null };
 }
