@@ -59,9 +59,9 @@ declare -A UNIT_FOR_PATH=(
   # webui, bot), so any change in those dirs needs to restart all of them —
   # otherwise the shared on-disk state (e.g. tv_bars.json) and the in-memory
   # code drift apart between processes.
-  ["src/lib/"]="octave-signal-engine octave-webui octave-bot"
-  ["src/cloud/"]="octave-signal-engine octave-webui octave-bot"
-  ["src/webui/bot.js"]="octave-bot"
+  ["src/lib/"]="octave-signal-engine octave-webui octave-telegram"
+  ["src/cloud/"]="octave-signal-engine octave-webui octave-telegram"
+  ["src/webui/bot.js"]="octave-telegram"
   ["src/webui/server.js"]="octave-webui"
   ["src/webui/index.html"]="octave-webui"
   ["scripts/watchdog.js"]="octave-watchdog"
