@@ -22,6 +22,7 @@
 
 import { fetchBars as fetchYahoo } from './cloud/yahoo.js';
 import { fetchAll as fetchOandaAll, isConfigured as oandaConfigured } from './cloud/oanda.js';
+import { fetchAllForBacktest as fetchDatabentoBacktest, isConfigured as databentoConfigured } from './cloud/databento.js';
 import { evaluateUserStrategies, list as listUserStrategies } from './lib/user_strategies.js';
 import { loadRegistry } from './lib/strategy_registry.js';
 import { nyParts } from './lib/time.js';
@@ -75,18 +76,33 @@ async function fetchAllPanes(targetDays = 0) {
       if (pane?.bars?.length) map.set(`${asset}|${tf}`, pane);
     } catch {}
   }));
+  // Databento = authoritative DEEP CME tape for the traded micros: real futures
+  // bars (no spot-vs-futures basis), no Yahoo 60-day intraday cap. Overrides the
+  // gold/nasdaq/sp 15m/60m/1D panes outright; silver/dxy stay on Yahoo(+OANDA).
+  if (databentoConfigured()) {
+    try {
+      const db = await fetchDatabentoBacktest(targetDays || 30);
+      for (const [key, pane] of db) {
+        if (pane?.bars?.length) map.set(key, pane);
+      }
+    } catch (err) {
+      console.error('[backtest] databento deep fetch failed, using yahoo/oanda:', err?.message || err);
+    }
+  }
   // OANDA extension — if targetDays exceeds Yahoo's 15m cap (~71 days) AND
   // OANDA is configured, fetch deep history and merge backward into the panes.
-  // OANDA covers gold + silver always; nasdaq/sp depend on account type.
+  // OANDA covers gold + silver always; nasdaq/sp depend on account type. Skip
+  // any pane Databento already supplied (its CME history is authoritative).
   if (targetDays > 71 && oandaConfigured()) {
-    const oandaRequests = PANE_REQUESTS.filter(([asset]) => asset !== 'dxy');
+    const oandaRequests = PANE_REQUESTS.filter(([asset, tf]) =>
+      asset !== 'dxy' && map.get(`${asset}|${tf}`)?.source !== 'databento');
     const oanda = await fetchOandaAll(oandaRequests, { targetDays }).catch(() => new Map());
     for (const [key, op] of oanda) {
       const yp = map.get(key);
       if (!yp?.bars?.length) { map.set(key, op); continue; }
       const yEarliest = yp.bars[0].time;
       const merged = [...op.bars.filter((b) => b.time < yEarliest), ...yp.bars];
-      map.set(key, { ...yp, bars: merged, source: 'yahoo+oanda', barCount: merged.length });
+      map.set(key, { ...yp, bars: merged, source: `${yp.source || 'yahoo'}+oanda`, barCount: merged.length });
     }
   }
   return map;
