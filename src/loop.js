@@ -147,8 +147,16 @@ async function tick() {
         log.warn('holy_ai scoreSetup threw', { setupId: r.setupId, err: err.message });
       }
     }
-    const aiGated = isTelegramWorthy && aiScore?.aiEnabled && aiScore.adjusted_confidence < aiCfg.threshold;
-    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !aiGated;
+    // Gate on the strategy's BASE confidence (win-rate-derived qualityConfidence),
+    // which is DATA-VALIDATED: a 1-year backtest shows base conf <0.55 is net
+    // NEGATIVE (−6R) while ≥0.55 is +690R. The AI's LLM re-score stays ADVISORY
+    // (shown on the card as a read of the setup) but no longer GATES — it was
+    // killing good base-confidence setups (e.g. EMA-CROSS base 0.68 slashed to
+    // 0.34 "low conviction in range") and, unlike base confidence, the LLM
+    // adjustment isn't validated against actual outcomes.
+    const baseConf = r.confidence ?? 0;
+    const confGated = isTelegramWorthy && baseConf < aiCfg.threshold;
+    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !confGated;
 
     // Mark BEFORE sending, then roll back on failure (avoids dup spam if send is slow)
     dedup.add(key, { strategy: r.strategy, status: r.status });
@@ -176,12 +184,11 @@ async function tick() {
         log.warn('alerter send threw', { err: err.message });
         ok = false;
       }
-    } else if (aiGated) {
-      log.info('alert ai-gated', {
+    } else if (confGated) {
+      log.info('alert conf-gated', {
         strategy: r.strategy, setupId: r.setupId,
-        originalConfidence: r.confidence, aiScore: aiScore.score,
-        adjustedConfidence: aiScore.adjusted_confidence, threshold: aiCfg.threshold,
-        reasoning: aiScore.reasoning,
+        confidence: baseConf, threshold: aiCfg.threshold,
+        aiRead: aiScore?.reasoning,  // advisory only — does not gate
       });
     }
     if (!ok) {
@@ -190,7 +197,9 @@ async function tick() {
     } else {
       const tgState = !isTelegramWorthy
         ? 'skipped (not triggered)'
-        : suppressTelegram ? 'suppressed (cloud active / muted)' : 'sent';
+        : confGated ? 'gated (low confidence)'
+        : suppressTelegram ? 'suppressed (muted)'
+        : 'sent';
       log.info('alert fired', {
         strategy: r.strategy, status: r.status, setupId: r.setupId, confidence: r.confidence,
         telegram: tgState,

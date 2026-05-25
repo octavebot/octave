@@ -1156,8 +1156,11 @@ async function cmdActiveSetups() {
   try { const fu = await import('../lib/follow_up.js'); open = fu.active(); } catch {}
 
   const todayKey = nyDateKey(Date.now());
+  // Only count signals actually DELIVERED to Telegram (telegram:'sent') — a
+  // setup that triggered but was confidence-gated or muted was NOT sent to the
+  // user, so listing it under "Signals fired today" was misleading.
   const fired = readAlerts({ limit: 200 })
-    .filter((a) => a.status === 'triggered' && nyDateKey(a.time) === todayKey);
+    .filter((a) => a.status === 'triggered' && a.telegram === 'sent' && nyDateKey(a.time) === todayKey);
 
   // Live precheck — what each strategy is watching RIGHT NOW. The signal
   // engine re-stamps this every tick (3s) so a stale read just means the

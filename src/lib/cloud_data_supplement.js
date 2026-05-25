@@ -91,6 +91,30 @@ export async function fetchAllPanes() {
           for (const [key, p] of tv) {
             if (p?.bars?.length) panes.set(key, p);
           }
+          // Rebuild the micros' 60m + 1D from the live TV 15m. Yahoo's frozen
+          // micro-futures HTF bars carry a RECENT timestamp with a STALE price,
+          // so the generic time-based synth below can't tell they're stale and
+          // won't replace them — leaving the H1/D1 trend filters reading
+          // Friday's close while the 15m is live. Here we keep Yahoo's DEEP
+          // history (needed for the daily 20-EMA etc.) and splice the live TV
+          // tail on top: deep[time < tvTail[0]] + aggregate(TV 15m).
+          for (const inst of ['gold', 'nasdaq', 'sp']) {
+            const tv15 = panes.get(`${inst}|15`);
+            if (tv15?.source !== 'tradingview' || !tv15.bars?.length) continue;
+            for (const { tf, bucketSec, daily } of [{ tf: '60', bucketSec: 3600 }, { tf: '1D', daily: true }]) {
+              const tail = daily ? aggregateToDaily(tv15.bars, -Infinity)
+                                 : aggregateToBucket(tv15.bars, bucketSec, -Infinity, 900);
+              if (!tail.length) continue;
+              const deep = panes.get(`${inst}|${tf}`);
+              const cutoff = tail[0].time;
+              const history = (deep?.bars || []).filter((b) => b.time < cutoff);
+              panes.set(`${inst}|${tf}`, {
+                symbol: tv15.symbol, resolution: tf,
+                bars: history.concat(tail), source: 'tradingview+htf',
+                barCount: history.length + tail.length,
+              });
+            }
+          }
         } catch (err) {
           console.error('[cloud-data] tradingview overlay failed:', err?.message || err);
         }
