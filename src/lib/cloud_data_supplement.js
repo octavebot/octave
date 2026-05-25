@@ -109,7 +109,14 @@ export async function fetchAllPanes() {
       // the bridge is alive, otherwise yahoo).
       const sources = {};
       for (const [, p] of panes) sources[p.source || 'yahoo'] = (sources[p.source || 'yahoo'] || 0) + 1;
-      const dominantSource = Object.entries(sources).sort((a, b) => b[1] - a[1])[0]?.[0] || 'yahoo';
+      // Headline label = the feed driving LIVE SIGNALS, i.e. the traded micros'
+      // 15m execution pane — not a raw pane-count vote (which the yahoo-only
+      // 1m/1D/silver/dxy context panes would always win). If the micros' 15m is
+      // TradingView, the bot is on real-time; that's what the user cares about.
+      const execSrc = (panes.get('gold|15')?.source || '').startsWith('tradingview')
+        ? 'tradingview'
+        : (Object.entries(sources).sort((a, b) => b[1] - a[1])[0]?.[0] || 'yahoo');
+      const dominantSource = execSrc;
       heartbeat('market-data', {
         pane_count: panes.size,
         source: dominantSource,
