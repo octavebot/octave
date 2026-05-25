@@ -19,10 +19,42 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beat as heartbeat } from './heartbeat.js';
 
-// In-memory: key → { symbol, resolution, bars, lastPushAt }
-const CACHE = new Map();
+// Cache lives on DISK, not in memory: the webui service receives the bridge
+// push and writes the file; the signal-engine service reads it. Separate
+// processes can't share a Map, so this is the simplest cross-process sync
+// (vs UNIX sockets or an embedded HTTP call between services).
+const STATE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'tv_bars.json');
+
+// In-process parse cache keyed by file mtime so the 3s detector loop doesn't
+// re-parse the JSON on every read — only when the bridge actually pushed.
+let memCache = { mtimeMs: 0, panes: new Map() };
+
+function loadFromDisk() {
+  try {
+    const st = statSync(STATE_FILE);
+    if (st.mtimeMs === memCache.mtimeMs) return memCache.panes;
+    const obj = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+    const panes = new Map(Object.entries(obj));
+    memCache = { mtimeMs: st.mtimeMs, panes };
+    return panes;
+  } catch { return new Map(); }
+}
+
+function saveToDisk(panes) {
+  try {
+    mkdirSync(dirname(STATE_FILE), { recursive: true });
+    const tmp = STATE_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(panes)));
+    renameSync(tmp, STATE_FILE); // atomic on POSIX so readers never see a half-written file
+  } catch (err) {
+    console.error('[tv_ingest] persist failed:', err?.message || err);
+  }
+}
 
 // Reject any push whose timestamp is more than this far from server now —
 // stops replay of a captured POST and also tells us the bridge clock is bad.
@@ -75,6 +107,7 @@ export function verifyPush(bodyText, timestamp, signature) {
 export function ingest(payload) {
   if (!payload || typeof payload.bars !== 'object') return { accepted: 0, keys: [] };
   const now = Date.now();
+  const panes = loadFromDisk(); // start from existing on-disk state so a sparse push doesn't blow away other panes
   const keys = [];
   for (const [key, pane] of Object.entries(payload.bars)) {
     if (!pane || !Array.isArray(pane.bars) || !pane.bars.length) continue;
@@ -91,7 +124,7 @@ export function ingest(payload) {
       bars.push({ time, open, high, low, close, volume });
     }
     if (!bars.length) continue;
-    CACHE.set(key, {
+    panes.set(key, {
       symbol: pane.symbol || key.split('|')[0],
       resolution: pane.resolution || key.split('|')[1],
       bars,
@@ -100,10 +133,11 @@ export function ingest(payload) {
     keys.push(key);
   }
   if (keys.length) {
+    saveToDisk(panes);
     heartbeat('tv-bridge', {
       keys: keys.length,
       last_push_at: now,
-      bars_total: keys.reduce((a, k) => a + (CACHE.get(k)?.bars.length || 0), 0),
+      bars_total: keys.reduce((a, k) => a + (panes.get(k)?.bars.length || 0), 0),
     });
   }
   return { accepted: keys.length, keys };
@@ -111,7 +145,8 @@ export function ingest(payload) {
 
 /** Read a single pane from the cache, or null if absent / stale. */
 export function getPane(asset, tf) {
-  const entry = CACHE.get(`${asset}|${tf}`);
+  const panes = loadFromDisk();
+  const entry = panes.get(`${asset}|${tf}`);
   if (!entry) return null;
   if (Date.now() - entry.lastPushAt > FRESH_WINDOW_MS) return null;
   return entry;
@@ -119,15 +154,16 @@ export function getPane(asset, tf) {
 
 /** Snapshot of cache health for the bot's /diagnose and webui dashboard. */
 export function status() {
+  const panes = loadFromDisk();
   const now = Date.now();
-  const panes = [];
-  for (const [key, entry] of CACHE) {
-    panes.push({
+  const out = [];
+  for (const [key, entry] of panes) {
+    out.push({
       key,
       bars: entry.bars.length,
       lastPushAgeMs: now - entry.lastPushAt,
       fresh: (now - entry.lastPushAt) <= FRESH_WINDOW_MS,
     });
   }
-  return { paneCount: panes.length, anyFresh: panes.some((p) => p.fresh), panes };
+  return { paneCount: out.length, anyFresh: out.some((p) => p.fresh), panes: out };
 }

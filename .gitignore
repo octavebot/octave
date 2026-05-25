@@ -25,6 +25,7 @@ src/state/user-strategies.json
 src/state/trade-journal.jsonl
 /src/state/backtest-cache.json
 /src/state/databento-cache/
+/src/state/tv_bars.json
 /src/state/last-bias.json
 /src/state/last-detect.json
 /src/state/accounts.json
