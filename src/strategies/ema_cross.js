@@ -166,12 +166,12 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'H1 50-EMA trend', met: !!direction, value: direction ? `${direction === 'LONG' ? 'above' : 'below'} (${ema50last.toFixed(2)})` : 'flat' },
-      { label: 'Tape alive', met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
-      { label: '9/21 EMAs stacked with trend', met: stackAligned, value: `9=${e9now.toFixed(2)} 21=${e21now.toFixed(2)}` },
-      { label: 'Cross on this bar', met: crossOnBar, value: crossOnBar ? 'YES' : 'no fresh cross' },
-      { label: 'Body in cross direction', met: bodyAlign, value: bodyAlign ? 'ok' : 'wrong way' },
-      ...(ctx.instrument === 'gold' ? [{ label: 'Gold separation gate', met: goldSepOK, value: `sep ${Math.abs(e9now - e21now).toFixed(2)}` }] : []),
+      { kind: 'gate',    label: 'H1 50-EMA trend',                 met: !!direction, value: direction ? `${direction === 'LONG' ? 'above' : 'below'} (${ema50last.toFixed(2)})` : 'flat' },
+      { kind: 'gate',    label: 'Tape alive',                      met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
+      { kind: 'gate',    label: '9/21 EMAs stacked with trend',    met: stackAligned, value: `9=${e9now.toFixed(2)} 21=${e21now.toFixed(2)}` },
+      { kind: 'trigger', label: 'Cross on this bar',               met: crossOnBar, value: crossOnBar ? 'YES' : 'no fresh cross' },
+      { kind: 'trigger', label: 'Body in cross direction',         met: bodyAlign, value: bodyAlign ? 'ok' : 'wrong way' },
+      ...(ctx.instrument === 'gold' ? [{ kind: 'gate', label: 'Gold separation gate', met: goldSepOK, value: `sep ${Math.abs(e9now - e21now).toFixed(2)}` }] : []),
     ],
   };
 }

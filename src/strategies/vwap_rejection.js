@@ -186,12 +186,12 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'Not NY-PM (12:00–16:00 ET skip)', met: !skipPM, value: skipPM ? 'in skip window' : 'ok' },
-      { label: 'H1 trend defined', met: !!direction, value: direction || 'flat' },
-      { label: 'D1 macro support (longs only)', met: !trendUp || dailyUp, value: trendUp ? (dailyUp ? 'D1 above 20-EMA' : 'D1 below — blocks long') : 'n/a' },
-      { label: 'Tape alive (15m ATR ≥ 0.4×H1)', met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
-      { label: 'Wick touched VWAP', met: longTouch || shortTouch, value: vwapVal != null ? `VWAP ${vwapVal.toFixed(2)} · close ${last.close.toFixed(2)}` : 'no VWAP yet' },
-      { label: 'Pin / engulfing confirmation', met: rejBull || rejBear, value: rejBull ? 'bullish reject' : rejBear ? 'bearish reject' : 'no reject candle' },
+      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: skipPM ? 'in skip window' : 'ok' },
+      { kind: 'gate',    label: 'H1 trend defined',                 met: !!direction, value: direction || 'flat' },
+      { kind: 'gate',    label: 'D1 macro support (longs only)',    met: !trendUp || dailyUp, value: trendUp ? (dailyUp ? 'D1 above 20-EMA' : 'D1 below — blocks long') : 'n/a' },
+      { kind: 'gate',    label: 'Tape alive (15m ATR ≥ 0.4×H1)',    met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
+      { kind: 'trigger', label: 'Wick touched VWAP',                met: longTouch || shortTouch, value: vwapVal != null ? `VWAP ${vwapVal.toFixed(2)} · close ${last.close.toFixed(2)}` : 'no VWAP yet' },
+      { kind: 'trigger', label: 'Pin / engulfing confirmation',     met: rejBull || rejBear, value: rejBull ? 'bullish reject' : rejBear ? 'bearish reject' : 'no reject candle' },
     ],
   };
 }

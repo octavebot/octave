@@ -152,10 +152,10 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'NY killzone (07:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
-      { label: 'Tradable FVG present', met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side})` : 'no recent FVG' },
-      { label: 'H1 trend defined', met: !!direction, value: direction || 'flat' },
-      { label: 'Retrace into gap', met: !!inRetrace, value: inRetrace ? 'inside gap now' : 'not yet' },
+      { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'H1 trend defined',             met: !!direction, value: direction || 'flat' },
+      { kind: 'gate',    label: 'Tradable FVG present',         met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side})` : 'no recent FVG' },
+      { kind: 'trigger', label: 'Retrace into gap',             met: !!inRetrace, value: inRetrace ? 'inside gap now' : `last ${last.low.toFixed(2)}–${last.high.toFixed(2)}` },
     ],
   };
 }

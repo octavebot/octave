@@ -983,9 +983,8 @@ async function runDetectChild() {
 }
 
 async function cmdBias() {
-  // Structural bias — read the signal engine's live snapshot (refreshed every
-  // 3s). It scores real multi-timeframe structure per instrument, so it is
-  // always meaningful, not just "whatever strategy is triggering right now".
+  // Combined bias = structural multi-TF read + live strategy vote. Engine
+  // re-stamps this on every detector tick (every 3s, even on cache hits).
   const snap = readJson(join(STATE_DIR, 'last-bias.json'), null);
   if (!snap || !snap.bias || (Date.now() - (snap.at || 0)) > 180_000) {
     return send('🧭 Bias data not ready — the signal engine is still warming up. Try again in a moment.');
@@ -996,24 +995,44 @@ async function cmdBias() {
     { key: 'nasdaq', label: 'NASDAQ', sym: 'MNQ1!' },
     { key: 'sp',     label: 'S&P',    sym: 'MES1!' },
   ];
-  const ICON = { BULLISH: '🟢', BEARISH: '🔴', NEUTRAL: '⚪' };
+  const ICON = { BULLISH: '🟢', BEARISH: '🔴', NEUTRAL: '⚪', MIXED: '🟠' };
+  const fIcon = (v) => v > 0 ? '🟢' : v < 0 ? '🔴' : '⚪';
 
   const lines = [header('🧭', 'Market bias'), ''];
   for (const inst of INSTRUMENTS) {
     const b = snap.bias[inst.key];
     if (!b) { lines.push(`⚪ *${inst.label}* \`${inst.sym}\` · no data`, ''); continue; }
-    // Strength: how lopsided the factor vote is.
-    const agree = Math.abs(b.score);
-    const strength = agree >= b.maxScore - 1 ? 'strong' : agree >= 2 ? 'moderate' : 'slight';
-    const label = b.direction === 'NEUTRAL' ? 'NEUTRAL' : `${b.direction} · ${strength}`;
-    lines.push(`${ICON[b.direction]} *${inst.label}* \`${inst.sym}\` · ${label}`);
-    lines.push(`   _${b.factors.filter((f) => f.v > 0).length}↑ ${b.factors.filter((f) => f.v < 0).length}↓ ${b.factors.filter((f) => f.v === 0).length}→ · price \`${b.price.toFixed(2)}\`_`);
-    // One line per factor so the read is transparent.
-    const fIcon = (v) => v > 0 ? '🟢' : v < 0 ? '🔴' : '⚪';
-    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label.replace(/^(H1|15m) /, '')}`).join(' · '));
+
+    const combinedDir = b.combined?.direction || b.direction || 'NEUTRAL';
+    const icon = ICON[combinedDir] || '⚪';
+    const combinedLabel = b.combined?.label ? ` · _${tgEscape(b.combined.label)}_` : '';
+    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${combinedLabel}`);
+    lines.push(`   price \`${b.price.toFixed(2)}\``);
+
+    // Structural read — one line, factor breakdown.
+    const up = b.factors.filter((f) => f.v > 0).length;
+    const dn = b.factors.filter((f) => f.v < 0).length;
+    const neu = b.factors.filter((f) => f.v === 0).length;
+    lines.push(`   *Structural* · ${b.direction} (${up}↑ ${dn}↓ ${neu}→)`);
+    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label.replace(/^(H1|15m|D1) /, '')}`).join(' · '));
+
+    // Strategy vote — count + top 3 closest candidates.
+    const vote = b.strategyVote || { long: 0, short: 0, candidates: [] };
+    const voteLabel = vote.long > vote.short ? `LONG (${vote.long}↑/${vote.short}↓)`
+      : vote.short > vote.long ? `SHORT (${vote.long}↑/${vote.short}↓)`
+      : vote.long === 0 && vote.short === 0 ? 'no strategy gates passing'
+      : `tied (${vote.long}↑/${vote.short}↓)`;
+    lines.push(`   *Strategy vote* · ${voteLabel}`);
+    if ((vote.candidates || []).length) {
+      const top = vote.candidates.slice(0, 3).map((c) => {
+        const dirIcon = c.direction === 'LONG' ? '🟢' : c.direction === 'SHORT' ? '🔴' : '⚪';
+        return `${dirIcon}${tgEscape(c.strategy)} ${Math.round(c.closeness * 100)}%`;
+      });
+      lines.push('   ' + top.join(' · '));
+    }
     lines.push('');
   }
-  lines.push('_Structural read across H1 + 15m trend, momentum & session._');
+  lines.push('_Structural = H1/D1 + 15m EMAs + session. Strategy vote = live precheck rows with all gates met._');
   await send(lines.join('\n'));
 }
 
@@ -1050,31 +1069,54 @@ async function cmdActiveSetups() {
   }
 
   if (precheckRows.length) {
-    // Rank by closeness — % of rules currently met. Hide rows with 0 met
-    // (everything failing) to avoid noise on dead sessions.
+    // Split each row into gates (hard prerequisites) and triggers (catalysts).
+    // Only show rows where every gate is met — those are the strategies
+    // genuinely watching for a fire RIGHT NOW. Sort by triggers met.
     const ranked = precheckRows
       .map((r) => {
-        const met = (r.conditions || []).filter((c) => c.met).length;
-        const total = (r.conditions || []).length || 1;
-        return { ...r, met, total, pct: met / total };
+        const conds = r.conditions || [];
+        const gates = conds.filter((c) => c.kind === 'gate');
+        const triggers = conds.filter((c) => c.kind === 'trigger');
+        const gatesOk = gates.length > 0 && gates.every((c) => c.met);
+        const tMet = triggers.filter((c) => c.met).length;
+        const tTotal = triggers.length || 1;
+        return { ...r, gates, triggers, gatesOk, tMet, tTotal, closeness: gatesOk ? tMet / tTotal : 0 };
       })
-      .filter((r) => r.met > 0)
-      .sort((a, b) => b.pct - a.pct);
+      .filter((r) => r.gatesOk)
+      .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
 
-    // Show only the top 6 — usually plenty per instrument/strategy mix.
-    const top = ranked.slice(0, 6);
-    if (top.length) {
-      lines.push('', section('Forming now'));
-      for (const r of top) {
+    if (ranked.length) {
+      lines.push('', section(`Forming now (${ranked.length})`));
+      for (const r of ranked.slice(0, 8)) {
         const inst = INST[r.instrument] || r.instrument;
-        const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
-        const dirLabel = r.direction || '—';
-        const stageIcon = r.met === r.total ? '🟢' : r.met >= r.total - 1 ? '🟠' : '🟡';
-        lines.push(`${stageIcon} *${tgEscape(r.strategy)}* · ${inst} · ${dir} ${dirLabel} · ${r.met}/${r.total}`);
-        for (const c of (r.conditions || [])) {
+        const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
+        const stageIcon = r.tMet === r.tTotal ? '🟢' : r.tMet >= r.tTotal - 1 ? '🟠' : '🟡';
+        const stageWord = r.tMet === r.tTotal ? 'READY' : r.tMet >= r.tTotal - 1 ? 'NEAR' : 'FORMING';
+        lines.push(`${stageIcon} *${tgEscape(r.strategy)}* · ${inst} · ${dir} · _${stageWord}_ ${r.tMet}/${r.tTotal} triggers`);
+        // Show only the triggers — gates are implied by gatesOk filter.
+        for (const c of r.triggers) {
           const icon = c.met ? '✅' : '⏳';
           const val = c.value ? ` _${tgEscape(String(c.value))}_` : '';
           lines.push(`   ${icon} ${tgEscape(c.label)}${val}`);
+        }
+      }
+    } else {
+      // Useful when no gate-passing strategies exist: surface the closest
+      // strategy per instrument so the user sees what's blocking.
+      const byInst = new Map();
+      for (const r of precheckRows) {
+        const conds = r.conditions || [];
+        const gates = conds.filter((c) => c.kind === 'gate');
+        const gatesMet = gates.filter((c) => c.met).length;
+        const score = gatesMet / (gates.length || 1);
+        const cur = byInst.get(r.instrument);
+        if (!cur || cur.score < score) byInst.set(r.instrument, { row: r, score, gates, gatesMet });
+      }
+      if (byInst.size) {
+        lines.push('', section('Nothing forming · closest by instrument'));
+        for (const [inst, info] of byInst) {
+          const blockers = info.gates.filter((c) => !c.met).map((c) => c.label);
+          lines.push(`⚪ *${INST[inst] || inst}* — ${tgEscape(info.row.strategy)} (${info.gatesMet}/${info.gates.length} gates) · _blocked by:_ ${tgEscape(blockers.slice(0, 2).join(', ') || '—')}`);
         }
       }
     }

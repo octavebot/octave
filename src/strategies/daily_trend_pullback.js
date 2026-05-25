@@ -198,10 +198,10 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'Daily trend established', met: !!direction && trendStrong, value: direction ? `D1 ${direction === 'LONG' ? 'above' : 'below'} 20-EMA${trendStrong ? '' : ' (weak)'}` : 'flat' },
-      { label: 'H1 pulled back to 20-EMA', met: h1Touched, value: h1Touched ? `within ${tol.toFixed(2)}` : 'not pulled back' },
-      { label: '15m bar at pullback now', met: lastTouches, value: lastTouches ? 'in zone' : `${(Math.abs(last.close - h20last)).toFixed(2)} away` },
-      { label: '15m rejection candle', met: rejBull || rejBear, value: rejBull ? 'bullish reject + took prev high' : rejBear ? 'bearish reject + took prev low' : 'no rejection yet' },
+      { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: direction ? `D1 ${direction === 'LONG' ? 'above' : 'below'} 20-EMA${trendStrong ? '' : ' (weak)'}` : 'flat' },
+      { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: h1Touched ? `within ${tol.toFixed(2)}` : 'not pulled back' },
+      { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: lastTouches ? 'in zone' : `${(Math.abs(last.close - h20last)).toFixed(2)} away` },
+      { kind: 'trigger', label: '15m rejection candle',     met: rejBull || rejBear, value: rejBull ? 'bullish reject + took prev high' : rejBear ? 'bearish reject + took prev low' : 'no rejection yet' },
     ],
   };
 }

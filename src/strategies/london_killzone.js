@@ -104,8 +104,10 @@ export function evaluate(ctx) {
   return out;
 }
 
-// Live diagnostics for /setups — reports each rule's current state without
-// requiring a full trigger. Returns null if not enough data to even check.
+// Live diagnostics for /setups. Conditions are tagged `gate` (hard prerequisite —
+// strategy can't fire without it) or `trigger` (the catalyst that fires the
+// alert when met). Bot only surfaces this strategy as "forming" when every
+// gate is true; closeness then = fraction of triggers met.
 export function precheck(ctx) {
   const tf = ctx.pane('15');
   if (!tf?.bars || tf.bars.length < 60) return null;
@@ -132,10 +134,10 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
-      { label: 'Asian range built', met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
-      { label: 'Sweep of Asian range', met: swept, value: sweepHi ? 'high swept' : sweepLo ? 'low swept' : 'not yet' },
-      { label: 'Body closed back inside', met: swept, value: swept ? `close ${last.close.toFixed(2)}` : '—' },
+      { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'Asian range built',                met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
+      { kind: 'trigger', label: 'Sweep of Asian range',             met: swept, value: sweepHi ? 'high swept' : sweepLo ? 'low swept' : 'waiting' },
+      { kind: 'trigger', label: 'Body closed back inside',          met: swept, value: swept ? `close ${last.close.toFixed(2)}` : '—' },
     ],
   };
 }

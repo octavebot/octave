@@ -29,7 +29,7 @@ import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
 import { enrichSetup } from './lib/trade_enrichment.js';
 import { loadRegistry } from './lib/strategy_registry.js';
-import { computeInstrumentBias } from './lib/bias.js';
+import { computeInstrumentBias, tallyStrategyVote, combineBias } from './lib/bias.js';
 
 const BIAS_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-bias.json');
 const PRECHECK_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-precheck.json');
@@ -159,16 +159,48 @@ export async function detect() {
   const allResults = [];
   const precheckRows = [];
 
+  // First pass — collect precheck rows for the strategy-vote half of bias.
+  // The bot's /setups reads these too, so the work is shared.
+  const precheckByInstrument = new Map();
+  for (const instrument of INSTRUMENTS) {
+    const ctx = buildInstrumentCtx(instrument, panesByTf);
+    if (!ctx) continue;
+    const rows = [];
+    for (const s of registry) {
+      if (!isStrategyEnabled(s.id)) continue;
+      if (!s.instruments.includes(instrument)) continue;
+      if (typeof s.precheck !== 'function') continue;
+      try {
+        const pc = s.precheck(ctx);
+        if (pc) {
+          const row = { strategy: s.id, instrument, ...pc };
+          rows.push(row);
+          precheckRows.push(row);
+        }
+      } catch (err) {
+        log.warn('strategy precheck threw', { strategy: s.id, instrument, err: err.message });
+      }
+    }
+    precheckByInstrument.set(instrument, rows);
+  }
+
   const biasByInstrument = {};
   for (const instrument of INSTRUMENTS) {
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
 
-    // Structural bias for this instrument — independent of whether any
-    // strategy is triggering. Persisted below for the /bias command.
+    // Bias = structural multi-TF read + live strategy vote, combined.
     try {
-      const b = computeInstrumentBias(ctx);
-      if (b) biasByInstrument[instrument] = b;
+      const structural = computeInstrumentBias(ctx);
+      const vote = tallyStrategyVote(precheckByInstrument.get(instrument) || []);
+      const combined = combineBias(structural, vote);
+      if (structural) {
+        biasByInstrument[instrument] = {
+          ...structural,
+          strategyVote: vote,
+          combined: combined ? { direction: combined.direction, label: combined.label } : null,
+        };
+      }
     } catch (err) { log.warn('bias compute threw', { instrument, err: err.message }); }
 
     const results = [];
@@ -178,15 +210,6 @@ export async function detect() {
       try { results.push(...s.evaluate(ctx)); }
       catch (err) {
         log.error('strategy evaluator threw', { strategy: s.id, instrument, err: err.message, stack: err.stack });
-      }
-      // Live diagnostics for /setups — strategy reports its checklist state.
-      if (typeof s.precheck === 'function') {
-        try {
-          const pc = s.precheck(ctx);
-          if (pc) precheckRows.push({ strategy: s.id, instrument, ...pc });
-        } catch (err) {
-          log.warn('strategy precheck threw', { strategy: s.id, instrument, err: err.message });
-        }
       }
     }
     try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }

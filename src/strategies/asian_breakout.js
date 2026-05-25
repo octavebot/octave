@@ -154,11 +154,11 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
-      { label: 'Asian range defined', met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
-      { label: 'H1 trend aligned', met: trendUp || trendDown, value: trendUp ? 'up' : trendDown ? 'down' : 'flat' },
-      { label: 'Wide-body breakout bar', met: bodyOk, value: `${Math.round(body/range*100)}% body (min ${Math.round(bodyMin*100)}%)` },
-      { label: 'Close beyond range', met: brokeUp || brokeDown, value: brokeUp ? `> hi by ${(last.close - asianHi).toFixed(2)}` : brokeDown ? `< lo by ${(asianLo - last.close).toFixed(2)}` : `at ${last.close.toFixed(2)}` },
+      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
+      { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: trendUp ? 'up' : trendDown ? 'down' : 'flat' },
+      { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `${Math.round(body/range*100)}% body (min ${Math.round(bodyMin*100)}%)` },
+      { kind: 'trigger', label: 'Close beyond range',               met: brokeUp || brokeDown, value: brokeUp ? `> hi by ${(last.close - asianHi).toFixed(2)}` : brokeDown ? `< lo by ${(asianLo - last.close).toFixed(2)}` : `at ${last.close.toFixed(2)}` },
     ],
   };
 }
