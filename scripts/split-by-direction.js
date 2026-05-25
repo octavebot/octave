@@ -17,7 +17,9 @@ if (!id) { console.error('Usage: split-by-direction.js <STRATEGY_ID>'); process.
 const fmtR = (n) => (n >= 0 ? '+' : '') + n.toFixed(1) + 'R';
 const fmtPct = (n) => (n * 100).toFixed(0) + '%';
 
-const res = await runBacktest({ days: 1095, strategies: [id], confMin: 0, step: 3 });
+const daysArg = process.argv.find((a) => a.startsWith('--days='));
+const DAYS = daysArg ? parseInt(daysArg.split('=')[1], 10) : 730;
+const res = await runBacktest({ days: DAYS, strategies: [id], confMin: 0, step: 3 });
 const w = res.window;
 const splitUnix = w.fromUnix + (w.toUnix - w.fromUnix) * (2 / 3);
 const trades = res.stats[id]?.trades || [];

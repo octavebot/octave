@@ -25,6 +25,10 @@ import { loadRegistry } from '../src/lib/strategy_registry.js';
 const argv = process.argv.slice(2);
 const onlyId = argv.find((a) => !a.startsWith('--'));
 const showDiag = argv.includes('--diag');
+// Window length. Defaults to 2y — the practical max for Databento 1m (3y of
+// 1-minute bars is ~$11 and ~5M rows). Override with --days=N.
+const daysArg = argv.find((a) => a.startsWith('--days='));
+const DAYS = daysArg ? parseInt(daysArg.split('=')[1], 10) : 730;
 
 const fmtR = (n) => (n >= 0 ? '+' : '') + n.toFixed(1) + 'R';
 const fmtPct = (n) => (n * 100).toFixed(0) + '%';
@@ -36,8 +40,8 @@ function rpad(s, n) { return String(s).padStart(n); }
   const reg = await loadRegistry();
   const ids = onlyId ? [onlyId] : reg.map((s) => s.id);
 
-  console.log(`\nRunning 3-year backtest (1095 days)…`);
-  const res = await runBacktest({ days: 1095, strategies: ids, confMin: 0, step: 3 });
+  console.log(`\nRunning backtest (${DAYS} days)…`);
+  const res = await runBacktest({ days: DAYS, strategies: ids, confMin: 0, step: 3 });
   const w = res.window;
   const totalDays = (w.toUnix - w.fromUnix) / 86400;
   // Split at the 2/3 point — first 2y train, last 1y test
@@ -68,7 +72,7 @@ function rpad(s, n) { return String(s).padStart(n); }
   }
   summary.sort((a, b) => (b.train.sumR + b.test.sumR) - (a.train.sumR + a.test.sumR));
 
-  console.log('TRAIN (2y)' + ' '.repeat(31) + 'TEST (1y)');
+  console.log(`TRAIN (${(totalDays * 2 / 3 / 365).toFixed(1)}y)` + ' '.repeat(28) + `TEST (${(totalDays / 3 / 365).toFixed(1)}y)`);
   console.log(pad('STRATEGY', 18) + rpad('N', 5) + rpad('WIN%', 6) + rpad('avgR', 7) + rpad('PF', 6) + rpad('SumR', 9) + '   ' +
               rpad('N', 5) + rpad('WIN%', 6) + rpad('avgR', 7) + rpad('PF', 6) + rpad('SumR', 9) + '  GENERALIZES?');
   console.log('─'.repeat(110));

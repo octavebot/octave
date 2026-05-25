@@ -27,6 +27,10 @@
  * logic, NOT native `ohlcv-1d` which aligns to 00:00 UTC and splits the session.
  */
 
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 const API = 'https://hist.databento.com/v0/timeseries.get_range';
 const DATASET = 'GLBX.MDP3';
 
@@ -276,6 +280,29 @@ export async function fetchAll(requests) {
 // live RAW/incremental cache — backtests run on demand, not in the hot loop.
 const LICENSE_LAG_MS = 9 * 60 * 60 * 1000;
 
+// Deep history is billed by volume, so we cache each backtest pull to disk and
+// reuse it. Iterating the tuning toolkit (tune / loss-analysis / filter-validate)
+// then costs ONE fetch instead of one per run; the nightly job only pays for the
+// new day. Keyed by window; refreshed once a day (a stale tail is irrelevant to
+// a multi-month backtest).
+const CACHE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'databento-cache');
+const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function loadBacktestCache(targetDays) {
+  try {
+    const f = join(CACHE_DIR, `backtest_d${targetDays}.json`);
+    if (Date.now() - statSync(f).mtimeMs > CACHE_MAX_AGE_MS) return null;
+    const obj = JSON.parse(readFileSync(f, 'utf8'));
+    return new Map(obj.entries);
+  } catch { return null; }
+}
+function saveBacktestCache(targetDays, map) {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(join(CACHE_DIR, `backtest_d${targetDays}.json`), JSON.stringify({ at: Date.now(), entries: [...map] }));
+  } catch { /* cache is best-effort */ }
+}
+
 // Fetch a long range in chunks so a single request never buffers an enormous
 // response (2y of 1m ≈ 1M bars). end is exclusive in get_range, so adjacent
 // chunks don't overlap; we de-dupe by time defensively anyway.
@@ -294,51 +321,41 @@ async function rangeRequestChunked(symbol, schema, startMs, endMs, chunkDays) {
 }
 
 /**
- * Deep historical bars for a single asset+tf over [startMs, endMs] — for
- * backtests. Real CME futures tape, no Yahoo 60-day cap and no spot basis.
- */
-export async function fetchBarsRange(asset, tf, startMs, endMs) {
-  const symbol = SYMBOLS[asset];
-  const tfSec = TF_SECONDS[String(tf)];
-  if (!symbol || !tfSec) return null;
-  const cappedEnd = Math.min(endMs, Date.now() - LICENSE_LAG_MS);
-  if (cappedEnd <= startMs) return null;
-
-  let bars;
-  if (tf === '1' || tf === '5' || tf === '15') {
-    const raw = await rangeRequestChunked(symbol, 'ohlcv-1m', startMs, cappedEnd, 30);
-    bars = tf === '1' ? raw : aggregateBucket(raw, tfSec);
-  } else if (tf === '60') {
-    bars = await rangeRequestChunked(symbol, 'ohlcv-1h', startMs, cappedEnd, 365);
-  } else if (tf === '1D') {
-    bars = aggregateDaily(await rangeRequestChunked(symbol, 'ohlcv-1h', startMs, cappedEnd, 365));
-  } else {
-    return null;
-  }
-  return { symbol, resolution: String(tf), bars, barCount: bars.length, source: 'databento' };
-}
-
-/**
- * Deep history for all traded micros, only the TFs strategies actually consume
- * (15m execution + 60m/1D context). HTF panes reach further back than the
- * window so daily trend filters have warmup. `${asset}|${tf}` -> pane.
+ * Deep history for all traded micros. Pulls each raw schema ONCE per symbol and
+ * derives every timeframe from it: one 1m pull → 5m + 15m, one 1h pull → 60m +
+ * 1D. The 5m pane matters even though no strategy reads it — the backtest's
+ * walk-forward anchors on `inst|5`, so without a deep 5m the anchor (and thus
+ * the whole window) collapses to Yahoo's 60-day cap. HTF reaches 90 extra days
+ * back so daily trend filters have warmup. `${asset}|${tf}` -> pane.
  */
 export async function fetchAllForBacktest(targetDays = 730) {
+  const cached = loadBacktestCache(targetDays);
+  if (cached) return cached;
+
   const now = Date.now();
-  const end = now; // fetchBarsRange caps to the licensed window
-  const winExecStart = now - (targetDays + 2) * 86400 * 1000;     // 15m + tiny warmup
-  const winHtfStart = now - (targetDays + 90) * 86400 * 1000;     // daily EMA warmup
+  const end = now - LICENSE_LAG_MS;                            // licensed window
+  const execStart = now - (targetDays + 2) * 86400 * 1000;     // 1m → 5m / 15m
+  const htfStart = now - (targetDays + 90) * 86400 * 1000;     // 1h → 60m / 1D
+  const pane = (symbol, tf, bars) => ({ symbol, resolution: tf, bars, barCount: bars.length, source: 'databento' });
   const out = new Map();
   for (const asset of Object.keys(SYMBOLS)) {
-    const [p15, p60, pD] = await Promise.all([
-      fetchBarsRange(asset, '15', winExecStart, end).catch(() => null),
-      fetchBarsRange(asset, '60', winHtfStart, end).catch(() => null),
-      fetchBarsRange(asset, '1D', winHtfStart, end).catch(() => null),
-    ]);
-    if (p15?.bars?.length) out.set(`${asset}|15`, p15);
-    if (p60?.bars?.length) out.set(`${asset}|60`, p60);
-    if (pD?.bars?.length) out.set(`${asset}|1D`, pD);
+    const symbol = SYMBOLS[asset];
+    try {
+      const m1 = await rangeRequestChunked(symbol, 'ohlcv-1m', execStart, end, 30);
+      if (m1.length) {
+        out.set(`${asset}|5`, pane(symbol, '5', aggregateBucket(m1, 300)));
+        out.set(`${asset}|15`, pane(symbol, '15', aggregateBucket(m1, 900)));
+      }
+      const h1 = await rangeRequestChunked(symbol, 'ohlcv-1h', htfStart, end, 365);
+      if (h1.length) {
+        out.set(`${asset}|60`, pane(symbol, '60', h1));
+        out.set(`${asset}|1D`, pane(symbol, '1D', aggregateDaily(h1)));
+      }
+    } catch (err) {
+      console.error('[databento backtest]', asset, err?.message || err);
+    }
   }
+  if (out.size) saveBacktestCache(targetDays, out);
   return out;
 }
 

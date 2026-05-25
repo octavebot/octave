@@ -22,24 +22,31 @@ const days = parseInt(process.argv[2], 10) || 30;
 // Each filter is a predicate: (trade) → true to KEEP the trade, false to DROP.
 // Applied post-hoc on backtest output so we don't have to re-run with code
 // changes. Equivalent to "this filter would have prevented entry on this bar".
+// Candidates from the 1-year loss-analysis (the fat, money-losing buckets with
+// a market rationale). Each must still survive the train/test gate below.
 const filters = {
-  'ASIAN-BREAKOUT': {
-    name: 'Cap window at 02:00–07:00 ET (drop 07–10 → NY-FVG territory)',
-    keep: (t) => {
-      const h = nyParts(t.openTime).h;
-      return h >= 2 && h < 7;
-    },
-  },
   'DAILY-TREND-PB': {
-    name: 'Skip ny_am session (07:00–12:00 ET)',
+    name: 'Skip the lunch lull (12:00–14:00 ET)',  // loss bucket: n=45, 31% win, −11.1R
     keep: (t) => {
       const h = nyParts(t.openTime).h;
-      return !(h >= 7 && h < 12);
+      return !(h >= 12 && h < 14);
     },
   },
-  // VWAP-REJ tightening requires CODE change (entry condition), can't be
-  // simulated post-hoc by filtering trades — those trades wouldn't have
-  // been generated. We'll handle that one separately.
+  'VWAP-REJ': {
+    name: 'Skip S&P (MES) — VWAP rejection net-negative there',  // sp: n=150, 44%, −1.6R
+    keep: (t) => t.instrument !== 'sp',
+  },
+  'ASIAN-BREAKOUT': {
+    name: 'Skip the 02:00 & 05:00 ET hours',  // hours 2 (n=117, flat) & 5 (n=54, −0.13R)
+    keep: (t) => {
+      const h = nyParts(t.openTime).h;
+      return h !== 2 && h !== 5;
+    },
+  },
+  'NY-FVG': {
+    name: 'Skip the 09:00 ET open hour (lowest-edge bucket)',  // hour 9: n=152, +0.09R
+    keep: (t) => nyParts(t.openTime).h !== 9,
+  },
 };
 
 function stats(trades) {
