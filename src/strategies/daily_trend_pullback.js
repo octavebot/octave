@@ -15,7 +15,7 @@ export const meta = {
   id: 'DAILY-TREND-PB',
   name: 'Daily Trend · H1 EMA Pullback',
   concept: 'Daily trend + H1 20-EMA pullback + 15m rejection = 3R continuation',
-  window: 'Any session hour',
+  window: 'Asia / London / NY-pm · skips 07:00–14:00 ET',
   timeframes: ['15', '60', '1D'],
   defaultEnabled: true,
 };
@@ -67,13 +67,14 @@ export function evaluate(ctx) {
   if (!tf60?.bars || tf60.bars.length < 50) return out;
   if (!dPane?.bars || dPane.bars.length < 25) return out;
 
-  // NY-open chop filter — 07:00–12:00 ET. 30d train/test split: this session
-  // produced -1.18R / 36% win across 14 trades vs every other session being
-  // solidly profitable. Removing it lifted win% from 56% → 67% and PF 2.02
-  // → 3.27 with both halves of the window improving (TRAIN +8.9pp, TEST
-  // +15.0pp). NY open chops daily-trend pullbacks — structural, not overfit.
+  // NY-open + lunch chop filter — 07:00–14:00 ET. The NY open (07–12) was the
+  // original gate. A 1-year Databento train/test split (2026-05) then showed
+  // the lunch lull (12:00–14:00) is the next-worst bucket: n=45, 31% win,
+  // −11.1R. Extending the gate through lunch improved BOTH halves (TRAIN
+  // +1.4pp/+5.5R, TEST +3.4pp/+5.7R). Low liquidity chops daily-trend
+  // pullbacks — structural, not overfit.
   const np = nyParts(ctx.barTime);
-  if (np.h >= 7 && np.h < 12) return out;
+  if (np.h >= 7 && np.h < 14) return out;
 
   // Daily bias: D1 close vs 20-EMA, EMA slope confirmation. ALSO require a
   // minimum daily ATR to confirm there's real movement in the trend — flat
@@ -217,12 +218,12 @@ export function precheck(ctx) {
     }
   }
   const np = nyParts(ctx.barTime);
-  const inNyAm = np.h >= 7 && np.h < 12;
+  const inChop = np.h >= 7 && np.h < 14;
   return {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Not NY-open chop (07:00–12:00 ET skip)', met: !inNyAm, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${inNyAm ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'Not NY-open/lunch chop (07:00–14:00 ET skip)', met: !inChop, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${inChop ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: `D1 ${dlast.close.toFixed(2)} ${dailyUp ? '>' : dailyDown ? '<' : '≈'} EMA20 ${d20last.toFixed(2)} · sep ${trendStrength.toFixed(2)} (min ${(0.3 * aD).toFixed(2)})` },
       { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: `H1 EMA20 ${h20last.toFixed(2)} · tol ±${tol.toFixed(2)} · ${h1Touched ? 'touched in last 5 bars' : 'no touch in last 5 bars'}` },
       { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: `15m ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs H1 EMA20 ${h20last.toFixed(2)} (tol ±${proximityTol.toFixed(2)})` },

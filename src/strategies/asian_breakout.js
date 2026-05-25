@@ -14,7 +14,7 @@ export const meta = {
   id: 'ASIAN-BREAKOUT',
   name: 'Asian Range Breakout',
   concept: 'First 15m close beyond Asian session range with strong body',
-  window: 'London + NY · 02:00-10:00 ET',
+  window: 'London + NY · 02:00-10:00 ET (skips 02 & 05)',
   timeframes: ['15'],
   defaultEnabled: true,
 };
@@ -44,7 +44,11 @@ export function evaluate(ctx) {
   const tf = ctx.pane('15');
   if (!tf?.bars || tf.bars.length < 40) return out;
   const np = nyParts(ctx.barTime);
-  if (np.h < 2 || np.h >= 10) return out;
+  // Breakout window 02:00–10:00 ET, minus the 02:00 & 05:00 hours — a 1-year
+  // Databento train/test split (2026-05) showed those two hours are the only
+  // money-losers in the window (h2 n=117 ~flat, h5 n=54 −0.13R); dropping them
+  // lifted BOTH halves (TRAIN +2.8pp/+2.5R, TEST +3.8pp/+7.4R).
+  if (np.h <= 2 || np.h === 5 || np.h >= 10) return out;
 
   // Asian range = prior day 20:00 NY → today 02:00 NY
   const asianBars = tf.bars.filter((b) => {
@@ -119,7 +123,7 @@ export function precheck(ctx) {
   const tf60 = ctx.pane('60');
   if (!tf?.bars || tf.bars.length < 40) return null;
   const np = nyParts(ctx.barTime);
-  const inWindow = np.h >= 2 && np.h < 10;
+  const inWindow = np.h >= 2 && np.h < 10 && np.h !== 2 && np.h !== 5;
 
   const asianBars = tf.bars.filter((b) => {
     const p = nyParts(b.time);
@@ -167,7 +171,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET, skips 02 & 05)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
       { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
       { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `body ${body.toFixed(2)} / range ${range.toFixed(2)} = ${Math.round(body/range*100)}% (min ${Math.round(bodyMin*100)}%)` },
