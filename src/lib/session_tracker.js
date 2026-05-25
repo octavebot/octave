@@ -19,15 +19,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STATE_FILE = join(__dirname, '..', 'state', 'session.json');
 
-const SESSION_HINTS = {
-  asia: 'Asia open — Asian range building. DAILY-TREND-PB, EMA-CROSS, VWAP-REJ can fire on H1/D1 alignment.',
-  london: 'London open — LONDON-SWEEP active in the killzone (02:00–05:00 ET). ASIAN-BREAKOUT lines up after 02:00.',
-  ny_am: 'NY AM open — peak liquidity. NY-FVG active in killzone (07:00–10:00 ET), all trend strategies live.',
-  lunch: 'Lunch chop (10:00–13:00 ET). Strategies still scan but cleaner setups usually come pre-open or post-lunch.',
-  ny_pm: 'NY PM open — late-day continuations and reversals. VWAP-REJ and DAILY-TREND-PB still active.',
-  off: 'Between sessions. Strategies stay armed for the next session\'s open.',
-};
-
 function loadState() {
   if (!existsSync(STATE_FILE)) {
     mkdirSync(dirname(STATE_FILE), { recursive: true });
@@ -74,10 +65,8 @@ export async function checkSessionChange(nowUnix = Date.now() / 1000) {
   log.info('session change detected', { from: fromSession, to: current });
   try {
     await alerter.sendSessionChange({
-      fromSession,
       toSession: current,
       nowLabel: fmtNY(nowUnix),
-      hint: SESSION_HINTS[current] || '',
     });
     return true;
   } catch (err) {

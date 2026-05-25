@@ -38,3 +38,8 @@ src/state/trade-journal.jsonl
 /src/state/broker-config.json
 /src/state/live-executions.jsonl
 /src/state/tg-sent/
+# Per-strategy PDF playbooks are a runtime artifact: regenerated from the
+# strategy files + backtest-stats.json on every strategy-change deploy. Like
+# backtest-stats.json, they must be per-environment and NOT tracked, or the
+# VPS's auto-regen would dirty the working tree and break git-sync's ff-only.
+/playbooks/

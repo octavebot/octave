@@ -89,14 +89,20 @@ for unit in "${!NEEDS_RESTART[@]}"; do
 done
 
 # Strategy code change → backtest-stats.json (registry ranking + dashboard
-# numbers) is now stale. Kick off a backgrounded regen so the next tick of
-# the registry (it watches the stats file mtime) auto-picks up the new
-# ranking with NO service restart. Uses the Databento disk cache, so a
-# 30-day regen is ~30s when cached; ~5min if cache miss.
+# numbers) AND the per-strategy PDF playbooks are now stale. Kick off a single
+# backgrounded chain that:
+#   1. reruns strategy-report.js over a 365-day Databento window (the canonical
+#      window — large sample, stable ranking, least noise) → backtest-stats.json
+#   2. regenerates the PDFs, which embed those fresh stats → playbooks/*.pdf
+# The registry watches backtest-stats.json's mtime, so the new ranking is picked
+# up on the next tick with NO extra restart (the strategies/ change already
+# restarted signal-engine via UNIT_FOR_PATH above). Bars are capped at 400 per
+# pane, so a 365-day run is CPU-bound, not memory-bound — the heap cap holds.
+# playbooks/ is gitignored, so regenerating PDFs here never dirties the tree.
 if echo "$CHANGED" | grep -qE '^src/strategies/'; then
-  LOG "strategies changed — backgrounding backtest-stats regen"
+  LOG "strategies changed — backgrounding 365d backtest-stats + PDF regen"
   if [ -f /home/octave/.config/trading-alerts/.env ]; then
-    nohup sudo -u octave bash -c "set -a && . /home/octave/.config/trading-alerts/.env && set +a && cd $REPO_DIR && nice -n 10 node --max-old-space-size=420 scripts/strategy-report.js 30" \
+    nohup sudo -u octave bash -c "set -a && . /home/octave/.config/trading-alerts/.env && set +a && cd $REPO_DIR && nice -n 10 node --max-old-space-size=420 scripts/strategy-report.js 365 && nice -n 10 node scripts/generate-playbooks.js" \
       >>/home/octave/.octave-logs/auto-regen.log 2>&1 &
     disown 2>/dev/null || true
   fi

@@ -402,13 +402,12 @@ export async function sendDailyReport(text) {
 
 // ─── Session-change banner ───────────────────────────────────────────────
 
-export async function sendSessionChange({ fromSession, toSession, nowLabel, hint }) {
+export async function sendSessionChange({ toSession, nowLabel }) {
   const fmtSess = (s) => String(s || '').toUpperCase().replace(/_/g, ' ');
   const text = [
     '🌍 *SESSION CHANGE*',
-    `${fmtSess(toSession)}${fromSession ? ` _(was ${fmtSess(fromSession)})_` : ''}`,
+    fmtSess(toSession),
     nowLabel ? `⏰ ${tgEscape(nowLabel)}` : '',
-    hint ? `ℹ️ ${tgEscape(hint)}` : '',
   ].filter(Boolean).join('\n');
   // Group sees it too. Single post when group + owner resolve to the same chat.
   const groupChat = config.telegramChatId;

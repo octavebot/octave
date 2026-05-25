@@ -99,7 +99,7 @@ const OWNER_ONLY = new Set([
 const GROUP_ALLOWED_COMMANDS = new Set([
   // Market intel
   '/bias', '/setups', '/setup', '/news', '/price', '/session',
-  '/regime', '/levels', '/killzones',
+  '/killzones',
   // Signal history (no account info — just the alert stream)
   '/last', '/today', '/yesterday', '/range', '/summary', '/history',
   // Strategy info (read-only — toggle is owner only via /enable /disable)
@@ -1507,25 +1507,6 @@ async function cmdJournal(arg) {
 
 // ── Holy AI Engine ──
 
-async function cmdRegime() {
-  await send('🌡 Reading the market regime…');
-  try {
-    const holyAi = await import('../lib/holy_ai.js');
-    const r = await holyAi.marketRegime();
-    if (!r.aiEnabled) return send('🤖 AI offline — set `GROQ_API_KEY` or `GEMINI_API_KEY` in `~/.config/trading-alerts/.env`.');
-    const ICON = { trend: '📈', range: '↔️', chop: '🌀', 'news-driven': '📰', reversal: '🔄', unknown: '❔' };
-    await send([
-      header(`${ICON[r.regime] || '🌡'}`, `Regime · ${r.regime.toUpperCase()}`),
-      '',
-      kv('Confidence', `${Math.round(r.confidence * 100)}%`),
-      '',
-      `_${tgEscape(r.summary)}_`,
-      '',
-      '_Cached 30min · `/regime` to refresh after expiry._',
-    ].join('\n'));
-  } catch (err) { await send(`⚠️ Regime read failed: ${err.message}`); }
-}
-
 async function cmdCoach(arg) {
   const days = Math.max(1, Math.min(30, parseInt(arg, 10) || 7));
   await send(`🧠 Coaching from last ${days}d trades…`);
@@ -1829,29 +1810,6 @@ async function cmdPayout() {
   await sendOwner(lines.join('\n'));
 }
 
-async function cmdLevels(arg) {
-  const at = await import('../lib/account_tracker.js');
-  const which = (arg || '').toLowerCase().trim();
-  const ids = at.ACCOUNT_IDS.includes(which) ? [which] : at.ACCOUNT_IDS;
-  const lines = [header('📊', 'TV indicator levels')];
-  let any = false;
-  for (const id of ids) {
-    const acc = at.get(id);
-    for (const t of acc.openTrades) {
-      any = true;
-      lines.push('');
-      lines.push(`*${id.toUpperCase()}* · ${t.strategy} · ${t.direction} ${t.instrument.toUpperCase()}${t.live ? ' · LIVE' : ''}`);
-      lines.push('```');
-      lines.push(`OCTAVE  ${t.direction}  ${t.entry} / ${t.stop} / ${t.t1} / ${t.t2}`);
-      lines.push('```');
-      lines.push(`_Paste into the Octave Levels Pine indicator settings:_`);
-      lines.push(`_Direction = *${t.direction}*  ·  Entry = *${t.entry}*  ·  Stop = *${t.stop}*  ·  TP1 = *${t.t1}*  ·  TP2 = *${t.t2}*_`);
-    }
-  }
-  if (!any) lines.push('', '_No open trades._');
-  await sendOwner(lines.join('\n'));
-}
-
 async function cmdBroker(arg) {
   const le = await import('../lib/live_executor.js');
   const at = await import('../lib/account_tracker.js');
@@ -2097,7 +2055,7 @@ const HELP_INDEX = [
   bullet('`/help journal`  — log entries, exits, stats'),
   bullet('`/help system`   — health, perf, restart, diagnose, fix'),
   bullet('`/help ai`       — free-form chat, file uploads'),
-  bullet('`/help holy`     — Holy AI Engine: regime, coach, gating'),
+  bullet('`/help holy`     — Holy AI Engine: coach, gating'),
   '',
   '_Free-form text goes to AI. `/menu` opens the tap-to-use UI._',
 ].join('\n');
@@ -2200,7 +2158,6 @@ const HELP_TOPICS = {
     bullet('Caches per setupId so the LLM is never spent twice'),
     '',
     section('Commands'),
-    kv('/regime', 'current market regime (cached 30min)'),
     kv('/coach [days]', 'AI coaching from recent trades (cached daily)'),
     kv('/ai-engine', 'status · provider · threshold'),
     kv('/ai-engine on|off', 'master toggle (default ON)'),
@@ -2230,8 +2187,7 @@ function buildGroupMenu() {
   const keyboard = [
     [{ text: '🧭 Bias',    callback_data: 'act:bias' },    { text: '🎯 Setups',  callback_data: 'act:setups' }],
     [{ text: '💰 Price',   callback_data: 'act:price' },   { text: '🌍 Session', callback_data: 'act:session' }],
-    [{ text: '📰 News',    callback_data: 'act:news' },    { text: '🌡 Regime',  callback_data: 'act:regime' }],
-    [{ text: '📊 Levels',  callback_data: 'act:levels' },  { text: '🔔 Last',    callback_data: 'act:last' }],
+    [{ text: '📰 News',    callback_data: 'act:news' },    { text: '🔔 Last',    callback_data: 'act:last' }],
   ];
   return { text, keyboard };
 }
@@ -2339,7 +2295,7 @@ function buildSettingsView() {
   const keyboard = [
     [{ text: cfg.alertChartImages !== false ? '⚫ Disable chart images' : '🟢 Enable chart images', callback_data: `set:charts:${cfg.alertChartImages !== false ? 'off' : 'on'}` }],
     [{ text: aiOn ? '⚫ Disable Holy AI' : '✨ Enable Holy AI', callback_data: `set:ai:${aiOn ? 'off' : 'on'}` }],
-    [{ text: '🌡 Regime', callback_data: 'act:regime' }, { text: '🧠 Coach', callback_data: 'act:coach' }],
+    [{ text: '🧠 Coach', callback_data: 'act:coach' }],
     [{ text: '🚨 System (restart/shutdown)', callback_data: 'view:system' }],
     [{ text: '« Back', callback_data: 'view:main' }],
   ];
@@ -2487,8 +2443,8 @@ async function handleCallback(cq) {
       const map = {
         bias: cmdBias, setups: cmdActiveSetups, today: cmdToday, last: cmdLast,
         price: cmdPrice, session: cmdSession, health: cmdHealth, dashboard: cmdDashboard,
-        regime: cmdRegime, coach: cmdCoach, news: cmdNews,
-        account: cmdAccount, paper: cmdPaper, dd: cmdDd, payout: cmdPayout, levels: cmdLevels,
+        coach: cmdCoach, news: cmdNews,
+        account: cmdAccount, paper: cmdPaper, dd: cmdDd, payout: cmdPayout,
       };
       if (map[verb]) { await map[verb](); return ackCallback(cq.id); }
       if (verb === 'restart') { await cmdRestart(rest2[0]); return ackCallback(cq.id, `Restarting ${rest2[0]}…`); }
@@ -2586,9 +2542,9 @@ const COMMANDS = {
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
   '/note': cmdJournalNote, '/journal': cmdJournal,
   '/ai': cmdAi, '/clearchat': cmdClearChat,
-  '/regime': cmdRegime, '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
+  '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
   '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
-  '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker, '/levels': cmdLevels,
+  '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker,
   '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,
   '/version': cmdVersion, '/dashboard': cmdDashboard,
