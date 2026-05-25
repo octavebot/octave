@@ -93,20 +93,15 @@ export function muteRemainingSec() {
   return until > Date.now() ? Math.round((until - Date.now()) / 1000) : 0;
 }
 
-export function localTelegramBehavior({ cloudAlive }) {
-  const m = get().mode;
-  if (m === 'local') return 'send';
-  // 'cloud' used to mean "a SEPARATE cloud instance is primary, so this (local
-  // Mac) instance stays silent to avoid double-sends." That dual-bot setup is
-  // retired — the VPS engine is now the SOLE sender, so it MUST send in cloud
-  // mode. Leaving this as 'suppress' silenced the only bot (zero Telegram
-  // alerts from 2026-05-23, when mode was set to cloud, onward). The only
-  // reason to stay quiet now is an explicit /mute, handled by the caller.
-  if (m === 'cloud') return 'send';
-  return cloudAlive ? 'suppress' : 'send';
+/**
+ * Always 'send' — the dual-bot architecture (a Mac 'local' bot deferring to a
+ * separate cloud bot) is retired. The VPS is the SOLE sender. Mode is kept on
+ * runtime-config for backward compat but no longer drives suppression. Only an
+ * explicit /mute silences (handled by the caller via isMuted()).
+ */
+export function localTelegramBehavior() {
+  return 'send';
 }
-
-export function cloudShouldFire() { return get().mode !== 'local'; }
 
 /**
  * Async helper to merge any new strategies (from the registry) into the

@@ -23,7 +23,6 @@ const __dirname = dirname(__filename);
 const REPO_DIR = join(__dirname, '..', '..');
 const STATE_DIR = join(REPO_DIR, 'src', 'state');
 const CONFIG_FILE = join(STATE_DIR, 'runtime-config.json');
-const HEARTBEAT_FILE = join(STATE_DIR, 'cloud-heartbeat.json');
 const SESSION_FILE = join(STATE_DIR, 'session.json');
 const TRADE_LOG = join(STATE_DIR, 'trades.jsonl');
 
@@ -552,10 +551,10 @@ async function cmdSession() {
     if (g) {
       const tag = g.source === 'oanda+basis' ? ' _(est.)_' : g.stale ? ' _(stale)_' : '';
       goldLine = `Gold: $${g.price.toFixed(2)}${tag}`;
-    } else {
-      const hb = readJson(HEARTBEAT_FILE, null);
-      goldLine = hb?.anchor ? `Gold: $${Number(hb.anchor.close).toFixed(2)} _(last known)_` : '';
     }
+    // No else-fallback: the TV bridge + Yahoo/OANDA cascade in getLiveFuturesQuotes
+    // is the source of truth. If it returns nothing, /session just omits the gold
+    // line rather than serve a stale value from a dead heartbeat file.
   } catch { /* leave goldLine blank */ }
 
   await send([

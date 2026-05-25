@@ -7,7 +7,7 @@
  *
  * API endpoints:
  *   GET  /              → index.html
- *   GET  /api/state     → { config, cloud_heartbeat, service, last_alert }
+ *   GET  /api/state     → { config, cloud, data_feed, service, activity, … }
  *   POST /api/config    → { mode?, strategies? } — writes runtime-config.json,
  *                         commits, and pushes to GitHub (background)
  *
@@ -25,7 +25,6 @@ const __dirname = dirname(__filename);
 const REPO_DIR = join(__dirname, '..', '..');
 const STATE_DIR = join(REPO_DIR, 'src', 'state');
 const CONFIG_FILE = join(STATE_DIR, 'runtime-config.json');
-const HEARTBEAT_FILE = join(STATE_DIR, 'cloud-heartbeat.json');
 const SESSION_FILE = join(STATE_DIR, 'session.json');
 // Platform-aware log dir resolution. Mac (dev) writes via LaunchAgent
 // stdout; VPS writes via systemd to ~/.octave-logs. Pick whichever exists.

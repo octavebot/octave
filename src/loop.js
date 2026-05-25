@@ -7,7 +7,6 @@ import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
 import * as journal from './lib/trade_journal.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
-import { shouldLocalSuppressTelegram, cloudStatus } from './lib/cloud_heartbeat.js';
 import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
@@ -102,15 +101,16 @@ async function tick() {
   // Mute first — if user told the bot /mute, no telegram at all
   const muted = isMuted();
   // Compute effective Telegram behavior:
-  //   mode=auto  → cloud-active suppresses; cloud-stale sends (current behavior)
-  //   mode=cloud → always suppress (cloud is forced primary)
-  //   mode=local → always send (cloud is forced silent)
-  const cloud = cloudStatus();
-  const behavior = localTelegramBehavior({ cloudAlive: cloud.alive });
+  // The Mac 'local' bot is decommissioned, so the cloud-vs-local mode dance is
+  // a vestige — the VPS is the sole sender. localTelegramBehavior now returns
+  // 'send' for both 'cloud' and 'auto' modes (the cloudAlive arg is unused);
+  // only an explicit /mute silences. Kept the function for backward compat
+  // with runtime-config payloads that still carry a mode field.
+  const behavior = localTelegramBehavior();
   const suppressTelegram = muted || behavior === 'suppress';
   if (suppressTelegram) {
     log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
-      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec(), cloudAlive: cloud.alive, cloudAgeMs: cloud.ageMs })
+      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec() })
     );
   }
 

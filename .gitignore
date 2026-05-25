@@ -5,16 +5,14 @@
 .env.*
 .idea/
 .vscode/
+# OS noise + secrets + local state — never commit
 *.log
+node_modules/
 /src/state/heartbeats/
 /src/state/runtime-config.json
 /src/state/trades.jsonl
-# by the GitHub Actions workflow — those are the shared dedup source.
-# Cloud state files (cloud-dedup.json, cloud-heartbeat.json) ARE committed
-# Local-only state — these stay on the Mac, not in the repo
-# OS noise
-# Secrets — never commit
-node_modules/
+/src/state/cloud-heartbeat.json
+/src/state/cloud-dedup.json
 src/state/dedup.json
 src/state/drawings.json
 src/state/session.json
