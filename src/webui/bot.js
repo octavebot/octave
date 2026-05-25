@@ -1284,13 +1284,15 @@ async function cmdSetup(arg) {
 async function cmdNews(arg) {
   const newsLib = await import('../lib/news.js');
   const { upcomingEvents, checkBlackout, refreshForexFactory, nextEvent, recentReleases, parseEconNumber, eventDirectionRule } = newsLib;
-  // Force a refresh so /news always sees the latest forecast/actual data.
-  await refreshForexFactory(true).catch(() => {});
+  // Don't force-refresh — FF rate-limits hard (429) on repeated calls. The
+  // 30-min TTL keeps the cache fresh enough; in-process setInterval also
+  // pulls every 30 min in the background.
+  await refreshForexFactory(false).catch(() => {});
   const argTrim = (arg || '').trim().toLowerCase();
   const showAll = argTrim === 'all';
   const showHighOnly = argTrim === 'high' || argTrim === 'h';
   const hours = showAll || showHighOnly ? 168
-    : Math.max(1, Math.min(168, parseInt(argTrim, 10) || 24));
+    : Math.max(1, Math.min(168, parseInt(argTrim, 10) || 48));
   const now = Date.now() / 1000;
   const bo = checkBlackout(now, 30);
   let evs = upcomingEvents(now, hours);
@@ -1409,7 +1411,7 @@ async function cmdNews(arg) {
 
   lines.push('',
     '🔴 high · 🟠 medium · 🟡 low  ·  bot auto-pauses ±30m around 🔴',
-    '_`/news` 24h · `/news 48` 48h · `/news high` 🔴-only 7d · `/news all` everything 7d_');
+    '_`/news` 48h hi+med · `/news 24` short window · `/news high` 🔴-only 7d · `/news all` everything 7d_');
   await send(lines.join('\n'));
 }
 
