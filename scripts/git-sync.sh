@@ -88,4 +88,18 @@ for unit in "${!NEEDS_RESTART[@]}"; do
   fi
 done
 
+# Strategy code change → backtest-stats.json (registry ranking + dashboard
+# numbers) is now stale. Kick off a backgrounded regen so the next tick of
+# the registry (it watches the stats file mtime) auto-picks up the new
+# ranking with NO service restart. Uses the Databento disk cache, so a
+# 30-day regen is ~30s when cached; ~5min if cache miss.
+if echo "$CHANGED" | grep -qE '^src/strategies/'; then
+  LOG "strategies changed — backgrounding backtest-stats regen"
+  if [ -f /home/octave/.config/trading-alerts/.env ]; then
+    nohup sudo -u octave bash -c "set -a && . /home/octave/.config/trading-alerts/.env && set +a && cd $REPO_DIR && nice -n 10 node --max-old-space-size=420 scripts/strategy-report.js 30" \
+      >>/home/octave/.octave-logs/auto-regen.log 2>&1 &
+    disown 2>/dev/null || true
+  fi
+fi
+
 LOG "sync complete"

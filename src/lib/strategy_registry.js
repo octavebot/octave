@@ -20,7 +20,7 @@
  * a deploy-time concern, not a runtime one.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
@@ -31,6 +31,12 @@ const STRATEGY_DIR = join(__dirname, '..', 'strategies');
 const STATS_FILE = join(__dirname, '..', 'state', 'backtest-stats.json');
 
 let cached = null;
+// Track backtest-stats.json's mtime so the registry AUTO-INVALIDATES and
+// re-sorts when stats are regenerated (e.g. after a strategy edit kicks off
+// a background regen via git-sync). No restart needed: next loadRegistry()
+// rebuilds with the new ranking. The detector calls loadRegistry() once per
+// tick (3s), so a new ranking goes live within ~3s of stats landing on disk.
+let lastStatsMtime = 0;
 
 /**
  * Read the latest backtest stats and return { id → sumR } for ranking.
@@ -50,6 +56,12 @@ function loadProfitMap() {
 
 /** Load and return the full registry. Idempotent. */
 export async function loadRegistry() {
+  // Auto-invalidate when backtest-stats.json mtime changes so re-tunes show
+  // up in the registry ranking without a service restart.
+  try {
+    const m = statSync(STATS_FILE).mtimeMs;
+    if (m !== lastStatsMtime) { cached = null; lastStatsMtime = m; }
+  } catch { /* stats file missing — keep current cache */ }
   if (cached) return cached;
   const files = readdirSync(STRATEGY_DIR)
     .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
