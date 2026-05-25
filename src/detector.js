@@ -1,12 +1,12 @@
 /**
  * Strategy orchestrator — multi-instrument, registry-driven.
  *
- * Loops every enabled strategy across each instrument [gold, nasdaq, sp].
+ * Loops every enabled strategy across each instrument [gold, nasdaq].
  * Strategies are auto-discovered from src/strategies/ — see strategy_registry.js.
  *
  * @typedef {Object} DetectorResult
  * @property {string} strategy        strategy id (matches meta.id)
- * @property {string} instrument      'gold' | 'nasdaq' | 'sp'
+ * @property {string} instrument      'gold' | 'nasdaq'
  * @property {string} setupId         stable id across lifecycle
  * @property {'forming'|'near_trigger'|'triggered'|'invalidated'} status
  * @property {string} direction       'LONG' | 'SHORT' | 'NONE'
@@ -36,12 +36,11 @@ const PRECHECK_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state',
 
 // Three primary instruments. Each runs the full strategy gauntlet; strategies
 // can opt out by declaring `meta.instruments`.
-export const INSTRUMENTS = ['gold', 'nasdaq', 'sp'];
+export const INSTRUMENTS = ['gold', 'nasdaq'];
 
 export const INSTRUMENT_META = {
   gold:   { label: 'Gold',   symbol: 'MGC1!', tvFullSymbol: 'COMEX:MGC1!' },
   nasdaq: { label: 'Nasdaq', symbol: 'MNQ1!', tvFullSymbol: 'CME_MINI:MNQ1!' },
-  sp:     { label: 'S&P',    symbol: 'MES1!', tvFullSymbol: 'CME_MINI:MES1!' },
 };
 
 // Yahoo's 60m feed returns 11k+ bars per instrument; strategies only need a

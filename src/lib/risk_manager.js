@@ -49,7 +49,6 @@ export const PAYOUT_RULES = Object.freeze({
 export const INSTRUMENT_DOLLARS_PER_POINT = Object.freeze({
   gold:   10,
   nasdaq: 2,
-  sp:     5,
 });
 
 /**

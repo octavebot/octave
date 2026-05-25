@@ -23,7 +23,6 @@ const SYMBOLS = {
   gold:   'XAU_USD',
   silver: 'XAG_USD',
   nasdaq: 'NAS100_USD',  // CFD — may 404 on some free accounts
-  sp:     'SPX500_USD',  // CFD — may 404 on some free accounts
 };
 
 const GRANULARITY = {

@@ -34,7 +34,7 @@ const REPO_DIR = join(__dirname, '..', '..');
 const MAX_TOOL_ROUNDS = 6;
 
 const SYSTEM_PROMPT = `You are Octave's in-bot assistant. The user runs a Telegram trading bot that
-monitors Gold (MGC1!), Nasdaq (MNQ1!), and S&P (MES1!) micro-futures across
+monitors Gold (MGC1!) and Nasdaq (MNQ1!) micro-futures across
 6 strategies. Be concise, direct, and proactive.
 
 ROLE
@@ -66,7 +66,6 @@ TOOL CALLS
 INSTRUMENTS
 - gold = MGC1! Micro Gold
 - nasdaq = MNQ1! Micro Nasdaq-100
-- sp = MES1! Micro S&P 500
 
 KNOWN COMMANDS (for context, you don't have to invoke them via tools — you
 can just mention them to the user):
@@ -84,7 +83,7 @@ const TOOLS = [
   },
   {
     name: 'get_prices',
-    description: 'Latest prices for all three instruments (MGC1!, MNQ1!, MES1!).',
+    description: 'Latest prices for all instruments (MGC1!, MNQ1!).',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -158,7 +157,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         setupId: { type: 'string' },
-        instrument: { type: 'string', enum: ['gold', 'nasdaq', 'sp'] },
+        instrument: { type: 'string', enum: ['gold', 'nasdaq'] },
         strategy: { type: 'string' },
         contracts: { type: 'number' },
         price: { type: 'number' },
@@ -322,7 +321,7 @@ const toolHandlers = {
     const { fetchAllPanes } = await import('./cloud_data_supplement.js');
     const panes = await fetchAllPanes();
     const out = {};
-    for (const inst of ['gold', 'nasdaq', 'sp']) {
+    for (const inst of ['gold', 'nasdaq']) {
       const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
       const last = p?.bars?.[p.bars.length - 1];
       const prev = p?.bars?.[p.bars.length - 25]; // ~6h ago for context
@@ -340,7 +339,7 @@ const toolHandlers = {
         try {
           const line = out.split('\n').find((l) => l.startsWith('RESULT:'));
           const parsed = line ? JSON.parse(line.slice(7)) : { results: [] };
-          const tally = { gold: { long: 0, short: 0 }, nasdaq: { long: 0, short: 0 }, sp: { long: 0, short: 0 } };
+          const tally = { gold: { long: 0, short: 0 }, nasdaq: { long: 0, short: 0 } };
           for (const r of parsed.results || []) {
             if (!r.instrument || !tally[r.instrument]) continue;
             if (r.direction === 'LONG') tally[r.instrument].long++;
@@ -534,7 +533,7 @@ const toolHandlers = {
 };
 
 async function buildInstrumentCtxForTools(instrument) {
-  if (!['gold', 'nasdaq', 'sp'].includes(instrument)) return null;
+  if (!['gold', 'nasdaq'].includes(instrument)) return null;
   const { fetchAllPanes } = await import('./cloud_data_supplement.js');
   const panesByTf = await fetchAllPanes().catch(() => null);
   if (!panesByTf || panesByTf.size === 0) return null;

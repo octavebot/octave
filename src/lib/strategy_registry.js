@@ -81,7 +81,7 @@ export async function loadRegistry() {
         concept: mod.meta.concept,
         window: mod.meta.window || 'Any session hour',
         timeframes: mod.meta.timeframes || ['15'],
-        instruments: mod.meta.instruments || ['gold', 'nasdaq', 'sp'],
+        instruments: mod.meta.instruments || ['gold', 'nasdaq'],
         defaultEnabled: mod.meta.defaultEnabled !== false,
         playbook: mod.playbook || '',
         evaluate: mod.evaluate,

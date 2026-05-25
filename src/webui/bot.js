@@ -571,11 +571,10 @@ async function cmdPrice() {
   try { quotes = await getLiveFuturesQuotes(); }
   catch { quotes = new Map(); }
 
-  const ORDER = ['gold', 'nasdaq', 'sp'];
+  const ORDER = ['gold', 'nasdaq'];
   const FALLBACK = {
     gold:   { sym: 'MGC1!', label: 'Micro Gold' },
     nasdaq: { sym: 'MNQ1!', label: 'Micro Nasdaq' },
-    sp:     { sym: 'MES1!', label: 'Micro S&P' },
   };
   // Tight one-line-per-instrument layout. Header carries the source; rows
   // carry price + signed change only. Anything stale/estimated gets a 🕒.
@@ -1059,7 +1058,6 @@ async function cmdBias() {
   const INSTRUMENTS = [
     { key: 'gold',   label: 'GOLD',   sym: 'MGC1!' },
     { key: 'nasdaq', label: 'NASDAQ', sym: 'MNQ1!' },
-    { key: 'sp',     label: 'S&P',    sym: 'MES1!' },
   ];
   const ICON = { BULLISH: '🟢', BEARISH: '🔴', NEUTRAL: '⚪', MIXED: '🟠' };
   // Strength icon based on signed magnitude (was binary +1/-1/0).
@@ -1143,7 +1141,7 @@ async function cmdActiveSetups() {
   const precheckFresh = precheckSnap && (Date.now() - (precheckSnap.at || 0)) <= 180_000;
   const precheckRows = precheckFresh ? (precheckSnap.rows || []) : [];
 
-  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
+  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ' };
   const lines = [header('🎯', 'Setups')];
 
   // Compact /setups: one-liner per item across three sections.
@@ -1221,7 +1219,7 @@ async function cmdSetup(arg) {
     return send(`#${KEY_TO_NUM[key] || 'U'} *${tgEscape(key)}* · not running on any instrument right now. \`/strategies\` shows the enabled list.`);
   }
 
-  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
+  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ' };
   // Stage + closeness for each instrument row, same scoring as /setups.
   const rendered = rows.map((r) => {
     const conds = r.conditions || [];

@@ -39,7 +39,6 @@ const DATASET = 'GLBX.MDP3';
 const SYMBOLS = {
   gold:   'MGC.v.0',  // Micro Gold      → COMEX:MGC1!
   nasdaq: 'MNQ.v.0',  // Micro Nasdaq    → CME_MINI:MNQ1!
-  sp:     'MES.v.0',  // Micro S&P 500   → CME_MINI:MES1!
 };
 
 const TF_SECONDS = { '1': 60, '5': 300, '15': 900, '60': 3600, '1D': 86400 };
@@ -222,7 +221,7 @@ function aggregateDaily(bars) {
 
 /**
  * Fetch OHLCV bars for a single asset+timeframe.
- * @param {'gold'|'nasdaq'|'sp'} asset
+ * @param {'gold'|'nasdaq'} asset
  * @param {string} tf  internal TF key ('1','5','15','60','1D')
  * @returns {Promise<null|{symbol,resolution,bars,barCount,source}>}
  *   null for assets/TFs Databento doesn't serve — caller falls back to Yahoo.
@@ -257,7 +256,7 @@ export async function fetchBars(asset, tf) {
 
 /**
  * Fetch a list of (asset, tf) tuples in parallel.
- * @param {Array<['gold'|'nasdaq'|'sp', string]>} requests
+ * @param {Array<['gold'|'nasdaq', string]>} requests
  * @returns {Promise<Map<string, object>>}  `${asset}|${tf}` -> pane
  */
 export async function fetchAll(requests) {

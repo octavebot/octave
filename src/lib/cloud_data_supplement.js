@@ -39,11 +39,6 @@ const NEEDED_REQUESTS = [
   ['nasdaq', '15'],
   ['nasdaq', '60'],
   ['nasdaq', '1D'],
-  // S&P (micro)
-  ['sp',     '5'],
-  ['sp',     '15'],
-  ['sp',     '60'],
-  ['sp',     '1D'],
   // Cross-asset
   ['silver', '5'],
   ['silver', '15'],
@@ -86,7 +81,7 @@ export async function fetchAllPanes() {
       // outage automatically: stale TV pane → null → falls back to Yahoo.
       if (tvConfigured()) {
         try {
-          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq' || asset === 'sp');
+          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq');
           const tv = await fetchTradingview(tvRequests).catch(() => new Map());
           for (const [key, p] of tv) {
             if (p?.bars?.length) panes.set(key, p);
@@ -98,7 +93,7 @@ export async function fetchAllPanes() {
           // Friday's close while the 15m is live. Here we keep Yahoo's DEEP
           // history (needed for the daily 20-EMA etc.) and splice the live TV
           // tail on top: deep[time < tvTail[0]] + aggregate(TV 15m).
-          for (const inst of ['gold', 'nasdaq', 'sp']) {
+          for (const inst of ['gold', 'nasdaq']) {
             const tv15 = panes.get(`${inst}|15`);
             if (tv15?.source !== 'tradingview' || !tv15.bars?.length) continue;
             for (const { tf, bucketSec, daily } of [{ tf: '60', bucketSec: 3600 }, { tf: '1D', daily: true }]) {
@@ -171,7 +166,6 @@ const BIAS_REQUESTS = [
   // (15m ≥50 + vol percentile needs ~114; 60m ≥55; 1D ≥25).
   ['gold',   '15', 7], ['gold',   '60', 14], ['gold',   '1D', 90],
   ['nasdaq', '15', 7], ['nasdaq', '60', 14], ['nasdaq', '1D', 90],
-  ['sp',     '15', 7], ['sp',     '60', 14], ['sp',     '1D', 90],
 ];
 
 let biasCache = { panes: null, fetchedAt: 0 };
@@ -221,7 +215,7 @@ export async function fetchBiasPanes() {
       // window isn't deep enough.
       if (tvConfigured()) {
         try {
-          const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15'], ['sp', '15']]).catch(() => new Map());
+          const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15']]).catch(() => new Map());
           const nowSec = Date.now() / 1000;
           for (const [key, p] of tv) {
             const lastBar = p?.bars?.[p.bars.length - 1];
@@ -256,7 +250,6 @@ export async function fetchBiasPanes() {
 const QUOTE_INSTRUMENTS = [
   { key: 'gold',   yh: 'MGC=F', sym: 'MGC1!', label: 'Micro Gold' },
   { key: 'nasdaq', yh: 'MNQ=F', sym: 'MNQ1!', label: 'Micro Nasdaq' },
-  { key: 'sp',     yh: 'MES=F', sym: 'MES1!', label: 'Micro S&P' },
 ];
 // Yahoo's futures quote is "live" only if its last actual BAR is recent.
 // NOTE: meta.regularMarketTime keeps ticking even when CME is closed (it's the
@@ -467,7 +460,7 @@ export async function getLiveFuturesQuotes() {
 
 // ─── Higher-TF synthesis ──────────────────────────────────────────────────
 
-const INSTRUMENTS_FOR_SYNTH = ['gold', 'nasdaq', 'sp'];
+const INSTRUMENTS_FOR_SYNTH = ['gold', 'nasdaq'];
 const SYNTH_TARGETS = [
   { tf: '15',  bucketSec: 15 * 60,      sourceTfs: ['5', '1'] },
   { tf: '60',  bucketSec: 60 * 60,      sourceTfs: ['15', '5', '1'] },
@@ -591,8 +584,8 @@ function sessionStartUtc(unixSec, hourUtc) {
  * @param {number} targetDays  How far back to extend history (default 730 = 2y).
  */
 export async function fetchAllPanesForBacktest(targetDays = 730) {
-  // The three traded micros — Databento serves these from the real CME tape.
-  const MICROS = new Set(['gold', 'nasdaq', 'sp']);
+  // The traded micros — Databento serves these from the real CME tape.
+  const MICROS = new Set(['gold', 'nasdaq']);
   const useDb = databentoConfigured();
 
   // 1) Yahoo baseline for everything (fast; sole intraday source for silver/dxy

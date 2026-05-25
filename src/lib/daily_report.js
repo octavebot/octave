@@ -21,7 +21,7 @@ const LOG_CANDIDATES = [
   process.env.HOME ? join(process.env.HOME, '.octave-logs', 'signal-engine.log') : null,
 ].filter(Boolean);
 
-const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
+const INST = { gold: 'GOLD', nasdaq: 'NASDAQ' };
 const fmtDay = (u) => new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
 }).format(new Date(u * 1000));

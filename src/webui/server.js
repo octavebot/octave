@@ -224,7 +224,7 @@ async function gatherState() {
   try {
     const cd = await import('../lib/cloud_data_supplement.js');
     const panes = await cd.fetchAllPanes();
-    for (const inst of ['gold', 'nasdaq', 'sp']) {
+    for (const inst of ['gold', 'nasdaq']) {
       const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
       const last = p?.bars?.[p.bars.length - 1];
       if (last) instrumentPrices[inst] = { close: last.close, ts: last.time };
@@ -390,7 +390,7 @@ const server = createServer(async (req, res) => {
         let prices = {};
         try {
           const panes = await cd.fetchAllPanes();
-          for (const inst of ['gold', 'nasdaq', 'sp']) {
+          for (const inst of ['gold', 'nasdaq']) {
             const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
             const last = p?.bars?.[p.bars.length - 1];
             if (last) prices[inst] = { close: last.close, time: last.time };

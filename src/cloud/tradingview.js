@@ -9,7 +9,7 @@
  * `fetchAll(requests)` shape Yahoo and Databento use, so `cloud_data_supplement`
  * can route the live signal path here behind a `DATA_SOURCE=tradingview` flag.
  *
- * Coverage: same three traded micros (gold/nasdaq/sp). Silver/dxy aren't on
+ * Coverage: the traded micros (gold/nasdaq). Silver/dxy aren't on
  * TV by default and aren't used by any strategy anyway — those stay on Yahoo
  * via cloud_data_supplement's existing fallback layering.
  *
@@ -21,11 +21,11 @@
 
 import { getPane, status as ingestStatus } from '../lib/tv_ingest.js';
 
-const INSTRUMENTS = new Set(['gold', 'nasdaq', 'sp']);
+const INSTRUMENTS = new Set(['gold', 'nasdaq']);
 
 /**
  * Fetch OHLCV bars for a single asset+timeframe from the bridge cache.
- * @param {'gold'|'nasdaq'|'sp'} asset
+ * @param {'gold'|'nasdaq'} asset
  * @param {string} tf  internal TF key ('5','15','60' etc.)
  * @returns {Promise<null|{symbol,resolution,bars,barCount,source}>}
  *   null if no fresh bars yet — caller falls back to Yahoo.
