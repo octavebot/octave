@@ -1282,54 +1282,134 @@ async function cmdSetup(arg) {
 }
 
 async function cmdNews(arg) {
-  const { upcomingEvents, checkBlackout, refreshForexFactory, nextEvent } = await import('../lib/news.js');
-  await refreshForexFactory().catch(() => {});
-  const hours = Math.max(1, Math.min(168, parseInt((arg || '').trim(), 10) || 48));
+  const newsLib = await import('../lib/news.js');
+  const { upcomingEvents, checkBlackout, refreshForexFactory, nextEvent, recentReleases, parseEconNumber, eventDirectionRule } = newsLib;
+  // Force a refresh so /news always sees the latest forecast/actual data.
+  await refreshForexFactory(true).catch(() => {});
+  const argTrim = (arg || '').trim().toLowerCase();
+  const showAll = argTrim === 'all';
+  const showHighOnly = argTrim === 'high' || argTrim === 'h';
+  const hours = showAll || showHighOnly ? 168
+    : Math.max(1, Math.min(168, parseInt(argTrim, 10) || 24));
   const now = Date.now() / 1000;
   const bo = checkBlackout(now, 30);
-  const evs = upcomingEvents(now, hours);
+  let evs = upcomingEvents(now, hours);
+  if (showHighOnly) evs = evs.filter((e) => e.impact === 'high');
 
-  const headerLine = bo.blocked && bo.event
-    ? `🚫 *Bot paused · news blackout*\n   ${tgEscape(bo.event.title || 'high-impact event')} · ${bo.minutesAway}m away`
-    : `✅ *Bot trading freely*\n   _No high-impact event in the next 30m._`;
-
-  let nextLine = '';
-  const nxt = nextEvent(now);
-  if (nxt && nxt.minutesAway > 30) {
-    const m = nxt.minutesAway;
-    const away = m < 60 ? `${m}m` : m < 1440 ? `${(m / 60).toFixed(1)}h` : `${(m / 1440).toFixed(1)}d`;
-    nextLine = `⏳ Next: *${tgEscape(nxt.title || '?')}* in ${away}`;
-  }
-
-  const fmtDate = (u) => new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
-  }).format(new Date(u * 1000));
   const fmtTime = (u) => new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(new Date(u * 1000));
-
-  // ForexFactory folder colours: 🔴 high · 🟠 medium · 🟡 low impact.
+  const fmtDayHeader = (u) => new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric',
+  }).format(new Date(u * 1000));
+  const todayKey = fmtDayHeader(now);
+  const fmtCountdown = (mins) => {
+    if (mins < 0) return `${Math.abs(mins)}m ago`;
+    if (mins < 60) return `in ${mins}m`;
+    if (mins < 1440) return `in ${(mins / 60).toFixed(1)}h`;
+    return `in ${(mins / 1440).toFixed(1)}d`;
+  };
   const folder = (impact) => ({ high: '🔴', medium: '🟠', low: '🟡' }[impact] || '⚪');
 
+  // Compute surprise direction for a released event. Returns:
+  //   { dir: 'usd_up'|'usd_down'|'neutral', pct: number|null, words: string }
+  const surpriseOf = (ev) => {
+    if (!ev.actual) return null;
+    const rule = eventDirectionRule(ev.title);
+    if (!rule) return { dir: 'neutral', pct: null, words: 'released' };
+    const a = parseEconNumber(ev.actual);
+    const f = parseEconNumber(ev.forecast);
+    if (a == null || f == null) return { dir: 'neutral', pct: null, words: 'released' };
+    const beat = a > f;
+    const usdPositive = (rule === 'usd_pos' && beat) || (rule === 'usd_neg' && !beat);
+    const usdNegative = (rule === 'usd_pos' && !beat) || (rule === 'usd_neg' && beat);
+    const deltaPct = f !== 0 ? ((a - f) / Math.abs(f)) * 100 : null;
+    return {
+      dir: usdPositive ? 'usd_up' : usdNegative ? 'usd_down' : 'neutral',
+      pct: deltaPct,
+      words: usdPositive ? '↑ USD (gold ↓ likely)' : usdNegative ? '↓ USD (gold ↑ likely)' : 'released',
+    };
+  };
+
+  // ── Header: live blackout state with countdown ───────────────────────────
+  const lines = [header('📰', 'News watch'), ''];
+  if (bo.blocked && bo.event) {
+    const direction = bo.event.unix > now ? 'in' : 'ago';
+    lines.push(`🚫 *BLACKOUT · bot paused*`);
+    lines.push(`   ${tgEscape(bo.event.title)} · ${direction === 'in' ? 'in ' : ''}${bo.minutesAway}m${direction === 'ago' ? ' ago' : ''}`);
+    if (bo.event.forecast || bo.event.previous) {
+      const fp = [bo.event.forecast && `fc ${bo.event.forecast}`, bo.event.previous && `prev ${bo.event.previous}`].filter(Boolean).join(' · ');
+      lines.push(`   _${tgEscape(fp)}_`);
+    }
+  } else {
+    lines.push(`✅ *Trading freely* — no high-impact within 30m`);
+  }
+
+  // ── Next high-impact (and exact pause window) ────────────────────────────
+  const nxt = nextEvent(now);
+  if (nxt) {
+    const pauseStart = fmtTime(nxt.unix - 30 * 60);
+    const pauseEnd = fmtTime(nxt.unix + 30 * 60);
+    lines.push('', section('⏳ Next high-impact'));
+    lines.push(`🔴 *${tgEscape(nxt.title)}* — ${fmtCountdown(nxt.minutesAway)} (${fmtTime(nxt.unix)} ET)`);
+    const data = [
+      nxt.forecast && `fc *${tgEscape(nxt.forecast)}*`,
+      nxt.previous && `prev ${tgEscape(nxt.previous)}`,
+    ].filter(Boolean).join(' · ');
+    if (data) lines.push(`   ${data}`);
+    lines.push(`   _Bot pauses ${pauseStart}–${pauseEnd} ET_`);
+  }
+
+  // ── Recent releases (last 24h) — beat/miss + USD direction ──────────────
+  const released = recentReleases(now, 24).slice(0, 5);
+  if (released.length) {
+    lines.push('', section('📊 Recent releases'));
+    for (const ev of released) {
+      const s = surpriseOf(ev);
+      const arrow = s?.dir === 'usd_up' ? '🟢' : s?.dir === 'usd_down' ? '🔴' : '⚪';
+      const pct = s?.pct != null ? ` (${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(1)}% vs fc)` : '';
+      lines.push(`${arrow} \`${fmtTime(ev.unix)}\` *${tgEscape(ev.title)}*`);
+      const parts = [
+        ev.actual && `act *${tgEscape(ev.actual)}*`,
+        ev.forecast && `fc ${tgEscape(ev.forecast)}`,
+        ev.previous && `prev ${tgEscape(ev.previous)}`,
+      ].filter(Boolean).join(' · ');
+      lines.push(`   ${parts}${pct ? ' · ' + tgEscape(pct) : ''}`);
+      if (s?.words && s.words !== 'released') lines.push(`   _${tgEscape(s.words)}_`);
+    }
+  }
+
+  // ── Upcoming events grouped by day ───────────────────────────────────────
+  if (!showHighOnly && !showAll) evs = evs.filter((e) => e.impact !== 'low'); // default: high+medium
   const byDay = new Map();
   for (const ev of evs) {
-    const key = fmtDate(ev.unix);
+    const key = fmtDayHeader(ev.unix);
     if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push(ev);
   }
 
-  const lines = [header('📰', 'News watch'), '', headerLine, nextLine, '', `─── next ${hours}h ───`].filter(Boolean);
   if (byDay.size === 0) {
-    lines.push('', '_No USD events in this window._');
-  } else for (const [day, dayEvents] of byDay) {
-    lines.push('', section(day));
-    for (const ev of dayEvents) {
-      lines.push(`${folder(ev.impact)} \`${fmtTime(ev.unix)}\` · ${tgEscape(ev.title || ev.name || '?')}`);
+    lines.push('', '_No events in this window._');
+  } else {
+    const label = showAll ? 'All upcoming · 7d'
+      : showHighOnly ? '🔴 High-impact · 7d'
+      : `Upcoming · ${hours}h`;
+    lines.push('', section(label));
+    for (const [day, dayEvents] of byDay) {
+      lines.push(`*${day === todayKey ? 'TODAY' : day.toUpperCase()}*`);
+      for (const ev of dayEvents) {
+        const mins = Math.round((ev.unix - now) / 60);
+        const cd = mins < 1440 ? ` _${fmtCountdown(mins)}_` : '';
+        const fp = [ev.forecast && `fc ${ev.forecast}`, ev.previous && `prev ${ev.previous}`].filter(Boolean).join(' · ');
+        const fpLine = fp ? ` · ${tgEscape(fp)}` : '';
+        lines.push(`${folder(ev.impact)} \`${fmtTime(ev.unix)}\` ${tgEscape(ev.title)}${cd}${fpLine}`);
+      }
     }
   }
+
   lines.push('',
-    '🔴 high  ·  🟠 medium  ·  🟡 low impact',
-    '_Bot auto-pauses ±30m around 🔴 high-impact events only. Source: ForexFactory._');
+    '🔴 high · 🟠 medium · 🟡 low  ·  bot auto-pauses ±30m around 🔴',
+    '_`/news` 24h · `/news 48` 48h · `/news high` 🔴-only 7d · `/news all` everything 7d_');
   await send(lines.join('\n'));
 }
 

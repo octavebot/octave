@@ -100,6 +100,11 @@ export async function refreshForexFactory(force = false) {
         unix,
         date: ev.date.slice(0, 10),
         time: ev.date.slice(11, 16),
+        // Capture FF's market data so /news can show forecast/previous and,
+        // after a release, the actual + surprise vs forecast.
+        forecast: ev.forecast || null,
+        previous: ev.previous || null,
+        actual: ev.actual || null,
       });
     }
     ffCache = { fetchedAt: Date.now(), events };
@@ -200,4 +205,43 @@ export function nextEvent(nowUnix = Date.now() / 1000) {
   if (up.length === 0) return null;
   const ev = up[0];
   return { ...ev, minutesAway: Math.round((ev.unix - nowUnix) / 60) };
+}
+
+/**
+ * Recent releases — high/medium-impact events from the last `hoursBack` that
+ * have an `actual` reading (post-release). Useful to show "what just happened"
+ * and the beat/miss vs forecast.
+ */
+export function recentReleases(nowUnix = Date.now() / 1000, hoursBack = 24) {
+  const cutoff = nowUnix - hoursBack * 3600;
+  return allEvents()
+    .filter((ev) => ev.unix >= cutoff && ev.unix <= nowUnix && ev.actual)
+    .sort((a, b) => b.unix - a.unix);
+}
+
+/**
+ * Strip the trailing 'K', '%', 'B', 'M' and parse to a number. Used to compute
+ * surprise vs forecast (positive = above forecast, negative = below).
+ * Returns null if either input isn't parseable.
+ */
+export function parseEconNumber(s) {
+  if (s == null) return null;
+  const m = String(s).match(/-?\d+(\.\d+)?/);
+  if (!m) return null;
+  return parseFloat(m[0]);
+}
+
+/**
+ * Classify an event title into a directional rule of thumb for USD strength.
+ *   beats forecast → USD ↑ (gold ↓, indices mixed)
+ *   misses        → USD ↓ (gold ↑, indices ↑ on dovish surprise)
+ * Returns 'usd_pos' (beat = USD strong) | 'usd_neg' (beat = USD weak, e.g. unemployment) | null.
+ */
+export function eventDirectionRule(title) {
+  const t = String(title || '').toLowerCase();
+  // For these, BEAT = USD strong (positive for USD, negative for gold)
+  if (/(cpi|ppi|pce|gdp|retail sales|durable goods|ism|consumer confidence|payroll|jolts|non-farm|nfp)/.test(t)) return 'usd_pos';
+  // For these, BEAT = USD weak (higher unemployment, jobless claims = bad)
+  if (/(unemployment rate|jobless claims|continuing claims)/.test(t)) return 'usd_neg';
+  return null;
 }
