@@ -13,6 +13,13 @@ node_modules/
 /src/state/trades.jsonl
 /src/state/cloud-heartbeat.json
 /src/state/cloud-dedup.json
+# Runtime-regen state — per-environment, must NOT be in git. Mac runs of
+# strategy-report would otherwise collide with the VPS's live regen on pull.
+/src/state/backtest-stats.json
+/src/state/adaptive-thresholds.json
+/src/state/holy-ai-cache.json
+/src/state/daily-report.json
+/src/state/last-precheck.json
 src/state/dedup.json
 src/state/drawings.json
 src/state/session.json
