@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "busboy": "^1.6.0",
-    "chrome-remote-interface": "^0.34.0",
-    "tradingview-mcp": "file:../tradingview-mcp"
+    "chrome-remote-interface": "^0.34.0"
   }
 }

@@ -1,6 +1,5 @@
 import { config } from './config.js';
 import { log } from './logger.js';
-import { snapshot } from './tvClient.js';
 import * as alerter from './alerter.js';
 import * as dedup from './dedup.js';
 import { run, stop } from './loop.js';
@@ -8,16 +7,12 @@ import { syncRegistryToConfig } from './lib/runtime_config.js';
 
 const verifyMode = process.argv.includes('--verify');
 
-async function bestEffortSnapshot() {
-  // 15m is the user-visible "watching" TF — all alerts gate at 15m+.
-  try {
-    const s = await snapshot();
-    if (!s) return { symbol: 'MGC1! (cloud)', timeframe: '15' };
-    return s;
-  } catch (err) {
-    log.warn('initial snapshot failed (TV may not be up yet)', { err: err.message });
-    return { symbol: 'MGC1!', timeframe: '15' };
-  }
+// The cloud bot reads market data from the Yahoo / OANDA / TradingView-bridge
+// feeds, not from a local TradingView chart, so there's no chart to snapshot.
+// (The old tvClient/MCP snapshot path was Mac-only and always failed here —
+// removed along with the tradingview-mcp dependency.)
+function bestEffortSnapshot() {
+  return { symbol: 'MGC1! (cloud)', timeframe: '15' };
 }
 
 async function main() {
