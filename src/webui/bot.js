@@ -1147,47 +1147,87 @@ async function cmdActiveSetups() {
 async function cmdSetup(arg) {
   const key = resolveStrategy(arg);
   if (!key) return send('Usage: `/setup <num>` or `/setup <key>` (e.g. `LONDON-SWEEP`)');
-  await send(`🔍 Checking *${key}*…`);
-  const r = await runDetectChild();
-  if (r.error) return send(`⚠️ ${r.error}`);
-  const matches = (r.results || []).filter((x) => x.strategy === key);
-  if (matches.length === 0) {
-    return send(`#${KEY_TO_NUM[key] || 'U'} *${key}* · no activity.\n\nEnabled and watching, but no setup is forming. Outside killzone, no sweep yet, or no HTF gap tapped.`);
-  }
-  const PRI = { triggered: 0, near_trigger: 1, forming: 2, invalidated: 3 };
-  matches.sort((a, b) => (PRI[a.status] ?? 9) - (PRI[b.status] ?? 9));
-  const top = matches[0];
-  const STAGE = { forming: '🟡 FORMING', near_trigger: '🟠 NEAR TRIGGER', triggered: '🟢 TRIGGERED', invalidated: '❌ INVALIDATED' };
 
+  // Read the same precheck snapshot /setups uses — single source of truth.
+  // 3-min freshness gate matches the bias snapshot rule.
+  const snap = readJson(join(STATE_DIR, 'last-precheck.json'), null);
+  const fresh = snap && (Date.now() - (snap.at || 0)) <= 180_000;
+  if (!snap || !fresh) {
+    return send(`🔍 *${tgEscape(key)}* · live diagnostics not ready — signal engine still warming up. Try again in a moment.`);
+  }
+  const rows = (snap.rows || []).filter((r) => r.strategy === key);
+  if (rows.length === 0) {
+    return send(`#${KEY_TO_NUM[key] || 'U'} *${tgEscape(key)}* · not running on any instrument right now. \`/strategies\` shows the enabled list.`);
+  }
+
+  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
+  // Stage + closeness for each instrument row, same scoring as /setups.
+  const rendered = rows.map((r) => {
+    const conds = r.conditions || [];
+    const gates = conds.filter((c) => c.kind === 'gate');
+    const triggers = conds.filter((c) => c.kind === 'trigger');
+    const gatesOk = gates.length > 0 && gates.every((c) => c.met);
+    const gMet = gates.filter((c) => c.met).length;
+    const tMet = triggers.filter((c) => c.met).length;
+    const tTot = triggers.length || 1;
+    let stage, icon;
+    if (!gatesOk) { stage = 'BLOCKED'; icon = '⚪'; }
+    else if (tMet === tTot) { stage = 'READY'; icon = '🟢'; }
+    else if (tMet >= tTot - 1) { stage = 'NEAR'; icon = '🟠'; }
+    else { stage = 'FORMING'; icon = '🟡'; }
+    return { ...r, gates, triggers, gatesOk, gMet, tMet, tTot, stage, icon };
+  });
+
+  // Sort: gate-passing rows first (by closeness), then blocked rows (by gates met).
+  rendered.sort((a, b) => {
+    if (a.gatesOk !== b.gatesOk) return a.gatesOk ? -1 : 1;
+    if (a.gatesOk) return (b.tMet / b.tTot) - (a.tMet / a.tTot);
+    return (b.gMet / b.gates.length) - (a.gMet / a.gates.length);
+  });
+
+  const lines = [header('🔍', `#${KEY_TO_NUM[key] || 'U'} ${key}`)];
+
+  // Show every instrument row with full gate + trigger detail so the user
+  // sees exactly what's met and what's blocking, per instrument.
+  for (const r of rendered) {
+    const inst = INST[r.instrument] || r.instrument;
+    const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
+    lines.push('');
+    lines.push(`${r.icon} *${inst}* · ${dir} · _${r.stage}_ · gates ${r.gMet}/${r.gates.length} · triggers ${r.tMet}/${r.tTot}`);
+    if (r.gates.length) {
+      lines.push('   *Gates*');
+      for (const c of r.gates) {
+        const ic = c.met ? '✅' : '⛔';
+        const val = c.value ? ` _${tgEscape(String(c.value))}_` : '';
+        lines.push(`   ${ic} ${tgEscape(c.label)}${val}`);
+      }
+    }
+    if (r.triggers.length) {
+      lines.push('   *Triggers*');
+      for (const c of r.triggers) {
+        const ic = c.met ? '✅' : '⏳';
+        const val = c.value ? ` _${tgEscape(String(c.value))}_` : '';
+        lines.push(`   ${ic} ${tgEscape(c.label)}${val}`);
+      }
+    }
+  }
+
+  // If any row is fully READY, attempt to attach the chart image — pulled
+  // from the actual triggered detect snapshot which has the entryPlan.
   let chartUrl = null;
-  if (top.entryPlan) {
-    try { const m = await import('../lib/chart_image.js'); chartUrl = await m.buildAlertChartUrl(top); } catch {}
+  const readyRow = rendered.find((r) => r.stage === 'READY');
+  if (readyRow) {
+    try {
+      const det = await runDetectChild();
+      const match = (det.results || []).find((x) => x.strategy === key && x.instrument === readyRow.instrument && x.entryPlan);
+      if (match) {
+        const m = await import('../lib/chart_image.js');
+        chartUrl = await m.buildAlertChartUrl(match);
+      }
+    } catch {}
   }
 
-  const lines = [
-    header('🔍', `#${KEY_TO_NUM[key] || 'U'} ${key} · ${STAGE[top.status] || top.status}`),
-    kv('Direction', top.direction === 'LONG' ? '🟢 LONG' : top.direction === 'SHORT' ? '🔴 SHORT' : '—'),
-    kv('Confidence', `${Math.round((top.confidence || 0) * 100)}%`),
-    '',
-    top.summary || top.setupName || '',
-  ];
-
-  const g = top.geometry || {};
-  const confirmed = [], missing = [];
-  if (g.target?.level)    confirmed.push(`Target @ ${g.target.level.toFixed(2)} ${g.target.name ? `(${g.target.name})` : ''}`);
-  else                    missing.push('Liquidity target');
-  if (g.sweep?.wickPrice) confirmed.push(`Sweep wick @ ${g.sweep.wickPrice.toFixed(2)}`);
-  else                    missing.push('Liquidity sweep');
-  if (g.mss?.brokenPrice) confirmed.push(`MSS @ ${g.mss.brokenPrice.toFixed(2)}`);
-  else                    missing.push('Market structure shift');
-  if (g.fvg?.top != null) confirmed.push(`FVG ${g.fvg.bottom.toFixed(2)}-${g.fvg.top.toFixed(2)}`);
-  else if (top.status !== 'triggered') missing.push('Fair Value Gap');
-  if (top.entryPlan)      confirmed.push(`Entry plan ready @ ${top.entryPlan.entry.toFixed(2)}`);
-
-  if (confirmed.length) { lines.push('', section('✅ Confirmed'), ...confirmed.map(bullet)); }
-  if (missing.length && top.status !== 'triggered') {
-    lines.push('', section('⏳ Still needed'), ...missing.map(bullet));
-  }
+  lines.push('', `_\`/playbook ${KEY_TO_NUM[key] || key}\` for the full ruleset · \`/setups\` for all strategies._`);
 
   if (chartUrl) {
     const text = lines.join('\n');
