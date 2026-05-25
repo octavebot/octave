@@ -577,36 +577,30 @@ async function cmdPrice() {
     nasdaq: { sym: 'MNQ1!', label: 'Micro Nasdaq' },
     sp:     { sym: 'MES1!', label: 'Micro S&P' },
   };
-  let anyEst = false, anyStale = false;
+  // Tight one-line-per-instrument layout. Header carries the source; rows
+  // carry price + signed change only. Anything stale/estimated gets a 🕒.
   const srcSeen = new Set();
-  const lines = [header('💰', 'Live prices'), ''];
+  let anyStale = false, anyEst = false;
+  const rows = [];
   for (const key of ORDER) {
     const q = quotes.get(key);
-    if (!q) { const f = FALLBACK[key]; lines.push(`*${f.label}* \`${f.sym}\` · _no data_`); continue; }
+    if (!q) { const f = FALLBACK[key]; rows.push(`⚪ *${f.label.replace('Micro ', '')}* — _no data_`); continue; }
     srcSeen.add(q.source);
+    if (q.stale) anyStale = true;
+    if (q.source === 'oanda+basis') anyEst = true;
     const dot = q.stale ? '🕒' : (q.change == null ? '⚪' : q.change >= 0 ? '🟢' : '🔴');
     const chg = q.change != null
-      ? ` · ${sign(q.change)}${q.changePct != null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}%)` : ''}`
+      ? ` ${sign(q.change)}${q.changePct != null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}%)` : ''}`
       : '';
-    let tag = '';
-    if (q.source === 'oanda+basis') { anyEst = true; tag = ' · _est. (spot+basis)_'; }
-    else if (q.stale) { anyStale = true; tag = ' · _stale_'; }
-    lines.push(`${dot} *${q.label}* \`${q.sym}\` · *$${q.price.toFixed(2)}*${chg}${tag}`);
+    const label = q.label.replace('Micro ', '');
+    rows.push(`${dot} *${label}*  $${q.price.toFixed(2)}${chg}`);
   }
-  lines.push('');
-  // Footer reflects the ACTUAL source the quotes came from — no hardcoded label.
-  if (quotes.size === 0) {
-    lines.push('_All price feeds unavailable right now — try again shortly._');
-  } else if (srcSeen.has('tradingview')) {
-    lines.push('_Source: TradingView — live CME futures, the exact contract you trade (real-time via your desktop)._');
-  } else if (anyEst) {
-    lines.push('_Live futures estimated from OANDA spot + measured basis (CME closed). Tick-matches your TradingView futures within a few pts._');
-  } else if (anyStale) {
-    lines.push('_⚠️ Live feed frozen — prices are last-known, not live._');
-  } else {
-    lines.push('_Source: Yahoo micro-futures (~15min delayed; TradingView bridge offline)._');
-  }
-  await send(lines.join('\n'));
+  const srcLabel = quotes.size === 0 ? 'no feed'
+    : srcSeen.has('tradingview') ? 'TradingView · live'
+    : anyEst ? 'OANDA + basis (CME closed)'
+    : anyStale ? '⚠️ stale'
+    : 'Yahoo · delayed';
+  await send([`💰 *Live prices · ${srcLabel}*`, '', ...rows].join('\n'));
 }
 
 // ── Alert history ──
@@ -1093,73 +1087,38 @@ async function cmdBias() {
   const freshestAge = ages.length ? Math.min(...ages) : null;
   const allStale = ages.length > 0 && freshestAge > STALE_MS;
 
-  const lines = [header('🧭', 'Market bias'), ''];
-  if (allStale) {
-    lines.push(`⚠️ *Data stale* — freshest feed is ${fmtAge(freshestAge)} old (market likely closed). Bias below reflects the last available data, not a live read.`, '');
-  }
+  // Compact bias: one row per instrument with the essentials. Full structural
+  // factor breakdown is kept under /bias detail (handled below).
+  const detail = false;  // future: parse arg for '/bias detail'
+  const lines = [header('🧭', 'Bias'), ''];
+  if (allStale) lines.push(`🕒 _freshest feed ${fmtAge(freshestAge)} old · last-known direction shown_`, '');
   for (const inst of INSTRUMENTS) {
     const b = snap.bias[inst.key];
-    if (!b) { lines.push(`⚪ *${inst.label}* \`${inst.sym}\` · no data`, ''); continue; }
-
-    const combinedDir = b.combined?.direction || b.direction || 'NEUTRAL';
+    if (!b) { lines.push(`⚪ *${inst.label}* — no data`); continue; }
+    const dir = b.combined?.direction || b.direction || 'NEUTRAL';
     const stale = isStale(b);
-    const icon = stale ? '🕒' : (ICON[combinedDir] || '⚪');
-    const combinedLabel = b.combined?.label ? ` · _${tgEscape(b.combined.label)}_` : '';
-    const conf = b.confidence != null ? ` · ${b.confidence}%` : '';
-    const staleTag = stale ? ` · _stale ${fmtAge(b.dataAgeMs)}_` : '';
-    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${conf}${combinedLabel}${staleTag}`);
-
-    // Price + intraday context
-    const intraday = b.intradayChange != null
-      ? `${b.intradayChange >= 0 ? '+' : ''}${b.intradayChange.toFixed(2)} today`
-      : '—';
-    const hourly = b.h1Change != null
-      ? `${b.h1Change >= 0 ? '+' : ''}${b.h1Change.toFixed(2)}/h`
+    const icon = stale ? '🕒' : (ICON[dir] || '⚪');
+    const conf = b.confidence != null ? `${b.confidence}%` : '—';
+    const chg = b.intradayChange != null
+      ? `${b.intradayChange >= 0 ? '+' : ''}${b.intradayChange.toFixed(2)}`
       : '';
-    const volTag = b.volRegime ? ` · vol ${b.volRegime}` : '';
-    lines.push(`   \`${b.price.toFixed(2)}\` · ${intraday}${hourly ? ' · ' + hourly : ''}${volTag}`);
-
-    // Structural read — magnitude-weighted score
-    const up = b.factors.filter((f) => f.v > 0.15).length;
-    const dn = b.factors.filter((f) => f.v < -0.15).length;
-    const neu = b.factors.filter((f) => Math.abs(f.v) <= 0.15).length;
-    lines.push(`   *Structural* · ${b.direction} ${sign(b.score)}/${b.maxScore.toFixed(1)} max · (${up}↑ ${dn}↓ ${neu}→)`);
-    // Each factor with its magnitude — icon = strength, number = signed score
-    const factorLines = b.factors.map((f) => `${fIcon(f.v)} ${tgEscape(f.label)} ${sign(f.v)}`);
-    // Two columns of factor readouts to keep the message compact
-    for (let i = 0; i < factorLines.length; i += 2) {
-      const a = factorLines[i];
-      const b2 = factorLines[i + 1] || '';
-      lines.push(`     ${a}${b2 ? '   ·   ' + b2 : ''}`);
+    // One line: ICON LABEL  $price  DIRECTION conf%  ±chg
+    lines.push(`${icon} *${inst.label}*  $${b.price.toFixed(2)}  · ${dir} ${conf}${chg ? ' · ' + chg + ' today' : ''}`);
+    // Detail mode: keep the existing deep breakdown (factors, vote, etc).
+    if (detail) {
+      const combinedLabel = b.combined?.label ? ` · _${tgEscape(b.combined.label)}_` : '';
+      const staleTag = stale ? ` · _stale ${fmtAge(b.dataAgeMs)}_` : '';
+      lines.push(`   ${dir}${combinedLabel}${staleTag}`);
+      const factorLines = b.factors.map((f) => `${fIcon(f.v)} ${tgEscape(f.label)} ${sign(f.v)}`);
+      for (let i = 0; i < factorLines.length; i += 2) {
+        lines.push(`     ${factorLines[i]}${factorLines[i + 1] ? '   ·   ' + factorLines[i + 1] : ''}`);
+      }
+      const vote = b.strategyVote || {};
+      if ((vote.candidates || []).length) {
+        const top = vote.candidates.slice(0, 3).map((c) => `${c.direction === 'LONG' ? '🟢' : '🔴'}${tgEscape(c.strategy)} ${Math.round(c.closeness * 100)}%`);
+        lines.push('   ' + top.join(' · '));
+      }
     }
-
-    // Live indicator readouts (raw values, not score-derived)
-    const reads = [];
-    if (b.rsi60 != null) reads.push(`RSI60 ${b.rsi60.toFixed(0)}`);
-    if (b.vwap != null) reads.push(`VWAP ${b.vwap.toFixed(2)} (Δ ${(b.price - b.vwap).toFixed(2)})`);
-    if (b.atr15m != null) reads.push(`ATR15 ${b.atr15m.toFixed(2)}`);
-    if (reads.length) lines.push(`   _${tgEscape(reads.join(' · '))}_`);
-
-    // Strategy vote
-    const vote = b.strategyVote || { long: 0, short: 0, candidates: [], longCount: 0, shortCount: 0 };
-    const voteLabel = vote.long > vote.short ? `LONG ${vote.long.toFixed(1)}↑ / ${vote.short.toFixed(1)}↓ (${vote.longCount || 0}|${vote.shortCount || 0} setups)`
-      : vote.short > vote.long ? `SHORT ${vote.long.toFixed(1)}↑ / ${vote.short.toFixed(1)}↓ (${vote.longCount || 0}|${vote.shortCount || 0} setups)`
-      : (!vote.long && !vote.short) ? 'no strategy gates passing'
-      : `tied ${vote.long.toFixed(1)}↑/${vote.short.toFixed(1)}↓`;
-    lines.push(`   *Strategy vote* · ${voteLabel}`);
-    if ((vote.candidates || []).length) {
-      const top = vote.candidates.slice(0, 3).map((c) => {
-        const dirIcon = c.direction === 'LONG' ? '🟢' : c.direction === 'SHORT' ? '🔴' : '⚪';
-        return `${dirIcon}${tgEscape(c.strategy)} ${Math.round(c.closeness * 100)}%`;
-      });
-      lines.push('   ' + top.join(' · '));
-    }
-    lines.push('');
-  }
-  lines.push('_Structural = D1/H1 trend·slope·RSI · 15m EMAs/mom · VWAP · session. Magnitude-weighted (not just ±1)._');
-  lines.push('_Strategy vote weighted by closeness — a NEAR-trigger setup counts more than a barely-gated one._');
-  if (INSTRUMENTS.some((i) => (snap.bias[i.key]?.dataSource || '').includes('oanda'))) {
-    lines.push('_Prices = OANDA spot (real-time, 24/5) for the directional read. /setups uses futures levels for execution._');
   }
   await send(lines.join('\n'));
 }
@@ -1187,22 +1146,18 @@ async function cmdActiveSetups() {
   const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
   const lines = [header('🎯', 'Setups')];
 
+  // Compact /setups: one-liner per item across three sections.
   if (open.length) {
-    lines.push('', section(`Open positions (${open.length})`));
+    lines.push('', `*Open · ${open.length}*`);
     for (const s of open) {
-      const dir = s.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
-      const inst = (s.instrument || '').toUpperCase();
-      const done = Object.keys(s.milestonesFired || {}).filter((m) => m !== 'be');
-      const stage = done.length ? done[done.length - 1].toUpperCase()
-        : (s.milestonesFired?.be ? 'at breakeven' : 'running');
-      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* · ${inst} · entry \`${s.entry}\` · _${stage}_`);
+      const dir = s.direction === 'LONG' ? '🟢' : '🔴';
+      const stage = Object.keys(s.milestonesFired || {}).filter((m) => m !== 'be').pop()?.toUpperCase()
+        || (s.milestonesFired?.be ? 'BE' : 'live');
+      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* ${(s.instrument || '').toUpperCase()} · @${s.entry} · ${stage}`);
     }
   }
 
   if (precheckRows.length) {
-    // Split each row into gates (hard prerequisites) and triggers (catalysts).
-    // Only show rows where every gate is met — those are the strategies
-    // genuinely watching for a fire RIGHT NOW. Sort by triggers met.
     const ranked = precheckRows
       .map((r) => {
         const conds = r.conditions || [];
@@ -1211,69 +1166,39 @@ async function cmdActiveSetups() {
         const gatesOk = gates.length > 0 && gates.every((c) => c.met);
         const tMet = triggers.filter((c) => c.met).length;
         const tTotal = triggers.length || 1;
-        return { ...r, gates, triggers, gatesOk, tMet, tTotal, closeness: gatesOk ? tMet / tTotal : 0 };
+        return { ...r, gatesOk, tMet, tTotal, closeness: gatesOk ? tMet / tTotal : 0 };
       })
       .filter((r) => r.gatesOk)
       .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
 
     if (ranked.length) {
-      lines.push('', section(`Forming now (${ranked.length})`));
-      for (const r of ranked.slice(0, 8)) {
+      lines.push('', `*Forming · ${ranked.length}*`);
+      for (const r of ranked.slice(0, 6)) {
         const inst = INST[r.instrument] || r.instrument;
-        const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
-        const stageIcon = r.tMet === r.tTotal ? '🟢' : r.tMet >= r.tTotal - 1 ? '🟠' : '🟡';
-        const stageWord = r.tMet === r.tTotal ? 'READY' : r.tMet >= r.tTotal - 1 ? 'NEAR' : 'FORMING';
-        lines.push(`${stageIcon} *${tgEscape(r.strategy)}* · ${inst} · ${dir} · _${stageWord}_ ${r.tMet}/${r.tTotal} triggers`);
-        // Projected trade values — what the alert would fire with right now.
-        if (r.projection) {
-          const p = r.projection;
-          lines.push(`   📐 \`E ${p.entry.toFixed(2)}\` · \`SL ${p.stop.toFixed(2)}\` · \`TP1 ${p.t1.toFixed(2)}\` · \`TP2 ${p.t2.toFixed(2)}\` · 1:${p.rr2.toFixed(1)}R`);
-        }
-        // Show only the triggers — gates are implied by gatesOk filter.
-        for (const c of r.triggers) {
-          const icon = c.met ? '✅' : '⏳';
-          const val = c.value ? ` _${tgEscape(String(c.value))}_` : '';
-          lines.push(`   ${icon} ${tgEscape(c.label)}${val}`);
-        }
-      }
-    } else {
-      // Useful when no gate-passing strategies exist: surface the closest
-      // strategy per instrument so the user sees what's blocking.
-      const byInst = new Map();
-      for (const r of precheckRows) {
-        const conds = r.conditions || [];
-        const gates = conds.filter((c) => c.kind === 'gate');
-        const gatesMet = gates.filter((c) => c.met).length;
-        const score = gatesMet / (gates.length || 1);
-        const cur = byInst.get(r.instrument);
-        if (!cur || cur.score < score) byInst.set(r.instrument, { row: r, score, gates, gatesMet });
-      }
-      if (byInst.size) {
-        lines.push('', section('Nothing forming · closest by instrument'));
-        for (const [inst, info] of byInst) {
-          const blockers = info.gates.filter((c) => !c.met).map((c) => c.label);
-          lines.push(`⚪ *${INST[inst] || inst}* — ${tgEscape(info.row.strategy)} (${info.gatesMet}/${info.gates.length} gates) · _blocked by:_ ${tgEscape(blockers.slice(0, 2).join(', ') || '—')}`);
-        }
+        const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
+        const stage = r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
+        const proj = r.projection
+          ? ` · E${r.projection.entry.toFixed(2)} SL${r.projection.stop.toFixed(2)} TP${r.projection.t2.toFixed(2)} (1:${r.projection.rr2.toFixed(1)}R)`
+          : '';
+        lines.push(`${dir} *${tgEscape(r.strategy)}* ${inst} · ${stage}${proj}`);
       }
     }
   } else if (precheckSnap && !precheckFresh) {
-    lines.push('', '_Live diagnostics stale — signal engine catching up._');
+    lines.push('', '_engine catching up…_');
   }
 
   if (fired.length) {
     const seen = new Set();
     const uniq = fired.filter((a) => { if (seen.has(a.setupId)) return false; seen.add(a.setupId); return true; });
-    lines.push('', section(`Signals fired today (${uniq.length})`));
-    for (const a of uniq.slice(0, 12)) {
+    lines.push('', `*Fired today · ${uniq.length}*`);
+    for (const a of uniq.slice(0, 8)) {
       const inst = INST[String(a.setupId || '').split('|')[0]] || '?';
-      lines.push(`\`${nyHHmm(a.time)}\` · *${inst}* · #${KEY_TO_NUM[a.strategy] || '?'} ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
+      lines.push(`\`${nyHHmm(a.time)}\` ${inst} · ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
     }
   }
 
   if (!open.length && !precheckRows.length && !fired.length) {
-    lines.push('',
-      'No open positions, nothing forming, nothing fired today.',
-      '_`/bias` shows the current directional lean across all instruments._');
+    lines.push('', '_Nothing forming. `/bias` for current lean._');
   } else {
     lines.push('', '_`/setup <num>` for a strategy\'s live detail · `/bias` for direction._');
   }

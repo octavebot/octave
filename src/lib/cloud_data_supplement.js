@@ -186,7 +186,6 @@ let inflightBias = null;
  *   or returned nothing — caller should fall back to the Yahoo panes.
  */
 export async function fetchBiasPanes() {
-  if (!oandaConfigured()) return null;
   if (!shouldFetch(biasCache.fetchedAt) && biasCache.panes) {
     return new Map(biasCache.panes);
   }
@@ -194,37 +193,48 @@ export async function fetchBiasPanes() {
   inflightBias = (async () => {
     try {
       const out = new Map();
-      const results = await Promise.allSettled(
-        BIAS_REQUESTS.map(([asset, tf, days]) =>
-          fetchOandaBars(asset, tf, days).then((pane) => [asset, tf, pane])),
-      );
-      for (const r of results) {
-        if (r.status !== 'fulfilled' || !r.value) continue;
-        const [asset, tf, pane] = r.value;
-        if (pane?.bars?.length) out.set(`${asset}|${tf}`, pane);
+      // OANDA tier — best for 60m/1D context (deeper history than the TV
+      // bridge buffers). When OANDA is up these populate first; when OANDA is
+      // down (e.g. their HTTP 522 spells), out stays empty and the TV overlay
+      // below takes over so bias keeps moving instead of freezing.
+      if (oandaConfigured()) {
+        const results = await Promise.allSettled(
+          BIAS_REQUESTS.map(([asset, tf, days]) =>
+            fetchOandaBars(asset, tf, days).then((pane) => [asset, tf, pane])),
+        );
+        for (const r of results) {
+          if (r.status !== 'fulfilled' || !r.value) continue;
+          const [asset, tf, pane] = r.value;
+          if (pane?.bars?.length) out.set(`${asset}|${tf}`, pane);
+        }
       }
-      if (out.size === 0) return null;
 
-      // Upgrade the 15m bias pane to the TradingView real-time FUTURES feed
-      // when the bridge is live. Bias's fastest factors (15m trend/momentum,
-      // VWAP, and the spot price shown) then come off the exact futures tape
-      // instead of OANDA spot. 60m/1D stay on OANDA — those are slow,
-      // direction-only factors where the spot-vs-futures basis cancels, and
-      // TV's bridge window isn't deep enough for them anyway. Each timeframe
-      // is single-sourced, so there's no futures/spot discontinuity within a
-      // series. Falls back to OANDA 15m automatically if TV is stale.
+      // TradingView bridge overlay — the EXACT real-time futures tape. Bias's
+      // 15m factors (trend/momentum/VWAP) + the displayed price now come off
+      // the live futures print instead of OANDA spot. Two cases:
+      //   (a) TV last bar is fresh (<1h) → use TV (with as few as 50 bars —
+      //       vol-regime gracefully degrades to 'unknown' below the 114
+      //       window, but the directional factors stay accurate).
+      //   (b) TV stale on this instrument (e.g. user's Mac chart frozen) →
+      //       skip the override, keep OANDA so bias stays directional.
+      // 60m/1D stay OANDA — slow, direction-only (basis cancels), and TV's
+      // window isn't deep enough.
       if (tvConfigured()) {
         try {
           const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15'], ['sp', '15']]).catch(() => new Map());
+          const nowSec = Date.now() / 1000;
           for (const [key, p] of tv) {
-            // Only override if TV actually has enough bars for the bias window.
-            if (p?.bars?.length >= 114) out.set(key, p);
+            const lastBar = p?.bars?.[p.bars.length - 1];
+            const fresh = lastBar && (nowSec - lastBar.time) <= 3600; // last bar within 1h
+            const enough = p?.bars?.length >= 50;
+            if (fresh && enough) out.set(key, p);
           }
         } catch (err) {
           console.error('[bias] tradingview overlay failed:', err?.message || err);
         }
       }
 
+      if (out.size === 0) return null;
       biasCache = { panes: out, fetchedAt: Date.now() };
       return out;
     } catch {
