@@ -234,6 +234,10 @@ const FUTURES_FRESH_MS = 25 * 60 * 1000;
 // Last good basis per instrument — reused if a transient Yahoo failure means we
 // can't measure it this call, so the estimate stays accurate instead of blanking.
 const lastBasis = {};
+// Last known prior-session close per instrument (from Yahoo's chartPreviousClose
+// when we last fetched it on the stale path). Lets the TV-fresh fast path report
+// an accurate "change since prior settle" without a Yahoo round-trip.
+const lastPrevClose = {};
 // Short result cache so rapid /price + /session presses don't hammer Yahoo.
 let quoteCache = { at: 0, map: null };
 const QUOTE_TTL_MS = 10 * 1000;
@@ -279,9 +283,40 @@ export async function getLiveFuturesQuotes() {
   if (quoteCache.map && (Date.now() - quoteCache.at) < QUOTE_TTL_MS) {
     return new Map(quoteCache.map);
   }
-  const biasPanes = await fetchBiasPanes().catch(() => null);
   const now = Date.now();
   const out = new Map();
+
+  // TV-fresh FAST PATH: when the Mac bridge is up it provides the EXACT live
+  // futures price, so we skip the (slow, sometimes 5-7s-each) Yahoo + OANDA
+  // network fetches entirely — those are only needed to ESTIMATE the price via
+  // basis when TV/Yahoo are stale. This is what kept /price and /session fast
+  // vs the ~20s cold call that hit Yahoo+OANDA for all three instruments.
+  if (tvConfigured()) {
+    let allFresh = true;
+    for (const inst of QUOTE_INSTRUMENTS) {
+      let tvLast = null;
+      try {
+        const p = await fetchTvBars(inst.key, '5');
+        if (p?.bars?.length) tvLast = p.bars[p.bars.length - 1];
+      } catch { /* no-op */ }
+      if (!tvLast) { allFresh = false; break; }
+      const ref = lastPrevClose[inst.key] ?? null;
+      const change = ref != null ? tvLast.close - ref : null;
+      out.set(inst.key, {
+        sym: inst.sym, label: inst.label, price: tvLast.close,
+        change, changePct: (change != null && ref) ? (change / ref) * 100 : null,
+        source: 'tradingview', estimated: false, basis: null,
+        stale: false, ageMs: now - tvLast.time * 1000, asOfMs: tvLast.time * 1000,
+      });
+    }
+    if (allFresh && out.size === QUOTE_INSTRUMENTS.length) {
+      quoteCache = { at: Date.now(), map: out };
+      return new Map(out);
+    }
+    out.clear(); // partial TV — fall through to the full Yahoo/OANDA path below
+  }
+
+  const biasPanes = await fetchBiasPanes().catch(() => null);
 
   await Promise.all(QUOTE_INSTRUMENTS.map(async (inst) => {
     let yMeta = null, yBars = [];
@@ -330,6 +365,7 @@ export async function getLiveFuturesQuotes() {
     const yBarTimeMs = yBars.length ? yBars[yBars.length - 1].time * 1000 : null;
     const yFresh = yBarTimeMs != null && (now - yBarTimeMs) < FUTURES_FRESH_MS;
     const prevClose = yMeta?.chartPreviousClose ?? null;
+    if (prevClose != null) lastPrevClose[inst.key] = prevClose; // remembered for the TV fast path
     const yLivePrice = yMeta?.regularMarketPrice ?? (yBars.length ? yBars[yBars.length - 1].close : null);
 
     let entry = null;
