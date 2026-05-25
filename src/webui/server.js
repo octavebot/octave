@@ -187,16 +187,20 @@ async function gatherState() {
 
   // Last alert from the signal-engine stdout log. STDOUT_LOG_NAME resolves
   // to 'signal-engine.log' on the VPS (systemd) and 'stdout.log' on Mac dev.
+  // Only count alerts ACTUALLY DELIVERED to Telegram (telegram:'sent') — a
+  // setup that fired but was confidence-gated, muted, or suppressed was never
+  // seen by the user, so showing it as the dashboard "Last alert" was
+  // misleading (same fix as /setups' "Signals fired today").
   let lastAlert = null;
   try {
     const out = readFileSync(join(LOG_DIR, STDOUT_LOG_NAME), 'utf8');
     const lines = out.trim().split('\n');
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 500); i--) {
-      if (lines[i].includes('"alert fired"')) {
-        const parsed = JSON.parse(lines[i]);
-        lastAlert = { strategy: parsed.strategy, status: parsed.status, ts: parsed.ts };
-        break;
-      }
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 800); i--) {
+      if (!lines[i].includes('"alert fired"')) continue;
+      let parsed; try { parsed = JSON.parse(lines[i]); } catch { continue; }
+      if (parsed.telegram !== 'sent') continue;
+      lastAlert = { strategy: parsed.strategy, status: parsed.status, ts: parsed.ts };
+      break;
     }
   } catch {}
 
