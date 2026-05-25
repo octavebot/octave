@@ -1005,16 +1005,37 @@ async function cmdBias() {
   };
   const sign = (n) => (n > 0 ? '+' : '') + n.toFixed(2);
 
+  // Data staleness — the bias read is only meaningful if the underlying bars
+  // are current. 45min = 3× the 15m bar cadence, so a normal "last closed bar"
+  // (up to ~15-30min old) never trips it, but a frozen weekend/holiday feed does.
+  const STALE_MS = 45 * 60 * 1000;
+  const fmtAge = (ms) => {
+    if (ms == null || !Number.isFinite(ms)) return '?';
+    const m = Math.round(ms / 60000);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60), r = m % 60;
+    return r ? `${h}h ${r}m` : `${h}h`;
+  };
+  const isStale = (b) => b?.dataAgeMs != null && b.dataAgeMs > STALE_MS;
+  const ages = INSTRUMENTS.map((i) => snap.bias[i.key]?.dataAgeMs).filter((a) => a != null);
+  const freshestAge = ages.length ? Math.min(...ages) : null;
+  const allStale = ages.length > 0 && freshestAge > STALE_MS;
+
   const lines = [header('🧭', 'Market bias'), ''];
+  if (allStale) {
+    lines.push(`⚠️ *Data stale* — freshest feed is ${fmtAge(freshestAge)} old (market likely closed). Bias below reflects the last available data, not a live read.`, '');
+  }
   for (const inst of INSTRUMENTS) {
     const b = snap.bias[inst.key];
     if (!b) { lines.push(`⚪ *${inst.label}* \`${inst.sym}\` · no data`, ''); continue; }
 
     const combinedDir = b.combined?.direction || b.direction || 'NEUTRAL';
-    const icon = ICON[combinedDir] || '⚪';
+    const stale = isStale(b);
+    const icon = stale ? '🕒' : (ICON[combinedDir] || '⚪');
     const combinedLabel = b.combined?.label ? ` · _${tgEscape(b.combined.label)}_` : '';
     const conf = b.confidence != null ? ` · ${b.confidence}%` : '';
-    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${conf}${combinedLabel}`);
+    const staleTag = stale ? ` · _stale ${fmtAge(b.dataAgeMs)}_` : '';
+    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${conf}${combinedLabel}${staleTag}`);
 
     // Price + intraday context
     const intraday = b.intradayChange != null
@@ -1065,6 +1086,9 @@ async function cmdBias() {
   }
   lines.push('_Structural = D1/H1 trend·slope·RSI · 15m EMAs/mom · VWAP · session. Magnitude-weighted (not just ±1)._');
   lines.push('_Strategy vote weighted by closeness — a NEAR-trigger setup counts more than a barely-gated one._');
+  if (INSTRUMENTS.some((i) => (snap.bias[i.key]?.dataSource || '').includes('oanda'))) {
+    lines.push('_Prices = OANDA spot (real-time, 24/5) for the directional read. /setups uses futures levels for execution._');
+  }
   await send(lines.join('\n'));
 }
 

@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
 import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
-import { fetchAllPanes } from './lib/cloud_data_supplement.js';
+import { fetchAllPanes, fetchBiasPanes } from './lib/cloud_data_supplement.js';
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
 import { enrichSetup } from './lib/trade_enrichment.js';
@@ -118,6 +118,53 @@ function writePrecheckSnapshot(precheckRows) {
     renameSync(PRECHECK_SNAPSHOT + '.tmp', PRECHECK_SNAPSHOT);
   } catch { /* best-effort */ }
 }
+
+// Fetch the OANDA real-time bias panes, never throwing (null on any failure
+// so the caller transparently falls back to the Yahoo panes).
+async function fetchBiasPanesSafe() {
+  try { return await fetchBiasPanes(); }
+  catch { return null; }
+}
+
+// Build the per-instrument bias snapshot. `biasPanesByTf` is the OANDA
+// real-time feed (or the Yahoo panes as fallback); `precheckRows` is the flat
+// list of strategy precheck rows used for the strategy-vote half.
+//
+// Each entry carries staleness metadata (lastBarMs / dataAgeMs) so the bot can
+// flag a frozen read instead of presenting stale numbers as a live bias.
+function computeBiasSnapshot(biasPanesByTf, precheckRows) {
+  if (!biasPanesByTf) return {};
+  const rowsByInstrument = new Map();
+  for (const r of precheckRows || []) {
+    if (!rowsByInstrument.has(r.instrument)) rowsByInstrument.set(r.instrument, []);
+    rowsByInstrument.get(r.instrument).push(r);
+  }
+  const now = Date.now();
+  const out = {};
+  for (const instrument of INSTRUMENTS) {
+    const ctx = buildInstrumentCtx(instrument, biasPanesByTf);
+    if (!ctx) continue;
+    try {
+      const structural = computeInstrumentBias(ctx);
+      if (!structural) continue;
+      const vote = tallyStrategyVote(rowsByInstrument.get(instrument) || []);
+      const combined = combineBias(structural, vote);
+      const m15 = ctx.pane('15');
+      const lastBar = m15?.bars?.length ? m15.bars[m15.bars.length - 1] : null;
+      const lastBarMs = lastBar ? lastBar.time * 1000 : null;
+      out[instrument] = {
+        ...structural,
+        strategyVote: vote,
+        combined: combined ? { direction: combined.direction, label: combined.label } : null,
+        dataSource: m15?.source || ctx.dataSource || 'unknown',
+        lastBarMs,
+        dataAgeMs: lastBarMs != null ? now - lastBarMs : null,
+      };
+    } catch (err) { log.warn('bias compute threw', { instrument, err: err.message }); }
+  }
+  return out;
+}
+
 function signatureOf(panesByTf) {
   const parts = [];
   for (const inst of INSTRUMENTS) {
@@ -144,10 +191,17 @@ export async function detect() {
   // fresh (with stable contents) and downstream behavior is identical.
   const sig = signatureOf(panesByTf);
   if (sig && sig === _lastDetect.sig && _lastDetect.results) {
-    // Re-stamp the bias snapshot so /bias doesn't trip the 3-min freshness
-    // gate on weekends / quiet sessions when no new bar arrives.
-    writeBiasSnapshot(_lastDetect.bias);
+    // Strategies are unchanged (no new Yahoo bar), but the OANDA bias feed
+    // keeps ticking overnight / weekends / holidays — recompute bias from it
+    // so /bias reflects real-time direction instead of re-stamping a frozen
+    // read. Falls back to the last bias if OANDA is unavailable.
+    const biasPanes = await fetchBiasPanesSafe();
+    const freshBias = biasPanes
+      ? computeBiasSnapshot(biasPanes, _lastDetect.precheck)
+      : _lastDetect.bias;
+    writeBiasSnapshot(freshBias);
     writePrecheckSnapshot(_lastDetect.precheck);
+    _lastDetect.bias = freshBias;
     return _lastDetect.results;
   }
 
@@ -161,47 +215,31 @@ export async function detect() {
 
   // First pass — collect precheck rows for the strategy-vote half of bias.
   // The bot's /setups reads these too, so the work is shared.
-  const precheckByInstrument = new Map();
   for (const instrument of INSTRUMENTS) {
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
-    const rows = [];
     for (const s of registry) {
       if (!isStrategyEnabled(s.id)) continue;
       if (!s.instruments.includes(instrument)) continue;
       if (typeof s.precheck !== 'function') continue;
       try {
         const pc = s.precheck(ctx);
-        if (pc) {
-          const row = { strategy: s.id, instrument, ...pc };
-          rows.push(row);
-          precheckRows.push(row);
-        }
+        if (pc) precheckRows.push({ strategy: s.id, instrument, ...pc });
       } catch (err) {
         log.warn('strategy precheck threw', { strategy: s.id, instrument, err: err.message });
       }
     }
-    precheckByInstrument.set(instrument, rows);
   }
 
-  const biasByInstrument = {};
+  // Bias = structural multi-TF read (OANDA real-time feed) + live strategy
+  // vote, combined. Strategies below stay on the Yahoo (futures) panes; only
+  // the directional bias uses OANDA. Falls back to Yahoo if OANDA is down.
+  const biasPanes = await fetchBiasPanesSafe();
+  const biasByInstrument = computeBiasSnapshot(biasPanes || panesByTf, precheckRows);
+
   for (const instrument of INSTRUMENTS) {
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
-
-    // Bias = structural multi-TF read + live strategy vote, combined.
-    try {
-      const structural = computeInstrumentBias(ctx);
-      const vote = tallyStrategyVote(precheckByInstrument.get(instrument) || []);
-      const combined = combineBias(structural, vote);
-      if (structural) {
-        biasByInstrument[instrument] = {
-          ...structural,
-          strategyVote: vote,
-          combined: combined ? { direction: combined.direction, label: combined.label } : null,
-        };
-      }
-    } catch (err) { log.warn('bias compute threw', { instrument, err: err.message }); }
 
     const results = [];
     for (const s of registry) {

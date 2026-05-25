@@ -15,7 +15,7 @@
  */
 
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
-import { fetchAll as fetchOanda, isConfigured as oandaConfigured } from '../cloud/oanda.js';
+import { fetchAll as fetchOanda, fetchBars as fetchOandaBars, isConfigured as oandaConfigured } from '../cloud/oanda.js';
 import { beat as heartbeat } from './heartbeat.js';
 
 // 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
@@ -96,6 +96,66 @@ export async function fetchAllPanes() {
     }
   })();
   return inflightFull.then((m) => new Map(m));
+}
+
+// ─── Real-time bias feed (OANDA) ────────────────────────────────────────────
+// Yahoo's free micro-futures feed freezes overnight / weekends / holidays
+// (no bars past the last RTH close), which makes /bias recompute identical
+// numbers from stale data. OANDA's gold/index CFDs trade ~24/5 and stay live,
+// so we use it as a dedicated REAL-TIME source for the directional bias read.
+//
+// Scope: BIAS ONLY. OANDA quotes spot/CFD (XAU_USD, NAS100_USD…) which carries
+// a futures-vs-spot basis (~+61pt NQ, ~+12 ES, ~+1 gold). A directional read
+// (trend / EMA / RSI / momentum) is basis-insensitive — the offset cancels —
+// so OANDA is accurate for direction. Strategy entry/stop/target levels stay
+// on the Yahoo (futures) feed so live execution levels are unaffected.
+const BIAS_REQUESTS = [
+  // [asset, tf, lookbackDays] — enough bars for computeInstrumentBias()
+  // (15m ≥50 + vol percentile needs ~114; 60m ≥55; 1D ≥25).
+  ['gold',   '15', 7], ['gold',   '60', 14], ['gold',   '1D', 90],
+  ['nasdaq', '15', 7], ['nasdaq', '60', 14], ['nasdaq', '1D', 90],
+  ['sp',     '15', 7], ['sp',     '60', 14], ['sp',     '1D', 90],
+];
+
+let biasCache = { panes: null, fetchedAt: 0 };
+let inflightBias = null;
+
+/**
+ * Real-time `panesByTf` for the bias read, sourced from OANDA. Same key shape
+ * as fetchAllPanes (`${asset}|${tf}`) so detector's buildInstrumentCtx works
+ * unchanged. Cached for TTL_MS like the main feed.
+ *
+ * @returns {Promise<Map<string,object>|null>} null when OANDA is unconfigured
+ *   or returned nothing — caller should fall back to the Yahoo panes.
+ */
+export async function fetchBiasPanes() {
+  if (!oandaConfigured()) return null;
+  if (!shouldFetch(biasCache.fetchedAt) && biasCache.panes) {
+    return new Map(biasCache.panes);
+  }
+  if (inflightBias) return inflightBias.then((m) => (m ? new Map(m) : null));
+  inflightBias = (async () => {
+    try {
+      const out = new Map();
+      const results = await Promise.allSettled(
+        BIAS_REQUESTS.map(([asset, tf, days]) =>
+          fetchOandaBars(asset, tf, days).then((pane) => [asset, tf, pane])),
+      );
+      for (const r of results) {
+        if (r.status !== 'fulfilled' || !r.value) continue;
+        const [asset, tf, pane] = r.value;
+        if (pane?.bars?.length) out.set(`${asset}|${tf}`, pane);
+      }
+      if (out.size === 0) return null;
+      biasCache = { panes: out, fetchedAt: Date.now() };
+      return out;
+    } catch {
+      return null;
+    } finally {
+      inflightBias = null;
+    }
+  })();
+  return inflightBias.then((m) => (m ? new Map(m) : null));
 }
 
 // ─── Higher-TF synthesis ──────────────────────────────────────────────────
