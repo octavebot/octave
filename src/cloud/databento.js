@@ -281,17 +281,18 @@ export async function fetchAll(requests) {
 const LICENSE_LAG_MS = 9 * 60 * 60 * 1000;
 
 // Deep history is billed by volume, so we cache each backtest pull to disk and
-// reuse it. Iterating the tuning toolkit (tune / loss-analysis / filter-validate)
-// then costs ONE fetch instead of one per run; the nightly job only pays for the
-// new day. Keyed by window; refreshed once a day (a stale tail is irrelevant to
-// a multi-month backtest).
+// reuse it. Cache NEVER expires automatically — historical 1m/1h bars from past
+// dates don't change, so once on disk they're good forever. To force a refresh
+// (e.g. extend the backtest window with newer data), delete the matching file:
+//   rm src/state/databento-cache/backtest_d<N>.json
+// This keeps the user's Databento spend at a one-time cost: pay once for the
+// year of history, then unlimited backtests run free off disk.
 const CACHE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'databento-cache');
-const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function loadBacktestCache(targetDays) {
   try {
     const f = join(CACHE_DIR, `backtest_d${targetDays}.json`);
-    if (Date.now() - statSync(f).mtimeMs > CACHE_MAX_AGE_MS) return null;
+    statSync(f); // existence check — no TTL
     const obj = JSON.parse(readFileSync(f, 'utf8'));
     return new Map(obj.entries);
   } catch { return null; }
