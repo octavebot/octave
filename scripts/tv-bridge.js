@@ -1,0 +1,269 @@
+#!/usr/bin/env node
+/**
+ * TradingView bridge — runs on the user's always-on Mac.
+ *
+ * Reads live OHLCV bars from a local TradingView Desktop instance via the
+ * Chrome DevTools Protocol (port 9222), then POSTs them to the VPS endpoint
+ * /api/ingest-bars on a configurable cadence. Each push is HMAC-signed so
+ * the VPS can verify the bridge is the one that pushed it (TV_BRIDGE_SECRET
+ * shared between this script's env and the VPS .env).
+ *
+ * Assumes the user has 3 TV tabs open, each showing one of MGC1! / MNQ1! /
+ * MES1! at the 5-minute timeframe. The bridge auto-discovers them by reading
+ * the active symbol from each CDP target — order doesn't matter, they just
+ * need to exist. Higher timeframes (15m) are aggregated from the 5m stream
+ * before sending so the VPS receives both panes per symbol.
+ *
+ * Resilience: keeps a per-target CDP client, reconnects on disconnect,
+ * exponential backoff on push failures, Telegram nudge if no successful
+ * push for >5 minutes. Designed to survive TV restarts, network blips,
+ * and Mac sleeps (won't survive Mac actually sleeping — TV pauses too).
+ *
+ * Required env:
+ *   VPS_URL              base url of the VPS webui (e.g. http://1.2.3.4:7345)
+ *   TV_BRIDGE_SECRET     64-hex shared secret matching the VPS .env
+ *   TELEGRAM_BOT_TOKEN   (optional) for blind-alert messages
+ *   TELEGRAM_CHAT_ID     (optional) chat for blind alerts (your own DM or the signal group)
+ *
+ * Optional env:
+ *   TV_CDP_PORT          default 9222
+ *   TV_POLL_MS           default 3000 (one cycle through all tabs every 3s)
+ *   TV_BARS_PER_PUSH     default 200 (recent 5m bars per symbol per push)
+ *   TV_BLIND_ALERT_MS    default 5*60*1000 (alert if pushes have failed this long)
+ *
+ * Usage:
+ *   node scripts/tv-bridge.js
+ * Typically run via the LaunchAgent installed by scripts/install-tv-bridge.sh.
+ */
+
+import CDP from 'chrome-remote-interface';
+import { createHmac } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const CDP_HOST = 'localhost';
+const CDP_PORT = parseInt(process.env.TV_CDP_PORT || '9222', 10);
+
+// VPS URL can be overridden in-place via ~/.octave-bridge/vps-url so the
+// user can update it without re-running the installer when the Cloudflare
+// Quick Tunnel rotates (e.g. on a VPS reboot — the bot Telegrams the new URL).
+const VPS_URL_FILE = join(homedir(), '.octave-bridge', 'vps-url');
+function currentVpsUrl() {
+  try {
+    if (existsSync(VPS_URL_FILE)) {
+      const f = readFileSync(VPS_URL_FILE, 'utf8').trim();
+      if (f) return f.replace(/\/$/, '');
+    }
+  } catch {}
+  return (process.env.VPS_URL || '').replace(/\/$/, '');
+}
+const SECRET = process.env.TV_BRIDGE_SECRET;
+const POLL_MS = parseInt(process.env.TV_POLL_MS || '3000', 10);
+const BARS_PER_PUSH = parseInt(process.env.TV_BARS_PER_PUSH || '200', 10);
+const BLIND_ALERT_MS = parseInt(process.env.TV_BLIND_ALERT_MS || String(5 * 60 * 1000), 10);
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
+
+if (!currentVpsUrl() || !SECRET) {
+  console.error('[tv-bridge] missing required env: VPS_URL (env or ~/.octave-bridge/vps-url) and TV_BRIDGE_SECRET');
+  process.exit(2);
+}
+
+// Maps a TV symbol like "MGC1!" to the internal asset key the bot uses.
+const SYMBOL_TO_ASSET = {
+  'MGC1!': 'gold',
+  'MNQ1!': 'nasdaq',
+  'MES1!': 'sp',
+  // Tolerate the prefixed exchange forms TV sometimes returns
+  'COMEX:MGC1!': 'gold',
+  'CME_MINI:MNQ1!': 'nasdaq',
+  'CME_MINI:MES1!': 'sp',
+};
+
+// Lifted from the TradingView MCP — internal path to the in-memory bars buffer.
+const BARS_PATH = 'window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars()';
+
+// One CDP client per TV tab; key = CDP target.id
+const clients = new Map();
+
+let lastSuccessAt = Date.now();
+let blindAlertSent = false;
+
+function log(...args) { console.log(`[${new Date().toISOString()}]`, ...args); }
+function errlog(...args) { console.error(`[${new Date().toISOString()}]`, ...args); }
+
+async function listTargets() {
+  const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
+  if (!res.ok) throw new Error(`CDP /json/list HTTP ${res.status}`);
+  const targets = await res.json();
+  return targets.filter((t) => t.type === 'page' && /tradingview/i.test(t.url || ''));
+}
+
+async function connectTarget(target) {
+  const existing = clients.get(target.id);
+  if (existing) {
+    try {
+      await existing.Runtime.evaluate({ expression: '1', returnByValue: true });
+      return existing;
+    } catch {
+      try { await existing.close(); } catch {}
+      clients.delete(target.id);
+    }
+  }
+  const client = await CDP({ host: CDP_HOST, port: CDP_PORT, target: target.id });
+  await client.Runtime.enable();
+  clients.set(target.id, client);
+  return client;
+}
+
+async function evalJS(client, expression) {
+  const { result, exceptionDetails } = await client.Runtime.evaluate({ expression, returnByValue: true });
+  if (exceptionDetails) throw new Error(exceptionDetails.text || 'CDP eval exception');
+  return result?.value;
+}
+
+// Returns the symbol the chart in this tab is showing, or null if unreadable.
+async function getTabSymbol(client) {
+  try {
+    return await evalJS(client, `(function(){ try { return ${BARS_PATH.replace('.bars()', '')}.symbol(); } catch(e) { return null; } })()`);
+  } catch { return null; }
+}
+
+// Returns last N closed bars as [{ time, open, high, low, close, volume }, ...]
+async function getTabBars(client, count) {
+  return await evalJS(client, `
+    (function() {
+      try {
+        var bars = ${BARS_PATH};
+        if (!bars || typeof bars.lastIndex !== 'function') return null;
+        var result = [];
+        var end = bars.lastIndex();
+        var start = Math.max(bars.firstIndex(), end - ${count} + 1);
+        for (var i = start; i <= end; i++) {
+          var v = bars.valueAt(i);
+          if (v) result.push({ time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0 });
+        }
+        return result;
+      } catch (e) { return { __err: String(e) }; }
+    })()
+  `);
+}
+
+// 5m → 15m aggregation, bucket-aligned to the 15-minute UTC wall clock so it
+// matches Yahoo's / Databento's bar boundaries (and the existing strategies).
+function aggregate(bars, bucketSec) {
+  const out = [];
+  let cur = null;
+  for (const b of bars) {
+    const t = Math.floor(b.time / bucketSec) * bucketSec;
+    if (!cur || cur.time !== t) {
+      if (cur) out.push(cur);
+      cur = { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.volume += b.volume;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+async function postBars(payload) {
+  const body = JSON.stringify(payload);
+  const ts = String(Date.now());
+  const sig = createHmac('sha256', SECRET).update(`${ts}.${body}`).digest('hex');
+  const vpsUrl = currentVpsUrl();
+  const res = await fetch(`${vpsUrl}/api/ingest-bars`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Bridge-Timestamp': ts, 'X-Bridge-Auth': sig },
+    body,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`VPS POST ${res.status}: ${text.slice(0, 200)}`);
+  return text;
+}
+
+async function sendBlindAlert(reason) {
+  if (!TG_TOKEN || !TG_CHAT || blindAlertSent) return;
+  blindAlertSent = true;
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text: `⚠️ TV bridge has been unable to push to the VPS for ${Math.round(BLIND_ALERT_MS/60000)}min — bot will be on delayed Yahoo data until this clears.\n\nReason: ${reason}\nFix on the always-on Mac: open TradingView, verify the 3 charts (MGC1!/MNQ1!/MES1! at 5m), then it should auto-recover.`,
+        parse_mode: 'Markdown',
+      }),
+    });
+  } catch (err) { errlog('blind alert post failed:', err.message); }
+}
+
+async function cycle() {
+  const targets = await listTargets();
+  if (!targets.length) throw new Error('no TradingView CDP targets — is TV running with --remote-debugging-port=9222 and a chart open?');
+
+  const bars5mByAsset = {};
+  for (const target of targets) {
+    let client;
+    try { client = await connectTarget(target); }
+    catch (err) { errlog('cdp connect failed for', target.id, err.message); continue; }
+    const symbol = await getTabSymbol(client);
+    const asset = SYMBOL_TO_ASSET[symbol] || SYMBOL_TO_ASSET[(symbol || '').split(':').pop()];
+    if (!asset) continue;
+    const bars = await getTabBars(client, BARS_PER_PUSH);
+    if (!Array.isArray(bars) || !bars.length) {
+      errlog(`empty bars for ${symbol} — chart still loading?`);
+      continue;
+    }
+    bars5mByAsset[asset] = { symbol, bars };
+  }
+
+  const assetKeys = Object.keys(bars5mByAsset);
+  if (!assetKeys.length) throw new Error('no readable bars across all tabs');
+
+  // Build the multi-pane payload: 5m as-read, 15m aggregated.
+  const panes = {};
+  for (const [asset, { symbol, bars }] of Object.entries(bars5mByAsset)) {
+    panes[`${asset}|5`] = { symbol, resolution: '5', bars };
+    panes[`${asset}|15`] = { symbol, resolution: '15', bars: aggregate(bars, 900) };
+  }
+
+  await postBars({ at: Date.now(), bars: panes });
+  lastSuccessAt = Date.now();
+  blindAlertSent = false;
+
+  const summary = assetKeys.map((a) => {
+    const last = bars5mByAsset[a].bars.slice(-1)[0];
+    const ageSec = Math.round((Date.now() / 1000) - last.time);
+    return `${a}=${last.close}(${ageSec}s)`;
+  }).join('  ');
+  log('pushed', assetKeys.length, 'symbols', summary);
+}
+
+let backoffMs = POLL_MS;
+async function main() {
+  log(`tv-bridge starting · CDP ${CDP_HOST}:${CDP_PORT} → VPS ${currentVpsUrl()} · poll ${POLL_MS}ms`);
+  while (true) {
+    try {
+      await cycle();
+      backoffMs = POLL_MS; // success: reset to normal cadence
+    } catch (err) {
+      errlog('cycle failed:', err.message);
+      // After a failure, back off up to 60s so we don't hammer a dead VPS or TV.
+      backoffMs = Math.min(backoffMs * 2, 60000);
+      if ((Date.now() - lastSuccessAt) > BLIND_ALERT_MS) {
+        await sendBlindAlert(err.message);
+      }
+    }
+    await new Promise((r) => setTimeout(r, backoffMs));
+  }
+}
+
+process.on('SIGTERM', () => { log('SIGTERM — exiting'); process.exit(0); });
+process.on('SIGINT', () => { log('SIGINT — exiting'); process.exit(0); });
+
+main().catch((err) => { errlog('fatal:', err.message, err.stack); process.exit(1); });
