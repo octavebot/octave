@@ -1046,6 +1046,22 @@ async function cmdBias() {
     return send('🧭 Bias data not ready — the signal engine is still warming up. Try again in a moment.');
   }
 
+  // Overlay the LIVE TV-bridge futures price into the bias 'price' field for
+  // display. The bias DIRECTION still comes from OANDA (basis cancels for
+  // direction, and OANDA carries the deeper history needed for the vol-regime
+  // factor), but the DISPLAYED price should match the contract the user
+  // trades — otherwise /bias looks 'stuck on 4570' while futures are at 4574.
+  try {
+    const { getLiveFuturesQuotes } = await import('../lib/cloud_data_supplement.js');
+    const quotes = await getLiveFuturesQuotes();
+    for (const [key, q] of quotes) {
+      if (snap.bias[key] && q?.source === 'tradingview' && Number.isFinite(q.price)) {
+        snap.bias[key].price = q.price;
+        snap.bias[key].priceSource = 'tradingview';
+      }
+    }
+  } catch { /* keep OANDA-priced bias if the live quote fails */ }
+
   const INSTRUMENTS = [
     { key: 'gold',   label: 'GOLD',   sym: 'MGC1!' },
     { key: 'nasdaq', label: 'NASDAQ', sym: 'MNQ1!' },
