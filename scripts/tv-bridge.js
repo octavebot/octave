@@ -288,7 +288,51 @@ async function sendBlindAlert(reason) {
 let lastEnsureAt = 0;
 const ENSURE_EVERY_MS = 30 * 1000;
 
+// Bridge auto-update: every 5 min, fast-forward the local trading-alerts repo
+// from origin/main. If new commits affect this script or its scripts/ siblings,
+// process.exit(0) and let the LaunchAgent (KeepAlive=true) restart with the
+// fresh code. That way a fix I push to tv-bridge.js reaches the Mac with no
+// manual git pull. Safe: skips on uncommitted local changes (ff-only merge);
+// crashes are absorbed (errors never bring the bridge down).
+let lastUpdateCheckAt = 0;
+const UPDATE_EVERY_MS = 5 * 60 * 1000;
+async function autoUpdate() {
+  if (Date.now() - lastUpdateCheckAt < UPDATE_EVERY_MS) return;
+  lastUpdateCheckAt = Date.now();
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const { homedir } = await import('node:os');
+    const { join } = await import('node:path');
+    const repo = join(homedir(), 'trading-alerts');
+    const gitArgs = (args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const before = gitArgs(['rev-parse', 'HEAD']);
+    gitArgs(['fetch', '--quiet', 'origin', 'main']);
+    const remote = gitArgs(['rev-parse', 'origin/main']);
+    if (before === remote) return;
+    let changed;
+    try { changed = gitArgs(['diff', '--name-only', before, remote]); }
+    catch { return; }
+    try { gitArgs(['merge', '--ff-only', remote]); }
+    catch (err) { errlog('auto-update: ff-merge failed (local diverged?) — skipping'); return; }
+    // Restart only when changes actually touch the bridge surface — avoids
+    // pointless restarts for VPS-only commits (src/lib, src/cloud, etc.).
+    const touchesBridge = changed.split('\n').some((p) =>
+      p === 'scripts/tv-bridge.js' || p === 'scripts/launch-tv-cdp.sh' ||
+      p === 'scripts/install-tv-bridge.sh' || p === 'package.json');
+    if (touchesBridge) {
+      log(`auto-updated ${before.slice(0, 7)} → ${remote.slice(0, 7)} — exiting for LaunchAgent restart`);
+      process.exit(0);
+    } else {
+      log(`auto-updated ${before.slice(0, 7)} → ${remote.slice(0, 7)} (no bridge files changed; staying up)`);
+    }
+  } catch (err) { errlog('auto-update skipped:', err.message); }
+}
+
 async function cycle() {
+  // Self-update check first — if we're about to restart with new code, do it
+  // BEFORE doing more work on this cycle.
+  await autoUpdate();
+
   const targets = await listTargets();
   if (!targets.length) throw new Error('no TradingView CDP targets — is TV running with --remote-debugging-port=9222 and a chart open?');
 
