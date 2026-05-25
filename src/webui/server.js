@@ -129,13 +129,34 @@ const isLinux = process.platform === 'linux';
 
 async function gatherState() {
   const config = loadConfig();
-  const cloud = readJson(HEARTBEAT_FILE, null);
+  // Liveness comes from the LIVE per-service heartbeats the signal-engine
+  // writes every tick (state/heartbeats/*.json), not the legacy
+  // cloud-heartbeat.json (that file only updated in the retired "local" mode
+  // and has been stale since — reading it made the dashboard show the bot as
+  // dead while it was running fine).
+  const HEARTBEATS_DIR = join(STATE_DIR, 'heartbeats');
+  const engineHb = readJson(join(HEARTBEATS_DIR, 'signal-engine.json'), null);
+  const marketHb = readJson(join(HEARTBEATS_DIR, 'market-data.json'), null);
   let cloudAlive = false;
   let cloudAgeMs = null;
-  if (cloud?.lastTick) {
-    cloudAgeMs = Date.now() - cloud.lastTick;
-    cloudAlive = cloudAgeMs < 8 * 60 * 1000 && cloud.status === 'ok';
+  if (engineHb?.at) {
+    cloudAgeMs = Date.now() - engineHb.at;
+    cloudAlive = cloudAgeMs < 60 * 1000; // engine ticks every 3s; 60s = generous
   }
+  // Data-source truth for the dashboard's "feed" indicator: which feed produced
+  // the live panes (tradingview when the Mac bridge is up, else yahoo) + the
+  // bridge freshness so the user can see at a glance whether real-time is on.
+  let dataSource = marketHb?.source || 'yahoo';
+  let dataSources = marketHb?.sources || null;
+  let bridge = null;
+  try {
+    const { status } = await import('../lib/tv_ingest.js');
+    const s = status();
+    bridge = { connected: s.anyFresh, panes: s.paneCount };
+  } catch {}
+  const cloud = { lastTick: engineHb?.at || null, status: cloudAlive ? 'ok' : 'stale',
+                  phase: engineHb?.phase, pane_count: marketHb?.pane_count,
+                  source: dataSource, sources: dataSources, uptime_s: engineHb?.uptime_s };
 
   const session = readJson(SESSION_FILE, { lastSession: null });
 
@@ -210,6 +231,7 @@ async function gatherState() {
   return {
     config,
     cloud: { alive: cloudAlive, ageMs: cloudAgeMs, raw: { ...(cloud || {}), instrumentPrices } },
+    data_feed: { source: dataSource, sources: dataSources, bridge },
     service: { pid: servicePid, uptime: serviceUptime },
     trading_view: { pid: tvPid, cdp_open: cdpOpen },
     caffeinate: { active: caffActive },
