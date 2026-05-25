@@ -268,6 +268,28 @@ async function readBody(req) {
   });
 }
 
+// Raw-text body reader for endpoints that need to verify HMAC over the exact
+// bytes the client sent (any JSON re-stringify would change spacing and break
+// the signature). Caps at 2MB — the tv-bridge push is ~5-50KB, anything beyond
+// is malformed or hostile.
+const RAW_BODY_CAP_BYTES = 2 * 1024 * 1024;
+async function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > RAW_BODY_CAP_BYTES) {
+        req.destroy();
+        return reject(new Error('body too large'));
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
 // 50MB cap so a stray upload can't exhaust memory. PDFs are typically <5MB,
 // images <10MB, short videos <30MB. Videos > cap will be rejected.
 const UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
@@ -381,6 +403,31 @@ const server = createServer(async (req, res) => {
       if (!body) return sendJson(res, 400, { error: 'bad json' });
       const next = await saveConfig(body);
       return sendJson(res, 200, { config: next });
+    }
+
+    // POST /api/ingest-bars  — receives a HMAC-signed bar push from the
+    // always-on Mac running scripts/tv-bridge.js. Replaces the in-memory
+    // pane cache that cloud/tradingview.js reads. See lib/tv_ingest.js for
+    // auth + cache shape.
+    if (req.method === 'POST' && url.pathname === '/api/ingest-bars') {
+      let raw;
+      try { raw = await readRawBody(req); }
+      catch (err) { return sendJson(res, 413, { error: err.message }); }
+      const { verifyPush, ingest } = await import('../lib/tv_ingest.js');
+      const verdict = verifyPush(raw, req.headers['x-bridge-timestamp'], req.headers['x-bridge-auth']);
+      if (!verdict.ok) return sendJson(res, verdict.status, { error: verdict.error });
+      let payload;
+      try { payload = JSON.parse(raw); }
+      catch { return sendJson(res, 400, { error: 'bad json' }); }
+      const result = ingest(payload);
+      return sendJson(res, 200, { ok: true, accepted: result.accepted, keys: result.keys });
+    }
+
+    // GET /api/ingest-bars/status  — unauthenticated cache snapshot so the
+    // dashboard and `/diagnose` can see whether the bridge is alive.
+    if (req.method === 'GET' && url.pathname === '/api/ingest-bars/status') {
+      const { status } = await import('../lib/tv_ingest.js');
+      return sendJson(res, 200, status());
     }
 
     // ─── Strategy file upload → AI extraction ───

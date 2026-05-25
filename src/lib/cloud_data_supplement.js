@@ -17,6 +17,7 @@
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
 import { fetchAll as fetchOanda, fetchBars as fetchOandaBars, isConfigured as oandaConfigured } from '../cloud/oanda.js';
 import { fetchAllForBacktest as fetchDatabentoBacktest, isConfigured as databentoConfigured } from '../cloud/databento.js';
+import { fetchAll as fetchTradingview, isConfigured as tvConfigured } from '../cloud/tradingview.js';
 import { beat as heartbeat } from './heartbeat.js';
 
 // 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
@@ -76,6 +77,24 @@ export async function fetchAllPanes() {
       const panes = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
       // Tag the panes so downstream code can tell where bars came from
       for (const [, p] of panes) p.source = p.source || 'yahoo';
+
+      // TradingView bridge — real-time CME tape via the user's Mac. When the
+      // bridge is alive (DATA_SOURCE=tradingview and at least one pane fresh
+      // in the last 60s), TV panes OVERRIDE the Yahoo ones for the micros so
+      // live signals fire on un-delayed data. Yahoo keeps serving silver/dxy
+      // and any micro pane TV didn't supply, which is also what catches a Mac
+      // outage automatically: stale TV pane → null → falls back to Yahoo.
+      if (tvConfigured()) {
+        try {
+          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq' || asset === 'sp');
+          const tv = await fetchTradingview(tvRequests).catch(() => new Map());
+          for (const [key, p] of tv) {
+            if (p?.bars?.length) panes.set(key, p);
+          }
+        } catch (err) {
+          console.error('[cloud-data] tradingview overlay failed:', err?.message || err);
+        }
+      }
       // Synthesize stale higher-TF bars from the freshest lower-TF source.
       // Yahoo's micro-futures feed lags 15m/60m/1D into the Sunday Asian open
       // (sometimes by 50+ hours). 1m/5m stay fresh — aggregate those into the
@@ -85,10 +104,16 @@ export async function fetchAllPanes() {
       catch (err) { /* never block live data on a synth error */ console.error('[cloud-data] backfill failed:', err?.message || err); }
       fullCache = { panes, fetchedAt: Date.now() };
       // Heartbeat — the dashboard's "market-data" tile reads this so the
-      // user knows live data is flowing (even if no alerts fire).
+      // user knows live data is flowing (even if no alerts fire). The source
+      // label reflects whichever feed produced the most micro panes (TV when
+      // the bridge is alive, otherwise yahoo).
+      const sources = {};
+      for (const [, p] of panes) sources[p.source || 'yahoo'] = (sources[p.source || 'yahoo'] || 0) + 1;
+      const dominantSource = Object.entries(sources).sort((a, b) => b[1] - a[1])[0]?.[0] || 'yahoo';
       heartbeat('market-data', {
         pane_count: panes.size,
-        source: 'yahoo',
+        source: dominantSource,
+        sources,
         last_fetch_ms: Date.now(),
       });
       return panes;
