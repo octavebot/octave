@@ -62,8 +62,13 @@ export function activeSession(unixSeconds) {
   if (weekday === 'Sun' && minutesOfDay < 18 * 60) return 'off';
   if (weekday === 'Fri' && minutesOfDay >= 17 * 60) return 'off';
 
-  // Asia: 19:00 prev day -> 02:00 current
-  if (minutesOfDay >= 19 * 60 || minutesOfDay < 2 * 60) return 'asia';
+  // CME daily maintenance break is 17:00 -> 18:00 ET. Outside that hour the
+  // exchange is OPEN, including the 18:00-19:00 evening hour the previous
+  // boundary missed (it marked 16:00-19:00 as 'off' even though Globex reopens
+  // at 18:00 → that's why /session said OFF at 6 PM despite live trading).
+  if (minutesOfDay >= 16 * 60 && minutesOfDay < 18 * 60) return 'off';
+  // Asia: 18:00 prev day -> 02:00 current (Globex reopen → Asian session)
+  if (minutesOfDay >= 18 * 60 || minutesOfDay < 2 * 60) return 'asia';
   // London: 02:00 -> 05:00
   if (minutesOfDay >= 2 * 60 && minutesOfDay < 5 * 60) return 'london';
   // Pre-NY gap: 05:00 -> 07:00
@@ -74,7 +79,6 @@ export function activeSession(unixSeconds) {
   if (minutesOfDay >= 10 * 60 && minutesOfDay < 13 * 60) return 'lunch';
   // NY PM: 13:00 -> 16:00
   if (minutesOfDay >= 13 * 60 && minutesOfDay < 16 * 60) return 'ny_pm';
-  // 16:00 -> 19:00 = off
   return 'off';
 }
 
