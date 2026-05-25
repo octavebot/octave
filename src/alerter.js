@@ -410,5 +410,13 @@ export async function sendSessionChange({ fromSession, toSession, nowLabel, hint
     nowLabel ? `⏰ ${tgEscape(nowLabel)}` : '',
     hint ? `ℹ️ ${tgEscape(hint)}` : '',
   ].filter(Boolean).join('\n');
-  return postRaw(text, null, config.telegramOwnerChatId);
+  // Group sees it too. Single post when group + owner resolve to the same chat.
+  const groupChat = config.telegramChatId;
+  const ownerChat = config.telegramOwnerChatId;
+  const groupOk = await postRaw(text, null, groupChat);
+  if (String(groupChat) !== String(ownerChat)) {
+    try { await postRaw(text, null, ownerChat); }
+    catch (err) { log.warn('owner session-change send threw', { err: err.message }); }
+  }
+  return groupOk;
 }
