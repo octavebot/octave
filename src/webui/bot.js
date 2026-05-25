@@ -996,7 +996,14 @@ async function cmdBias() {
     { key: 'sp',     label: 'S&P',    sym: 'MES1!' },
   ];
   const ICON = { BULLISH: '🟢', BEARISH: '🔴', NEUTRAL: '⚪', MIXED: '🟠' };
-  const fIcon = (v) => v > 0 ? '🟢' : v < 0 ? '🔴' : '⚪';
+  // Strength icon based on signed magnitude (was binary +1/-1/0).
+  const fIcon = (v) => {
+    const a = Math.abs(v || 0);
+    if (a < 0.15) return '⚪';
+    if (v > 0) return a > 0.6 ? '🟢' : '🟡';
+    return a > 0.6 ? '🔴' : '🟠';
+  };
+  const sign = (n) => (n > 0 ? '+' : '') + n.toFixed(2);
 
   const lines = [header('🧭', 'Market bias'), ''];
   for (const inst of INSTRUMENTS) {
@@ -1006,22 +1013,46 @@ async function cmdBias() {
     const combinedDir = b.combined?.direction || b.direction || 'NEUTRAL';
     const icon = ICON[combinedDir] || '⚪';
     const combinedLabel = b.combined?.label ? ` · _${tgEscape(b.combined.label)}_` : '';
-    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${combinedLabel}`);
-    lines.push(`   price \`${b.price.toFixed(2)}\``);
+    const conf = b.confidence != null ? ` · ${b.confidence}%` : '';
+    lines.push(`${icon} *${inst.label}* \`${inst.sym}\` · *${combinedDir}*${conf}${combinedLabel}`);
 
-    // Structural read — one line, factor breakdown.
-    const up = b.factors.filter((f) => f.v > 0).length;
-    const dn = b.factors.filter((f) => f.v < 0).length;
-    const neu = b.factors.filter((f) => f.v === 0).length;
-    lines.push(`   *Structural* · ${b.direction} (${up}↑ ${dn}↓ ${neu}→)`);
-    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label}`).join(' · '));
+    // Price + intraday context
+    const intraday = b.intradayChange != null
+      ? `${b.intradayChange >= 0 ? '+' : ''}${b.intradayChange.toFixed(2)} today`
+      : '—';
+    const hourly = b.h1Change != null
+      ? `${b.h1Change >= 0 ? '+' : ''}${b.h1Change.toFixed(2)}/h`
+      : '';
+    const volTag = b.volRegime ? ` · vol ${b.volRegime}` : '';
+    lines.push(`   \`${b.price.toFixed(2)}\` · ${intraday}${hourly ? ' · ' + hourly : ''}${volTag}`);
 
-    // Strategy vote — count + top 3 closest candidates.
-    const vote = b.strategyVote || { long: 0, short: 0, candidates: [] };
-    const voteLabel = vote.long > vote.short ? `LONG (${vote.long}↑/${vote.short}↓)`
-      : vote.short > vote.long ? `SHORT (${vote.long}↑/${vote.short}↓)`
-      : vote.long === 0 && vote.short === 0 ? 'no strategy gates passing'
-      : `tied (${vote.long}↑/${vote.short}↓)`;
+    // Structural read — magnitude-weighted score
+    const up = b.factors.filter((f) => f.v > 0.15).length;
+    const dn = b.factors.filter((f) => f.v < -0.15).length;
+    const neu = b.factors.filter((f) => Math.abs(f.v) <= 0.15).length;
+    lines.push(`   *Structural* · ${b.direction} ${sign(b.score)}/${b.maxScore.toFixed(1)} max · (${up}↑ ${dn}↓ ${neu}→)`);
+    // Each factor with its magnitude — icon = strength, number = signed score
+    const factorLines = b.factors.map((f) => `${fIcon(f.v)} ${tgEscape(f.label)} ${sign(f.v)}`);
+    // Two columns of factor readouts to keep the message compact
+    for (let i = 0; i < factorLines.length; i += 2) {
+      const a = factorLines[i];
+      const b2 = factorLines[i + 1] || '';
+      lines.push(`     ${a}${b2 ? '   ·   ' + b2 : ''}`);
+    }
+
+    // Live indicator readouts (raw values, not score-derived)
+    const reads = [];
+    if (b.rsi60 != null) reads.push(`RSI60 ${b.rsi60.toFixed(0)}`);
+    if (b.vwap != null) reads.push(`VWAP ${b.vwap.toFixed(2)} (Δ ${(b.price - b.vwap).toFixed(2)})`);
+    if (b.atr15m != null) reads.push(`ATR15 ${b.atr15m.toFixed(2)}`);
+    if (reads.length) lines.push(`   _${tgEscape(reads.join(' · '))}_`);
+
+    // Strategy vote
+    const vote = b.strategyVote || { long: 0, short: 0, candidates: [], longCount: 0, shortCount: 0 };
+    const voteLabel = vote.long > vote.short ? `LONG ${vote.long.toFixed(1)}↑ / ${vote.short.toFixed(1)}↓ (${vote.longCount || 0}|${vote.shortCount || 0} setups)`
+      : vote.short > vote.long ? `SHORT ${vote.long.toFixed(1)}↑ / ${vote.short.toFixed(1)}↓ (${vote.longCount || 0}|${vote.shortCount || 0} setups)`
+      : (!vote.long && !vote.short) ? 'no strategy gates passing'
+      : `tied ${vote.long.toFixed(1)}↑/${vote.short.toFixed(1)}↓`;
     lines.push(`   *Strategy vote* · ${voteLabel}`);
     if ((vote.candidates || []).length) {
       const top = vote.candidates.slice(0, 3).map((c) => {
@@ -1032,7 +1063,8 @@ async function cmdBias() {
     }
     lines.push('');
   }
-  lines.push('_Structural = H1/D1 + 15m EMAs + session. Strategy vote = live precheck rows with all gates met._');
+  lines.push('_Structural = D1/H1 trend·slope·RSI · 15m EMAs/mom · VWAP · session. Magnitude-weighted (not just ±1)._');
+  lines.push('_Strategy vote weighted by closeness — a NEAR-trigger setup counts more than a barely-gated one._');
   await send(lines.join('\n'));
 }
 
@@ -1093,6 +1125,11 @@ async function cmdActiveSetups() {
         const stageIcon = r.tMet === r.tTotal ? '🟢' : r.tMet >= r.tTotal - 1 ? '🟠' : '🟡';
         const stageWord = r.tMet === r.tTotal ? 'READY' : r.tMet >= r.tTotal - 1 ? 'NEAR' : 'FORMING';
         lines.push(`${stageIcon} *${tgEscape(r.strategy)}* · ${inst} · ${dir} · _${stageWord}_ ${r.tMet}/${r.tTotal} triggers`);
+        // Projected trade values — what the alert would fire with right now.
+        if (r.projection) {
+          const p = r.projection;
+          lines.push(`   📐 \`E ${p.entry.toFixed(2)}\` · \`SL ${p.stop.toFixed(2)}\` · \`TP1 ${p.t1.toFixed(2)}\` · \`TP2 ${p.t2.toFixed(2)}\` · 1:${p.rr2.toFixed(1)}R`);
+        }
         // Show only the triggers — gates are implied by gatesOk filter.
         for (const c of r.triggers) {
           const icon = c.met ? '✅' : '⏳';
@@ -1194,6 +1231,10 @@ async function cmdSetup(arg) {
     const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
     lines.push('');
     lines.push(`${r.icon} *${inst}* · ${dir} · _${r.stage}_ · gates ${r.gMet}/${r.gates.length} · triggers ${r.tMet}/${r.tTot}`);
+    if (r.projection) {
+      const p = r.projection;
+      lines.push(`   📐 \`E ${p.entry.toFixed(2)}\` · \`SL ${p.stop.toFixed(2)}\` · \`TP1 ${p.t1.toFixed(2)}\` (${p.rr1.toFixed(1)}R) · \`TP2 ${p.t2.toFixed(2)}\` (${p.rr2.toFixed(1)}R) · risk ${p.risk.toFixed(2)}`);
+    }
     if (r.gates.length) {
       lines.push('   *Gates*');
       for (const c of r.gates) {

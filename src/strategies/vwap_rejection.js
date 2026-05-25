@@ -9,7 +9,7 @@
 import { vwap, ema, isPinBar, isEngulfing } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyDayStartUnix, nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'VWAP-REJ',
@@ -183,6 +183,15 @@ export function precheck(ctx) {
   const rejBull = trendUp && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'));
   const rejBear = trendDown && (isPinBar(last, 'bearish') || isEngulfing(prev, last, 'bearish'));
 
+  // Project the would-be trade (market entry at close, stop 0.5×ATR past wick).
+  let projection = null;
+  if (direction && a) {
+    if (direction === 'LONG') {
+      projection = projectTrade({ direction, entry: last.close, stop: last.low - 0.5 * a });
+    } else if (direction === 'SHORT') {
+      projection = projectTrade({ direction, entry: last.close, stop: last.high + 0.5 * a });
+    }
+  }
   // D1 numbers for the macro-support readout — only relevant on longs but
   // we always compute them so the value string can show what we'd compare.
   let d1Close = null, d1Ema20 = null;
@@ -195,6 +204,7 @@ export function precheck(ctx) {
 
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',   met: !!direction, value: e50last != null ? `H1 ${h1.close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${e50last.toFixed(2)}` : 'no EMA yet' },

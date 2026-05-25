@@ -8,7 +8,7 @@
 import { findFVGs, atr } from '../lib/structure.js';
 import { ema } from '../lib/indicators.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'NY-FVG',
@@ -155,8 +155,16 @@ export function precheck(ctx) {
     h1Ema50 = e50arr[e50arr.length - 1];
     h1Close = tf60.bars[tf60.bars.length - 1].close;
   }
+  // Project the would-be trade.
+  let projection = null;
+  if (gap && a && direction) {
+    const entry = (gap.top + gap.bottom) / 2;
+    const stop = direction === 'LONG' ? gap.bottom - 0.5 * a : gap.top + 0.5 * a;
+    projection = projectTrade({ direction, entry, stop });
+  }
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',met: !!direction, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },

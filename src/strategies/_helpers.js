@@ -151,6 +151,34 @@ export function clamp01(x) {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
+/**
+ * Project what a triggered trade would look like RIGHT NOW given a hypothetical
+ * entry + structural stop. Used by precheck() so /setups can show forming
+ * setups with their would-be entry/stop/TP/RR values. Mirrors buildTriggered()
+ * math so the projection matches what the alert would actually fire with.
+ */
+export function projectTrade({ direction, entry, stop, t1Mult, t2Mult }) {
+  if (!Number.isFinite(entry) || !Number.isFinite(stop) || !direction) return null;
+  const sign = direction === 'LONG' ? 1 : -1;
+  const structuralRisk = Math.abs(entry - stop);
+  if (structuralRisk <= 0) return null;
+  const risk = structuralRisk * (1 + STOP_PAD);
+  const widenedStop = entry - sign * risk;
+  const t1 = entry + sign * (t1Mult ?? TP1_R) * risk;
+  const t2 = entry + sign * (t2Mult ?? TP2_R) * risk;
+  return {
+    entry: round4(entry),
+    stop: round4(widenedStop),
+    t1: round4(t1),
+    t2: round4(t2),
+    risk: round4(risk),
+    rr1: t1Mult ?? TP1_R,
+    rr2: t2Mult ?? TP2_R,
+  };
+}
+
+function round4(x) { return Math.round(x * 10000) / 10000; }
+
 // ── Win-rate-grounded confidence ────────────────────────────────────────
 // Confidence must MEAN something: a 67% should mean roughly two of every
 // three of those setups win. So a signal's confidence is anchored to the

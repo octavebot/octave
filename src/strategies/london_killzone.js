@@ -7,7 +7,7 @@
 
 import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'LONDON-SWEEP',
@@ -131,8 +131,23 @@ export function precheck(ctx) {
   const swept = sweepHi || sweepLo;
   const direction = sweepHi ? 'SHORT' : sweepLo ? 'LONG' : null;
 
+  // Project what the trade would look like right now.
+  const a = atr(tf.bars, 14);
+  let projection = null;
+  if (haveAsian && a) {
+    if (direction === 'SHORT') {
+      const entry = (last.high + asianHi) / 2;
+      const stop = last.high + 0.3 * a;
+      projection = projectTrade({ direction: 'SHORT', entry, stop });
+    } else if (direction === 'LONG') {
+      const entry = (last.low + asianLo) / 2;
+      const stop = last.low - 0.3 * a;
+      projection = projectTrade({ direction: 'LONG', entry, stop });
+    }
+  }
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range built',                met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },

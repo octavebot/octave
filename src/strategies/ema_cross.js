@@ -7,7 +7,7 @@
 
 import { ema } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'EMA-CROSS',
@@ -164,8 +164,16 @@ export function precheck(ctx) {
   const goldSepOK = ctx.instrument !== 'gold' || Math.abs(e9now - e21now) >= 0.06 * (a15 || 1);
 
   const ratio = a15 && a60 ? (a15 / a60).toFixed(2) : '—';
+  // Project the would-be trade (limit at 9-EMA, stop ATR away).
+  let projection = null;
+  if (direction && a15) {
+    const entry = e9now;
+    const stop = direction === 'LONG' ? entry - a15 : entry + a15;
+    projection = projectTrade({ direction, entry, stop, t2Mult: 2.0 });
+  }
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'H1 50-EMA trend',                 met: !!direction, value: ema50last != null ? `H1 ${lastH1.close.toFixed(2)} ${longBias ? '>' : shortBias ? '<' : '≈'} EMA50 ${ema50last.toFixed(2)}` : 'no EMA yet' },
       { kind: 'gate',    label: 'Tape alive (15m ATR vs H1)',      met: !!tapeOk, value: a15 && a60 ? `ATR15 ${a15.toFixed(2)} / ATR60 ${a60.toFixed(2)} (${ratio})` : '—' },

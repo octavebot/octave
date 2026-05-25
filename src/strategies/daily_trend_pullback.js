@@ -8,7 +8,7 @@
 
 import { ema, isPinBar, isEngulfing } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'DAILY-TREND-PB',
@@ -195,8 +195,18 @@ export function precheck(ctx) {
   const rejBull = dailyUp && (isEngulfing(prev, last, 'bullish') || isPinBar(last, 'bullish')) && last.close > prev.high && last.close > last.open;
   const rejBear = dailyDown && (isEngulfing(prev, last, 'bearish') || isPinBar(last, 'bearish')) && last.close < prev.low && last.close < last.open;
 
+  // Project the would-be trade (market at last close, stop past wick).
+  let projection = null;
+  if (direction && a15) {
+    if (direction === 'LONG') {
+      projection = projectTrade({ direction, entry: last.close, stop: last.low - 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
+    } else {
+      projection = projectTrade({ direction, entry: last.close, stop: last.high + 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
+    }
+  }
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: `D1 ${dlast.close.toFixed(2)} ${dailyUp ? '>' : dailyDown ? '<' : '≈'} EMA20 ${d20last.toFixed(2)} · sep ${trendStrength.toFixed(2)} (min ${(0.3 * aD).toFixed(2)})` },
       { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: `H1 EMA20 ${h20last.toFixed(2)} · tol ±${tol.toFixed(2)} · ${h1Touched ? 'touched in last 5 bars' : 'no touch in last 5 bars'}` },

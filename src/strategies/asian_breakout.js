@@ -8,7 +8,7 @@
 import { ema } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'ASIAN-BREAKOUT',
@@ -157,8 +157,14 @@ export function precheck(ctx) {
     h1Ema50 = e50[e50.length - 1];
     h1Close = tf60.bars[tf60.bars.length - 1].close;
   }
+  // Project the would-be trade (entry at current close, stop at Asian mid).
+  let projection = null;
+  if (haveAsian && direction) {
+    projection = projectTrade({ direction, entry: last.close, stop: asianMid });
+  }
   return {
     direction,
+    projection,
     conditions: [
       { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
