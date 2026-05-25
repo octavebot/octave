@@ -160,7 +160,8 @@ export function precheck(ctx) {
   // Project the would-be trade (entry at current close, stop at Asian mid).
   let projection = null;
   if (haveAsian && direction) {
-    projection = projectTrade({ direction, entry: last.close, stop: asianMid });
+    const asianMidLocal = (asianHi + asianLo) / 2;
+    projection = projectTrade({ direction, entry: last.close, stop: asianMidLocal });
   }
   return {
     direction,
