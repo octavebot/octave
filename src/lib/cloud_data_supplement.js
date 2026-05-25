@@ -16,6 +16,7 @@
 
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
 import { fetchAll as fetchOanda, fetchBars as fetchOandaBars, isConfigured as oandaConfigured } from '../cloud/oanda.js';
+import { fetchAllForBacktest as fetchDatabentoBacktest, isConfigured as databentoConfigured } from '../cloud/databento.js';
 import { beat as heartbeat } from './heartbeat.js';
 
 // 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
@@ -431,27 +432,48 @@ function sessionStartUtc(unixSec, hourUtc) {
  * @param {number} targetDays  How far back to extend history (default 730 = 2y).
  */
 export async function fetchAllPanesForBacktest(targetDays = 730) {
-  const yahoo = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
-  for (const [, p] of yahoo) p.source = p.source || 'yahoo';
+  // The three traded micros — Databento serves these from the real CME tape.
+  const MICROS = new Set(['gold', 'nasdaq', 'sp']);
+  const useDb = databentoConfigured();
 
-  if (!oandaConfigured()) return yahoo;
+  // 1) Yahoo baseline for everything (fast; sole intraday source for silver/dxy
+  //    and the fallback for the micros if Databento is off or partial).
+  const panes = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
+  for (const [, p] of panes) p.source = p.source || 'yahoo';
 
-  // Try OANDA only for instruments OANDA supports cleanly; skip dxy.
-  const oandaRequests = NEEDED_REQUESTS.filter(([asset]) => asset !== 'dxy');
-  const oanda = await fetchOanda(oandaRequests, { targetDays }).catch(() => new Map());
-
-  for (const [key, oandaPane] of oanda) {
-    const yahooPane = yahoo.get(key);
-    if (!yahooPane?.bars?.length) {
-      yahoo.set(key, oandaPane);
-      continue;
+  // 2) Databento = authoritative DEEP CME history for the micros: real futures
+  //    bars (no spot-vs-futures basis), no Yahoo 60-day intraday cap. Replaces
+  //    the Yahoo/OANDA micro panes outright on 15m / 60m / 1D.
+  if (useDb) {
+    try {
+      const db = await fetchDatabentoBacktest(targetDays);
+      for (const [key, pane] of db) {
+        if (pane?.bars?.length) panes.set(key, pane);
+      }
+    } catch (err) {
+      console.error('[backtest] databento deep fetch failed, falling back to yahoo/oanda:', err?.message || err);
     }
-    const yahooEarliest = yahooPane.bars[0].time;
-    const merged = [
-      ...oandaPane.bars.filter((b) => b.time < yahooEarliest),
-      ...yahooPane.bars,
-    ];
-    yahoo.set(key, { ...yahooPane, bars: merged, source: 'yahoo+oanda', barCount: merged.length });
   }
-  return yahoo;
+
+  // 3) OANDA extends the remaining instruments back to targetDays — silver, and
+  //    the micros only if Databento didn't cover them (off / a transient miss).
+  if (oandaConfigured()) {
+    const oandaRequests = NEEDED_REQUESTS.filter(([asset, tf]) =>
+      asset !== 'dxy' && !(useDb && MICROS.has(asset) && panes.get(`${asset}|${tf}`)?.source === 'databento'));
+    const oanda = await fetchOanda(oandaRequests, { targetDays }).catch(() => new Map());
+    for (const [key, oandaPane] of oanda) {
+      const cur = panes.get(key);
+      if (!cur?.bars?.length) {
+        panes.set(key, oandaPane);
+        continue;
+      }
+      const earliest = cur.bars[0].time;
+      const merged = [
+        ...oandaPane.bars.filter((b) => b.time < earliest),
+        ...cur.bars,
+      ];
+      panes.set(key, { ...cur, bars: merged, source: `${cur.source || 'yahoo'}+oanda`, barCount: merged.length });
+    }
+  }
+  return panes;
 }
