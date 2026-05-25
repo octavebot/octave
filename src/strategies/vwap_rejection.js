@@ -141,3 +141,57 @@ export function evaluate(ctx) {
   for (const r of out) r.confirmations = ['H1 50-EMA trend', 'Wick crosses VWAP', 'Body holds the side', 'Pin/engulfing close'];
   return out;
 }
+
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  const dPane = ctx.pane('1D');
+  if (!tf?.bars || tf.bars.length < 30) return null;
+  if (!tf60?.bars || tf60.bars.length < 55) return null;
+  const np = nyParts(ctx.barTime);
+  const skipPM = np.h >= 12 && np.h < 16;
+
+  let dailyUp = false;
+  if (dPane?.bars && dPane.bars.length >= 25) {
+    const d20 = ema(dPane.bars, 20);
+    const d20last = d20[d20.length - 1];
+    const dlast = dPane.bars[dPane.bars.length - 1];
+    if (d20last != null) dailyUp = dlast.close > d20last;
+  }
+
+  const sessStart = nyDayStartUnix(ctx.barTime);
+  const sessBars = tf.bars.filter((b) => b.time >= sessStart);
+  const haveVwap = sessBars.length >= 6;
+  const vwapVal = haveVwap ? vwap(sessBars, sessStart) : null;
+
+  const last = tf.bars[tf.bars.length - 1];
+  const prev = tf.bars[tf.bars.length - 2];
+  const a = atr(tf.bars, 14);
+  const a60 = atr(tf60.bars, 14);
+  const tapeOk = a && a60 && a >= 0.4 * a60;
+
+  const e50arr = ema(tf60.bars, 50);
+  const e50last = e50arr[e50arr.length - 1];
+  const e50prev = e50arr[e50arr.length - 4];
+  const h1 = tf60.bars[tf60.bars.length - 1];
+  const trendUp = e50last != null && h1.close > e50last && e50last >= e50prev;
+  const trendDown = e50last != null && h1.close < e50last && e50last <= e50prev;
+  const direction = trendUp ? 'LONG' : trendDown ? 'SHORT' : null;
+
+  const longTouch = vwapVal != null && last.low <= vwapVal && last.close > vwapVal + 0.3 * (a || 1);
+  const shortTouch = vwapVal != null && last.high >= vwapVal && last.close < vwapVal - 0.3 * (a || 1);
+  const rejBull = trendUp && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'));
+  const rejBear = trendDown && (isPinBar(last, 'bearish') || isEngulfing(prev, last, 'bearish'));
+
+  return {
+    direction,
+    conditions: [
+      { label: 'Not NY-PM (12:00–16:00 ET skip)', met: !skipPM, value: skipPM ? 'in skip window' : 'ok' },
+      { label: 'H1 trend defined', met: !!direction, value: direction || 'flat' },
+      { label: 'D1 macro support (longs only)', met: !trendUp || dailyUp, value: trendUp ? (dailyUp ? 'D1 above 20-EMA' : 'D1 below — blocks long') : 'n/a' },
+      { label: 'Tape alive (15m ATR ≥ 0.4×H1)', met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
+      { label: 'Wick touched VWAP', met: longTouch || shortTouch, value: vwapVal != null ? `VWAP ${vwapVal.toFixed(2)} · close ${last.close.toFixed(2)}` : 'no VWAP yet' },
+      { label: 'Pin / engulfing confirmation', met: rejBull || rejBear, value: rejBull ? 'bullish reject' : rejBear ? 'bearish reject' : 'no reject candle' },
+    ],
+  };
+}

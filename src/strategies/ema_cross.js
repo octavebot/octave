@@ -127,3 +127,51 @@ export function evaluate(ctx) {
   }
   return out;
 }
+
+export function precheck(ctx) {
+  const tf15 = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  if (!tf15?.bars || tf15.bars.length < 60 || !tf60?.bars || tf60.bars.length < 60) return null;
+
+  const ema9 = ema(tf15.bars, 9);
+  const ema21 = ema(tf15.bars, 21);
+  const ema50_60 = ema(tf60.bars, 50);
+  if (ema9.length < 3 || ema21.length < 3 || !ema50_60.length) return null;
+
+  const last = tf15.bars[tf15.bars.length - 1];
+  const lastH1 = tf60.bars[tf60.bars.length - 1];
+  const ema50last = ema50_60[ema50_60.length - 1];
+
+  const a15 = atr(tf15.bars, 14);
+  const a60 = atr(tf60.bars, 14);
+  const tapeOk = a15 && a60 && a15 >= 0.5 * a60 * 0.5;
+
+  const e9now = ema9[ema9.length - 1], e9prev = ema9[ema9.length - 2];
+  const e21now = ema21[ema21.length - 1], e21prev = ema21[ema21.length - 2];
+
+  const longBias = lastH1.close > ema50last;
+  const shortBias = lastH1.close < ema50last;
+  const direction = longBias ? 'LONG' : shortBias ? 'SHORT' : null;
+
+  const stackedUp = e9now > e21now;
+  const stackedDown = e9now < e21now;
+  const crossedUp = e9prev <= e21prev && e9now > e21now;
+  const crossedDown = e9prev >= e21prev && e9now < e21now;
+  const crossOnBar = crossedUp || crossedDown;
+  const stackAligned = (longBias && stackedUp) || (shortBias && stackedDown);
+
+  const bodyAlign = (longBias && last.close > last.open) || (shortBias && last.close < last.open);
+  const goldSepOK = ctx.instrument !== 'gold' || Math.abs(e9now - e21now) >= 0.06 * (a15 || 1);
+
+  return {
+    direction,
+    conditions: [
+      { label: 'H1 50-EMA trend', met: !!direction, value: direction ? `${direction === 'LONG' ? 'above' : 'below'} (${ema50last.toFixed(2)})` : 'flat' },
+      { label: 'Tape alive', met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
+      { label: '9/21 EMAs stacked with trend', met: stackAligned, value: `9=${e9now.toFixed(2)} 21=${e21now.toFixed(2)}` },
+      { label: 'Cross on this bar', met: crossOnBar, value: crossOnBar ? 'YES' : 'no fresh cross' },
+      { label: 'Body in cross direction', met: bodyAlign, value: bodyAlign ? 'ok' : 'wrong way' },
+      ...(ctx.instrument === 'gold' ? [{ label: 'Gold separation gate', met: goldSepOK, value: `sep ${Math.abs(e9now - e21now).toFixed(2)}` }] : []),
+    ],
+  };
+}

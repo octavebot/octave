@@ -113,3 +113,52 @@ export function evaluate(ctx) {
   for (const r of out) r.confirmations = ['Asian range defined', 'Close beyond range', 'Body > 60% bar'];
   return out;
 }
+
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  if (!tf?.bars || tf.bars.length < 40) return null;
+  const np = nyParts(ctx.barTime);
+  const inWindow = np.h >= 2 && np.h < 10;
+
+  const asianBars = tf.bars.filter((b) => {
+    const p = nyParts(b.time);
+    if (p.dateKey === ctx.dateKey && p.h < 2) return true;
+    const dayMs = 24 * 3600 * 1000;
+    if (ctx.barTime * 1000 - b.time * 1000 < dayMs && p.h >= 20) return true;
+    return false;
+  });
+  const haveAsian = asianBars.length >= 5;
+  const asianHi = haveAsian ? Math.max(...asianBars.map((b) => b.high)) : null;
+  const asianLo = haveAsian ? Math.min(...asianBars.map((b) => b.low)) : null;
+
+  const last = tf.bars[tf.bars.length - 1];
+  const body = Math.abs(last.close - last.open);
+  const range = last.high - last.low || 1;
+  const bodyMin = ctx.instrument === 'gold' ? 0.78 : 0.62;
+  const bodyOk = body / range >= bodyMin;
+
+  const a15 = atr(tf.bars, 14);
+  let trendUp = false, trendDown = false;
+  if (tf60?.bars && tf60.bars.length >= 55) {
+    const e50 = ema(tf60.bars, 50);
+    const e50last = e50[e50.length - 1];
+    const h1 = tf60.bars[tf60.bars.length - 1];
+    if (e50last != null) { trendUp = h1.close > e50last; trendDown = h1.close < e50last; }
+  }
+  const margin = 0.12 * (a15 || 1);
+  const brokeUp = haveAsian && trendUp && last.close > asianHi + margin;
+  const brokeDown = haveAsian && trendDown && last.close < asianLo - margin;
+  const direction = brokeUp ? 'LONG' : brokeDown ? 'SHORT' : (trendUp ? 'LONG' : trendDown ? 'SHORT' : null);
+
+  return {
+    direction,
+    conditions: [
+      { label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { label: 'Asian range defined', met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
+      { label: 'H1 trend aligned', met: trendUp || trendDown, value: trendUp ? 'up' : trendDown ? 'down' : 'flat' },
+      { label: 'Wide-body breakout bar', met: bodyOk, value: `${Math.round(body/range*100)}% body (min ${Math.round(bodyMin*100)}%)` },
+      { label: 'Close beyond range', met: brokeUp || brokeDown, value: brokeUp ? `> hi by ${(last.close - asianHi).toFixed(2)}` : brokeDown ? `< lo by ${(asianLo - last.close).toFixed(2)}` : `at ${last.close.toFixed(2)}` },
+    ],
+  };
+}

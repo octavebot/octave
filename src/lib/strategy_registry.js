@@ -73,6 +73,7 @@ export async function loadRegistry() {
         defaultEnabled: mod.meta.defaultEnabled !== false,
         playbook: mod.playbook || '',
         evaluate: mod.evaluate,
+        precheck: mod.precheck || null,
         file: f,
       });
     } catch (err) {

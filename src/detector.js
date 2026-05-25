@@ -32,6 +32,7 @@ import { loadRegistry } from './lib/strategy_registry.js';
 import { computeInstrumentBias } from './lib/bias.js';
 
 const BIAS_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-bias.json');
+const PRECHECK_SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), 'state', 'last-precheck.json');
 
 // Three primary instruments. Each runs the full strategy gauntlet; strategies
 // can opt out by declaring `meta.instruments`.
@@ -100,7 +101,23 @@ function buildInstrumentCtx(instrument, panesByTf) {
 // cycle. With identical inputs, evaluate() produces identical results that
 // dedup would block anyway. Short-circuiting these saves ~80% of CPU per
 // 15s window during the trading day.
-let _lastDetect = { sig: null, results: null };
+let _lastDetect = { sig: null, results: null, bias: null, precheck: null };
+
+function writeBiasSnapshot(biasByInstrument) {
+  if (!biasByInstrument || Object.keys(biasByInstrument).length === 0) return;
+  try {
+    writeFileSync(BIAS_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), bias: biasByInstrument }));
+    renameSync(BIAS_SNAPSHOT + '.tmp', BIAS_SNAPSHOT);
+  } catch { /* best-effort */ }
+}
+
+function writePrecheckSnapshot(precheckRows) {
+  if (!precheckRows || precheckRows.length === 0) return;
+  try {
+    writeFileSync(PRECHECK_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), rows: precheckRows }));
+    renameSync(PRECHECK_SNAPSHOT + '.tmp', PRECHECK_SNAPSHOT);
+  } catch { /* best-effort */ }
+}
 function signatureOf(panesByTf) {
   const parts = [];
   for (const inst of INSTRUMENTS) {
@@ -127,6 +144,10 @@ export async function detect() {
   // fresh (with stable contents) and downstream behavior is identical.
   const sig = signatureOf(panesByTf);
   if (sig && sig === _lastDetect.sig && _lastDetect.results) {
+    // Re-stamp the bias snapshot so /bias doesn't trip the 3-min freshness
+    // gate on weekends / quiet sessions when no new bar arrives.
+    writeBiasSnapshot(_lastDetect.bias);
+    writePrecheckSnapshot(_lastDetect.precheck);
     return _lastDetect.results;
   }
 
@@ -136,6 +157,7 @@ export async function detect() {
 
   const registry = await loadRegistry();
   const allResults = [];
+  const precheckRows = [];
 
   const biasByInstrument = {};
   for (const instrument of INSTRUMENTS) {
@@ -156,6 +178,15 @@ export async function detect() {
       try { results.push(...s.evaluate(ctx)); }
       catch (err) {
         log.error('strategy evaluator threw', { strategy: s.id, instrument, err: err.message, stack: err.stack });
+      }
+      // Live diagnostics for /setups — strategy reports its checklist state.
+      if (typeof s.precheck === 'function') {
+        try {
+          const pc = s.precheck(ctx);
+          if (pc) precheckRows.push({ strategy: s.id, instrument, ...pc });
+        } catch (err) {
+          log.warn('strategy precheck threw', { strategy: s.id, instrument, err: err.message });
+        }
       }
     }
     try { results.push(...evaluateUserStrategies(ctx, isStrategyEnabled)); }
@@ -191,11 +222,9 @@ export async function detect() {
   }
 
   // Persist the bias snapshot so /bias reads a fresh structural read instantly.
-  try {
-    writeFileSync(BIAS_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), bias: biasByInstrument }));
-    renameSync(BIAS_SNAPSHOT + '.tmp', BIAS_SNAPSHOT);
-  } catch { /* best-effort */ }
+  writeBiasSnapshot(biasByInstrument);
+  writePrecheckSnapshot(precheckRows);
 
-  _lastDetect = { sig, results: filtered };
+  _lastDetect = { sig, results: filtered, bias: biasByInstrument, precheck: precheckRows };
   return filtered;
 }

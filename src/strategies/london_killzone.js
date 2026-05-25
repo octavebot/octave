@@ -103,3 +103,39 @@ export function evaluate(ctx) {
   for (const r of out) r.confirmations = ['London killzone window', 'Asian range sweep', 'Body closed back inside'];
   return out;
 }
+
+// Live diagnostics for /setups — reports each rule's current state without
+// requiring a full trigger. Returns null if not enough data to even check.
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  if (!tf?.bars || tf.bars.length < 60) return null;
+  const np = nyParts(ctx.barTime);
+  const inWindow = np.h >= 2 && np.h < 5;
+
+  const asianBars = tf.bars.filter((b) => {
+    const p = nyParts(b.time);
+    if (p.dateKey === ctx.dateKey && p.h < 2) return true;
+    const dayMs = 24 * 3600 * 1000;
+    if (ctx.barTime * 1000 - b.time * 1000 < dayMs && p.h >= 20) return true;
+    return false;
+  });
+  const haveAsian = asianBars.length >= 5;
+  const asianHi = haveAsian ? Math.max(...asianBars.map((b) => b.high)) : null;
+  const asianLo = haveAsian ? Math.min(...asianBars.map((b) => b.low)) : null;
+  const last = tf.bars[tf.bars.length - 1];
+
+  const sweepHi = haveAsian && last.high > asianHi && last.close < asianHi;
+  const sweepLo = haveAsian && last.low < asianLo && last.close > asianLo;
+  const swept = sweepHi || sweepLo;
+  const direction = sweepHi ? 'SHORT' : sweepLo ? 'LONG' : null;
+
+  return {
+    direction,
+    conditions: [
+      { label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { label: 'Asian range built', met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
+      { label: 'Sweep of Asian range', met: swept, value: sweepHi ? 'high swept' : sweepLo ? 'low swept' : 'not yet' },
+      { label: 'Body closed back inside', met: swept, value: swept ? `close ${last.close.toFixed(2)}` : '—' },
+    ],
+  };
+}

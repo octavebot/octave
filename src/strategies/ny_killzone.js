@@ -113,3 +113,49 @@ export function evaluate(ctx) {
   for (const r of out) r.confirmations = ['NY killzone window', '3-candle FVG', 'Retracement into gap'];
   return out;
 }
+
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  if (!tf?.bars || tf.bars.length < 30) return null;
+  const np = nyParts(ctx.barTime);
+  const inWindow = np.h >= 7 && np.h < 10;
+
+  const gaps = findFVGs(tf.bars, 50) || [];
+  const recent = gaps.filter((g) => g.idx >= tf.bars.length - 9);
+  const gap = recent.length ? recent[recent.length - 1] : null;
+  const last = tf.bars[tf.bars.length - 1];
+  const a = atr(tf.bars, 14);
+
+  const minGap = (ctx.instrument === 'gold' ? 0.6 : 0.25) * (a || 1);
+  const gapSize = gap ? gap.top - gap.bottom : 0;
+  const gapSizeOk = gap && gapSize >= minGap;
+
+  let trendUp = false, trendDown = false;
+  if (tf60?.bars && tf60.bars.length >= 55) {
+    const e50arr = ema(tf60.bars, 50);
+    const e50last = e50arr[e50arr.length - 1];
+    const e50prev = e50arr[e50arr.length - 4];
+    const h1 = tf60.bars[tf60.bars.length - 1];
+    if (e50last != null && e50prev != null) {
+      trendUp = h1.close > e50last && e50last >= e50prev;
+      trendDown = h1.close < e50last && e50last <= e50prev;
+    }
+  }
+  const direction = trendUp ? 'LONG' : trendDown ? 'SHORT' : null;
+
+  const inRetrace = gap && (
+    (gap.side === 'bullish' && last.low <= gap.top && last.low >= gap.bottom) ||
+    (gap.side === 'bearish' && last.high >= gap.bottom && last.high <= gap.top)
+  );
+
+  return {
+    direction,
+    conditions: [
+      { label: 'NY killzone (07:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { label: 'Tradable FVG present', met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side})` : 'no recent FVG' },
+      { label: 'H1 trend defined', met: !!direction, value: direction || 'flat' },
+      { label: 'Retrace into gap', met: !!inRetrace, value: inRetrace ? 'inside gap now' : 'not yet' },
+    ],
+  };
+}

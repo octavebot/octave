@@ -45,9 +45,11 @@ export async function chatWithTools({ system, messages, tools, toolHandlers, max
     try {
       return await _groqChat({ system, messages, tools, toolHandlers, maxRounds });
     } catch (err) {
-      // Groq free-tier TPM (12k/min on llama-3.3-70b) blows up on tool-heavy
-      // multi-round chats. Fall through to Gemini instead of killing the turn.
-      if (_isTransientGroqFail(err) && process.env.GEMINI_API_KEY) {
+      // Only fall back to Gemini on transient SERVER faults (5xx). 429 means
+      // we're quota-throttled and Gemini's much smaller free tier will throw
+      // the same error a moment later — better to surface the Groq quota
+      // message and let the user wait/swap key.
+      if (_isGroqServerFault(err) && process.env.GEMINI_API_KEY) {
         return _geminiChat({ system, messages, tools, toolHandlers, maxRounds });
       }
       throw err;
@@ -56,8 +58,13 @@ export async function chatWithTools({ system, messages, tools, toolHandlers, max
   return _geminiChat({ system, messages, tools, toolHandlers, maxRounds });
 }
 
-function _isTransientGroqFail(err) {
-  return /^Groq HTTP (429|5\d\d)/.test(err?.message || '');
+function _isGroqServerFault(err) {
+  return /^Groq HTTP 5\d\d/.test(err?.message || '');
+}
+
+export function isQuotaError(err) {
+  const m = err?.message || '';
+  return /HTTP 429/.test(m) || /quota/i.test(m) || /rate.?limit/i.test(m);
 }
 
 // ── Groq (OpenAI-compatible) ────────────────────────────────────────────
@@ -249,7 +256,7 @@ export async function oneShot({ system, userParts, maxTokens = 1024 }) {
     try {
       return await _groqOneShot({ system, userParts, maxTokens });
     } catch (err) {
-      if (_isTransientGroqFail(err) && process.env.GEMINI_API_KEY) {
+      if (_isGroqServerFault(err) && process.env.GEMINI_API_KEY) {
         return _geminiOneShot({ system, userParts, maxTokens });
       }
       throw err;

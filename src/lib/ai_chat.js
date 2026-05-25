@@ -11,7 +11,7 @@
  * rounds so a runaway loop can't burn through quota.
  */
 
-import { chatWithTools, pickProvider, providerLabel } from './llm.js';
+import { chatWithTools, pickProvider, providerLabel, isQuotaError } from './llm.js';
 import * as journal from './trade_journal.js';
 import * as us from './user_strategies.js';
 import * as fu from './follow_up.js';
@@ -595,8 +595,22 @@ export async function chat(chatId, userText) {
     session.push({ role: 'assistant', content: reply });
     return reply;
   } catch (err) {
-    // A failed turn must not poison the session — a dangling user/tool_use
-    // message would make every following turn fail too. Reset to clean state.
+    // Quota errors don't poison the session — the conversation state is
+    // still valid, we just couldn't reach the model. Peel off the last
+    // user message so a retry doesn't double-stack it, then preserve the
+    // rest of the history for when quota refills.
+    if (isQuotaError(err)) {
+      const s = sessions.get(chatId) || [];
+      if (s.length && s[s.length - 1].role === 'user') s.pop();
+      const which = /Gemini/i.test(err.message) ? 'Gemini' : 'Groq';
+      return [
+        '⏳ *AI quota reached*',
+        `${which} returned 429 — wait a minute and try again.`,
+        'Conversation history kept; no reset needed.',
+      ].join('\n');
+    }
+    // Real failure path — a dangling user/tool_use message would poison
+    // every following turn. Reset to clean state.
     sessions.set(chatId, []);
     return `⚠️ AI hit an error and reset the chat. Try again.\n_(${err.message})_`;
   }

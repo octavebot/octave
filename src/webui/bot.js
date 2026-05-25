@@ -1018,10 +1018,8 @@ async function cmdBias() {
 }
 
 async function cmdActiveSetups() {
-  // Show what's PERSISTENT, not a flickering live-detect snapshot: open
-  // positions (the follow-up tracker) + the signals fired so far today.
-  // A triggered setup only shows in live-detect for a few minutes, which is
-  // why /bias and a live /setups could disagree — this view doesn't drift.
+  // Three sections: open positions (follow-up tracker), live forming setups
+  // (precheck snapshot from the signal engine), signals fired today.
   let open = [];
   try { const fu = await import('../lib/follow_up.js'); open = fu.active(); } catch {}
 
@@ -1029,6 +1027,14 @@ async function cmdActiveSetups() {
   const fired = readAlerts({ limit: 200 })
     .filter((a) => a.status === 'triggered' && nyDateKey(a.time) === todayKey);
 
+  // Live precheck — what each strategy is watching RIGHT NOW. The signal
+  // engine re-stamps this every tick (3s) so a stale read just means the
+  // engine is restarting. Older than 3 min → treat as missing.
+  const precheckSnap = readJson(join(STATE_DIR, 'last-precheck.json'), null);
+  const precheckFresh = precheckSnap && (Date.now() - (precheckSnap.at || 0)) <= 180_000;
+  const precheckRows = precheckFresh ? (precheckSnap.rows || []) : [];
+
+  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
   const lines = [header('🎯', 'Setups')];
 
   if (open.length) {
@@ -1043,11 +1049,42 @@ async function cmdActiveSetups() {
     }
   }
 
+  if (precheckRows.length) {
+    // Rank by closeness — % of rules currently met. Hide rows with 0 met
+    // (everything failing) to avoid noise on dead sessions.
+    const ranked = precheckRows
+      .map((r) => {
+        const met = (r.conditions || []).filter((c) => c.met).length;
+        const total = (r.conditions || []).length || 1;
+        return { ...r, met, total, pct: met / total };
+      })
+      .filter((r) => r.met > 0)
+      .sort((a, b) => b.pct - a.pct);
+
+    // Show only the top 6 — usually plenty per instrument/strategy mix.
+    const top = ranked.slice(0, 6);
+    if (top.length) {
+      lines.push('', section('Forming now'));
+      for (const r of top) {
+        const inst = INST[r.instrument] || r.instrument;
+        const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
+        const dirLabel = r.direction || '—';
+        const stageIcon = r.met === r.total ? '🟢' : r.met >= r.total - 1 ? '🟠' : '🟡';
+        lines.push(`${stageIcon} *${tgEscape(r.strategy)}* · ${inst} · ${dir} ${dirLabel} · ${r.met}/${r.total}`);
+        for (const c of (r.conditions || [])) {
+          const icon = c.met ? '✅' : '⏳';
+          const val = c.value ? ` _${tgEscape(String(c.value))}_` : '';
+          lines.push(`   ${icon} ${tgEscape(c.label)}${val}`);
+        }
+      }
+    }
+  } else if (precheckSnap && !precheckFresh) {
+    lines.push('', '_Live diagnostics stale — signal engine catching up._');
+  }
+
   if (fired.length) {
-    // Dedupe by setupId — collapse any same-setup re-fires into one line.
     const seen = new Set();
     const uniq = fired.filter((a) => { if (seen.has(a.setupId)) return false; seen.add(a.setupId); return true; });
-    const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
     lines.push('', section(`Signals fired today (${uniq.length})`));
     for (const a of uniq.slice(0, 12)) {
       const inst = INST[String(a.setupId || '').split('|')[0]] || '?';
@@ -1055,9 +1092,9 @@ async function cmdActiveSetups() {
     }
   }
 
-  if (!open.length && !fired.length) {
+  if (!open.length && !precheckRows.length && !fired.length) {
     lines.push('',
-      'No open positions and nothing fired today yet.',
+      'No open positions, nothing forming, nothing fired today.',
       '_`/bias` shows the current directional lean across all instruments._');
   } else {
     lines.push('', '_`/setup <num>` for a strategy\'s live detail · `/bias` for direction._');

@@ -156,3 +156,52 @@ export function evaluate(ctx) {
   for (const r of out) r.confirmations = ['Daily 20-EMA trend', 'H1 pullback to 20-EMA', '15m pin/engulfing'];
   return out;
 }
+
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  const dPane = ctx.pane('1D');
+  if (!tf?.bars || tf.bars.length < 30) return null;
+  if (!tf60?.bars || tf60.bars.length < 50) return null;
+  if (!dPane?.bars || dPane.bars.length < 25) return null;
+
+  const d20 = ema(dPane.bars, 20);
+  const d20last = d20[d20.length - 1];
+  const d20prev = d20[d20.length - 3];
+  const dlast = dPane.bars[dPane.bars.length - 1];
+  const aD = atr(dPane.bars, 14);
+  if (d20last == null || d20prev == null || !aD) return null;
+
+  const trendStrength = Math.abs(dlast.close - d20last);
+  const trendStrong = trendStrength >= 0.3 * aD;
+  const dailyUp = dlast.close > d20last && d20last > d20prev;
+  const dailyDown = dlast.close < d20last && d20last < d20prev;
+  const direction = dailyUp ? 'LONG' : dailyDown ? 'SHORT' : null;
+
+  const h20 = ema(tf60.bars, 20);
+  const h20last = h20[h20.length - 1];
+  const aH1 = atr(tf60.bars, 14);
+  const a15 = atr(tf.bars, 14);
+  if (h20last == null || !aH1 || !a15) return null;
+  const tol = 0.6 * aH1;
+  const recent5 = tf60.bars.slice(-5);
+  const h1Touched = recent5.some((b) => b.low - tol <= h20last && b.high + tol >= h20last);
+
+  const last = tf.bars[tf.bars.length - 1];
+  const prev = tf.bars[tf.bars.length - 2];
+  const proximityTol = 0.4 * a15;
+  const lastTouches = last.low - proximityTol <= h20last && last.high + proximityTol >= h20last;
+
+  const rejBull = dailyUp && (isEngulfing(prev, last, 'bullish') || isPinBar(last, 'bullish')) && last.close > prev.high && last.close > last.open;
+  const rejBear = dailyDown && (isEngulfing(prev, last, 'bearish') || isPinBar(last, 'bearish')) && last.close < prev.low && last.close < last.open;
+
+  return {
+    direction,
+    conditions: [
+      { label: 'Daily trend established', met: !!direction && trendStrong, value: direction ? `D1 ${direction === 'LONG' ? 'above' : 'below'} 20-EMA${trendStrong ? '' : ' (weak)'}` : 'flat' },
+      { label: 'H1 pulled back to 20-EMA', met: h1Touched, value: h1Touched ? `within ${tol.toFixed(2)}` : 'not pulled back' },
+      { label: '15m bar at pullback now', met: lastTouches, value: lastTouches ? 'in zone' : `${(Math.abs(last.close - h20last)).toFixed(2)} away` },
+      { label: '15m rejection candle', met: rejBull || rejBear, value: rejBull ? 'bullish reject + took prev high' : rejBear ? 'bearish reject + took prev low' : 'no rejection yet' },
+    ],
+  };
+}
