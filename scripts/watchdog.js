@@ -82,12 +82,21 @@ async function alertTelegram(text) {
 function restartService(service) {
   const target = SERVICE_MAP[service];
   if (!target) return;
-  const cmd = isLinux ? 'systemctl' : '/bin/launchctl';
+  // On Linux the watchdog runs as `octave` and uses a sudoers NOPASSWD rule
+  // scoped to `/bin/systemctl restart octave-*.service`. Without sudo the call
+  // silently fails with "Interactive authentication required".
+  const cmd = isLinux ? 'sudo' : '/bin/launchctl';
   const args = isLinux
-    ? ['restart', target]
+    ? ['/bin/systemctl', 'restart', `${target}.service`]
     : ['kickstart', '-k', `gui/${process.getuid()}/${target}`];
   console.log(`[watchdog] restarting ${target} (heartbeat for ${service} is stale)`);
-  spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stderr?.on('data', (d) => console.error(`[watchdog] restart stderr: ${d.toString().trim()}`));
+  child.on('error', (e) => console.error(`[watchdog] restart spawn error: ${e.message}`));
+  child.on('exit', (code) => {
+    if (code !== 0) console.error(`[watchdog] restart of ${target} exited ${code}`);
+  });
+  child.unref();
   const history = restartHistory.get(service) || [];
   history.push(Date.now());
   restartHistory.set(service, history.filter((t) => t > Date.now() - FLAP_WINDOW_MS));

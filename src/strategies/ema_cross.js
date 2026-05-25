@@ -163,15 +163,16 @@ export function precheck(ctx) {
   const bodyAlign = (longBias && last.close > last.open) || (shortBias && last.close < last.open);
   const goldSepOK = ctx.instrument !== 'gold' || Math.abs(e9now - e21now) >= 0.06 * (a15 || 1);
 
+  const ratio = a15 && a60 ? (a15 / a60).toFixed(2) : '—';
   return {
     direction,
     conditions: [
-      { kind: 'gate',    label: 'H1 50-EMA trend',                 met: !!direction, value: direction ? `${direction === 'LONG' ? 'above' : 'below'} (${ema50last.toFixed(2)})` : 'flat' },
-      { kind: 'gate',    label: 'Tape alive',                      met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
-      { kind: 'gate',    label: '9/21 EMAs stacked with trend',    met: stackAligned, value: `9=${e9now.toFixed(2)} 21=${e21now.toFixed(2)}` },
-      { kind: 'trigger', label: 'Cross on this bar',               met: crossOnBar, value: crossOnBar ? 'YES' : 'no fresh cross' },
-      { kind: 'trigger', label: 'Body in cross direction',         met: bodyAlign, value: bodyAlign ? 'ok' : 'wrong way' },
-      ...(ctx.instrument === 'gold' ? [{ kind: 'gate', label: 'Gold separation gate', met: goldSepOK, value: `sep ${Math.abs(e9now - e21now).toFixed(2)}` }] : []),
+      { kind: 'gate',    label: 'H1 50-EMA trend',                 met: !!direction, value: ema50last != null ? `H1 ${lastH1.close.toFixed(2)} ${longBias ? '>' : shortBias ? '<' : '≈'} EMA50 ${ema50last.toFixed(2)}` : 'no EMA yet' },
+      { kind: 'gate',    label: 'Tape alive (15m ATR vs H1)',      met: !!tapeOk, value: a15 && a60 ? `ATR15 ${a15.toFixed(2)} / ATR60 ${a60.toFixed(2)} (${ratio})` : '—' },
+      { kind: 'gate',    label: '9/21 EMAs stacked with trend',    met: stackAligned, value: `9-EMA ${e9now.toFixed(2)} ${stackedUp ? '>' : stackedDown ? '<' : '≈'} 21-EMA ${e21now.toFixed(2)}` },
+      { kind: 'trigger', label: 'Cross on this bar',               met: crossOnBar, value: crossOnBar ? `9/21 crossed ${crossedUp ? 'up' : 'down'} (prev 9=${e9prev.toFixed(2)} 21=${e21prev.toFixed(2)})` : `prev 9=${e9prev.toFixed(2)} 21=${e21prev.toFixed(2)} · no flip` },
+      { kind: 'trigger', label: 'Body in cross direction',         met: bodyAlign, value: `last ${last.open.toFixed(2)}→${last.close.toFixed(2)} (${last.close > last.open ? 'bull' : last.close < last.open ? 'bear' : 'doji'} body)` },
+      ...(ctx.instrument === 'gold' ? [{ kind: 'gate', label: 'Gold separation gate (≥ 0.06×ATR15)', met: goldSepOK, value: `sep ${Math.abs(e9now - e21now).toFixed(2)} vs threshold ${(0.06 * (a15 || 0)).toFixed(2)}` }] : []),
     ],
   };
 }

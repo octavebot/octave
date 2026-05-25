@@ -151,14 +151,20 @@ export function precheck(ctx) {
   const brokeDown = haveAsian && trendDown && last.close < asianLo - margin;
   const direction = brokeUp ? 'LONG' : brokeDown ? 'SHORT' : (trendUp ? 'LONG' : trendDown ? 'SHORT' : null);
 
+  let h1Close = null, h1Ema50 = null;
+  if (tf60?.bars && tf60.bars.length >= 55) {
+    const e50 = ema(tf60.bars, 50);
+    h1Ema50 = e50[e50.length - 1];
+    h1Close = tf60.bars[tf60.bars.length - 1].close;
+  }
   return {
     direction,
     conditions: [
       { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
-      { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
-      { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: trendUp ? 'up' : trendDown ? 'down' : 'flat' },
-      { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `${Math.round(body/range*100)}% body (min ${Math.round(bodyMin*100)}%)` },
-      { kind: 'trigger', label: 'Close beyond range',               met: brokeUp || brokeDown, value: brokeUp ? `> hi by ${(last.close - asianHi).toFixed(2)}` : brokeDown ? `< lo by ${(asianLo - last.close).toFixed(2)}` : `at ${last.close.toFixed(2)}` },
+      { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
+      { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
+      { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `body ${body.toFixed(2)} / range ${range.toFixed(2)} = ${Math.round(body/range*100)}% (min ${Math.round(bodyMin*100)}%)` },
+      { kind: 'trigger', label: 'Close beyond range',               met: brokeUp || brokeDown, value: brokeUp ? `close ${last.close.toFixed(2)} > hi ${asianHi.toFixed(2)} by ${(last.close - asianHi).toFixed(2)}` : brokeDown ? `close ${last.close.toFixed(2)} < lo ${asianLo.toFixed(2)} by ${(asianLo - last.close).toFixed(2)}` : haveAsian ? `close ${last.close.toFixed(2)} inside ${asianLo.toFixed(2)}–${asianHi.toFixed(2)}` : `close ${last.close.toFixed(2)}` },
     ],
   };
 }

@@ -183,15 +183,25 @@ export function precheck(ctx) {
   const rejBull = trendUp && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'));
   const rejBear = trendDown && (isPinBar(last, 'bearish') || isEngulfing(prev, last, 'bearish'));
 
+  // D1 numbers for the macro-support readout — only relevant on longs but
+  // we always compute them so the value string can show what we'd compare.
+  let d1Close = null, d1Ema20 = null;
+  if (dPane?.bars && dPane.bars.length >= 25) {
+    const d20 = ema(dPane.bars, 20);
+    d1Ema20 = d20[d20.length - 1];
+    d1Close = dPane.bars[dPane.bars.length - 1].close;
+  }
+  const ratio = a && a60 ? (a / a60).toFixed(2) : '—';
+
   return {
     direction,
     conditions: [
-      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: skipPM ? 'in skip window' : 'ok' },
-      { kind: 'gate',    label: 'H1 trend defined',                 met: !!direction, value: direction || 'flat' },
-      { kind: 'gate',    label: 'D1 macro support (longs only)',    met: !trendUp || dailyUp, value: trendUp ? (dailyUp ? 'D1 above 20-EMA' : 'D1 below — blocks long') : 'n/a' },
-      { kind: 'gate',    label: 'Tape alive (15m ATR ≥ 0.4×H1)',    met: !!tapeOk, value: tapeOk ? 'ok' : 'dead' },
-      { kind: 'trigger', label: 'Wick touched VWAP',                met: longTouch || shortTouch, value: vwapVal != null ? `VWAP ${vwapVal.toFixed(2)} · close ${last.close.toFixed(2)}` : 'no VWAP yet' },
-      { kind: 'trigger', label: 'Pin / engulfing confirmation',     met: rejBull || rejBear, value: rejBull ? 'bullish reject' : rejBear ? 'bearish reject' : 'no reject candle' },
+      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',   met: !!direction, value: e50last != null ? `H1 ${h1.close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${e50last.toFixed(2)}` : 'no EMA yet' },
+      { kind: 'gate',    label: 'D1 macro support (longs only)',    met: !trendUp || dailyUp, value: !trendUp ? 'n/a (short setup)' : d1Close != null && d1Ema20 != null ? `D1 ${d1Close.toFixed(2)} ${dailyUp ? '>' : '<'} EMA20 ${d1Ema20.toFixed(2)}` : 'no D1 data' },
+      { kind: 'gate',    label: 'Tape alive (15m ATR ≥ 0.4×H1)',    met: !!tapeOk, value: a && a60 ? `ATR15 ${a.toFixed(2)} / ATR60 ${a60.toFixed(2)} (${ratio})` : '—' },
+      { kind: 'trigger', label: 'Wick touched VWAP',                met: longTouch || shortTouch, value: vwapVal != null ? `VWAP ${vwapVal.toFixed(2)} · close ${last.close.toFixed(2)} (Δ ${(last.close - vwapVal).toFixed(2)})` : 'no VWAP yet' },
+      { kind: 'trigger', label: 'Pin / engulfing confirmation',     met: rejBull || rejBear, value: rejBull ? 'bullish reject' : rejBear ? 'bearish reject' : `last ${last.open.toFixed(2)}→${last.close.toFixed(2)}` },
     ],
   };
 }

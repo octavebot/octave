@@ -198,10 +198,10 @@ export function precheck(ctx) {
   return {
     direction,
     conditions: [
-      { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: direction ? `D1 ${direction === 'LONG' ? 'above' : 'below'} 20-EMA${trendStrong ? '' : ' (weak)'}` : 'flat' },
-      { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: h1Touched ? `within ${tol.toFixed(2)}` : 'not pulled back' },
-      { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: lastTouches ? 'in zone' : `${(Math.abs(last.close - h20last)).toFixed(2)} away` },
-      { kind: 'trigger', label: '15m rejection candle',     met: rejBull || rejBear, value: rejBull ? 'bullish reject + took prev high' : rejBear ? 'bearish reject + took prev low' : 'no rejection yet' },
+      { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: `D1 ${dlast.close.toFixed(2)} ${dailyUp ? '>' : dailyDown ? '<' : '≈'} EMA20 ${d20last.toFixed(2)} · sep ${trendStrength.toFixed(2)} (min ${(0.3 * aD).toFixed(2)})` },
+      { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: `H1 EMA20 ${h20last.toFixed(2)} · tol ±${tol.toFixed(2)} · ${h1Touched ? 'touched in last 5 bars' : 'no touch in last 5 bars'}` },
+      { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: `15m ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs H1 EMA20 ${h20last.toFixed(2)} (tol ±${proximityTol.toFixed(2)})` },
+      { kind: 'trigger', label: '15m rejection candle',     met: rejBull || rejBear, value: rejBull ? `bullish reject · close ${last.close.toFixed(2)} > prev high ${prev.high.toFixed(2)}` : rejBear ? `bearish reject · close ${last.close.toFixed(2)} < prev low ${prev.low.toFixed(2)}` : `last ${last.open.toFixed(2)}→${last.close.toFixed(2)} · prev ${prev.low.toFixed(2)}–${prev.high.toFixed(2)}` },
     ],
   };
 }

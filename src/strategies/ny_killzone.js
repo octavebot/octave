@@ -149,13 +149,19 @@ export function precheck(ctx) {
     (gap.side === 'bearish' && last.high >= gap.bottom && last.high <= gap.top)
   );
 
+  let h1Close = null, h1Ema50 = null;
+  if (tf60?.bars && tf60.bars.length >= 55) {
+    const e50arr = ema(tf60.bars, 50);
+    h1Ema50 = e50arr[e50arr.length - 1];
+    h1Close = tf60.bars[tf60.bars.length - 1].close;
+  }
   return {
     direction,
     conditions: [
       { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
-      { kind: 'gate',    label: 'H1 trend defined',             met: !!direction, value: direction || 'flat' },
-      { kind: 'gate',    label: 'Tradable FVG present',         met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side})` : 'no recent FVG' },
-      { kind: 'trigger', label: 'Retrace into gap',             met: !!inRetrace, value: inRetrace ? 'inside gap now' : `last ${last.low.toFixed(2)}–${last.high.toFixed(2)}` },
+      { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',met: !!direction, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
+      { kind: 'gate',    label: 'Tradable FVG present',         met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side}, size ${(gap.top - gap.bottom).toFixed(2)} / min ${minGap.toFixed(2)})` : 'no recent FVG' },
+      { kind: 'trigger', label: 'Retrace into gap',             met: !!inRetrace, value: gap ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs gap ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)}` : 'no gap to retrace' },
     ],
   };
 }
