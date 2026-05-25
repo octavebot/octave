@@ -590,14 +590,23 @@ function renderState(s) {
   document.getElementById('session-status').textContent =
     (s.activity.current_session || 'closed').toUpperCase().replace('_', ' ');
 
-  // Last alert
+  // Last alert — if older than 24h, mark it clearly as stale/historical so
+  // the dashboard doesn't look like something just fired when the last fire
+  // was days ago (which happens through quiet sessions / weekends).
   const la = s.activity.last_alert;
+  const lastAlertEl = document.getElementById('last-alert');
   if (la) {
     const lat = new Date(la.ts).getTime();
-    document.getElementById('last-alert').innerHTML =
-      `${la.strategy} <span style="color:var(--text-dim)">${la.status}</span> · ${fmtAge(s.now_ms - lat)}`;
+    const ageH = (s.now_ms - lat) / 3600000;
+    if (ageH > 24) {
+      lastAlertEl.innerHTML =
+        `<span style="color:var(--text-dim)">No fires in 24h · last ${la.strategy} ${fmtAge(s.now_ms - lat)}</span>`;
+    } else {
+      lastAlertEl.innerHTML =
+        `${la.strategy} <span style="color:var(--text-dim)">${la.status}</span> · ${fmtAge(s.now_ms - lat)}`;
+    }
   } else {
-    document.getElementById('last-alert').textContent = 'None yet';
+    lastAlertEl.textContent = 'None yet';
   }
 
   // Per-instrument prices — derived from the per-instrument heartbeat slot
