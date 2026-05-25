@@ -32,7 +32,7 @@ keeps us on the right side of higher-timeframe flow.
 1. **H1 trend** — H1 close above/below the 50-EMA, EMA sloping the same way.
 2. **D1 macro (longs only)** — D1 close above the 20-EMA before taking a long. Shorts are symmetric (no D1 gate) because they generalize without it.
 3. **Touch** — Bar's wick crosses VWAP, body closes back on the trending side.
-4. **Displacement** — Close ≥ 0.3 × ATR away from VWAP (not lingering on it).
+4. **Displacement** — Close ≥ 0.5 × ATR away from VWAP for LONGS (asymmetric: shorts stay at 0.3). Wider longs threshold filters marginal rejections that accounted for most long-side stop-outs (30d: longs 43% / shorts 67% win).
 5. **Confirmation** — Last bar is a pin bar OR engulfing in the trade direction.
 
 ## Entry
@@ -103,7 +103,13 @@ export function evaluate(ctx) {
 
   // LONG: H1 up + wick crossed VWAP from above + close back above + confirmation
   //       + D1 macro support (asymmetric filter — see comment above)
-  if (trendUp && dailyUp && last.low <= vwapVal && last.close > vwapVal + 0.3 * a
+  //
+  // Asymmetric displacement: longs need 0.5×ATR clearance above VWAP, shorts
+  // stay at 0.3. 30d loss split: longs 43% win / +0.25R across 23 trades;
+  // shorts 67% / +11.66R across 21. The wider longs threshold filters the
+  // marginal rejections that account for most long-side stop-outs. Shorts
+  // generalise cleanly, no extra gate needed.
+  if (trendUp && dailyUp && last.low <= vwapVal && last.close > vwapVal + 0.5 * a
       && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'))) {
     const entry = last.close;
     const stop  = last.low - 0.5 * a;
@@ -178,7 +184,8 @@ export function precheck(ctx) {
   const trendDown = e50last != null && h1.close < e50last && e50last <= e50prev;
   const direction = trendUp ? 'LONG' : trendDown ? 'SHORT' : null;
 
-  const longTouch = vwapVal != null && last.low <= vwapVal && last.close > vwapVal + 0.3 * (a || 1);
+  // Asymmetric: longs need 0.5×ATR clearance (per loss-driven retune), shorts 0.3.
+  const longTouch = vwapVal != null && last.low <= vwapVal && last.close > vwapVal + 0.5 * (a || 1);
   const shortTouch = vwapVal != null && last.high >= vwapVal && last.close < vwapVal - 0.3 * (a || 1);
   const rejBull = trendUp && (isPinBar(last, 'bullish') || isEngulfing(prev, last, 'bullish'));
   const rejBear = trendDown && (isPinBar(last, 'bearish') || isEngulfing(prev, last, 'bearish'));
