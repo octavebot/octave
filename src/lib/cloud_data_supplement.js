@@ -294,13 +294,25 @@ export async function getLiveFuturesQuotes() {
   if (tvConfigured()) {
     let allFresh = true;
     for (const inst of QUOTE_INSTRUMENTS) {
-      let tvLast = null;
+      let tvBars = null, tvLast = null;
       try {
         const p = await fetchTvBars(inst.key, '5');
-        if (p?.bars?.length) tvLast = p.bars[p.bars.length - 1];
+        if (p?.bars?.length) { tvBars = p.bars; tvLast = p.bars[p.bars.length - 1]; }
       } catch { /* no-op */ }
       if (!tvLast) { allFresh = false; break; }
-      const ref = lastPrevClose[inst.key] ?? null;
+      // Prior-session close for the change% — derived from the TV bars (no
+      // network): the close of the last bar before the current CME session
+      // start (futures roll 22:00 UTC). Falls back to a remembered Yahoo
+      // prevClose, then the window's first bar.
+      const SESSION_UTC_HOUR = 22;
+      const d = new Date(now);
+      let sessStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), SESSION_UTC_HOUR) / 1000;
+      if (now / 1000 < sessStart) sessStart -= 86400;
+      let priorClose = null;
+      for (let i = tvBars.length - 1; i >= 0; i--) {
+        if (tvBars[i].time < sessStart) { priorClose = tvBars[i].close; break; }
+      }
+      const ref = priorClose ?? lastPrevClose[inst.key] ?? tvBars[0]?.close ?? null;
       const change = ref != null ? tvLast.close - ref : null;
       out.set(inst.key, {
         sym: inst.sym, label: inst.label, price: tvLast.close,
