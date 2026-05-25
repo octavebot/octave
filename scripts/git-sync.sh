@@ -55,8 +55,12 @@ declare -A UNIT_FOR_PATH=(
   ["src/detector.js"]="octave-signal-engine"
   ["src/alerter.js"]="octave-signal-engine"
   ["src/strategies/"]="octave-signal-engine"
-  ["src/lib/"]="octave-signal-engine"
-  ["src/cloud/"]="octave-signal-engine"
+  # src/lib and src/cloud are imported by all three Node services (engine,
+  # webui, bot), so any change in those dirs needs to restart all of them —
+  # otherwise the shared on-disk state (e.g. tv_bars.json) and the in-memory
+  # code drift apart between processes.
+  ["src/lib/"]="octave-signal-engine octave-webui octave-bot"
+  ["src/cloud/"]="octave-signal-engine octave-webui octave-bot"
   ["src/webui/bot.js"]="octave-bot"
   ["src/webui/server.js"]="octave-webui"
   ["src/webui/index.html"]="octave-webui"
@@ -67,7 +71,9 @@ declare -A NEEDS_RESTART
 while IFS= read -r path; do
   for key in "${!UNIT_FOR_PATH[@]}"; do
     if [[ "$path" == "$key"* ]]; then
-      NEEDS_RESTART[${UNIT_FOR_PATH[$key]}]=1
+      for unit in ${UNIT_FOR_PATH[$key]}; do
+        NEEDS_RESTART[$unit]=1
+      done
     fi
   done
 done <<<"$CHANGED"
