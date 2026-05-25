@@ -579,10 +579,12 @@ async function cmdPrice() {
     sp:     { sym: 'MES1!', label: 'Micro S&P' },
   };
   let anyEst = false, anyStale = false;
+  const srcSeen = new Set();
   const lines = [header('💰', 'Live prices'), ''];
   for (const key of ORDER) {
     const q = quotes.get(key);
     if (!q) { const f = FALLBACK[key]; lines.push(`*${f.label}* \`${f.sym}\` · _no data_`); continue; }
+    srcSeen.add(q.source);
     const dot = q.stale ? '🕒' : (q.change == null ? '⚪' : q.change >= 0 ? '🟢' : '🔴');
     const chg = q.change != null
       ? ` · ${sign(q.change)}${q.changePct != null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}%)` : ''}`
@@ -593,14 +595,17 @@ async function cmdPrice() {
     lines.push(`${dot} *${q.label}* \`${q.sym}\` · *$${q.price.toFixed(2)}*${chg}${tag}`);
   }
   lines.push('');
+  // Footer reflects the ACTUAL source the quotes came from — no hardcoded label.
   if (quotes.size === 0) {
     lines.push('_All price feeds unavailable right now — try again shortly._');
+  } else if (srcSeen.has('tradingview')) {
+    lines.push('_Source: TradingView — live CME futures, the exact contract you trade (real-time via your desktop)._');
   } else if (anyEst) {
     lines.push('_Live futures estimated from OANDA spot + measured basis (CME closed). Tick-matches your TradingView futures within a few pts._');
   } else if (anyStale) {
-    lines.push('_⚠️ Yahoo feed frozen and OANDA unavailable — prices are last-known, not live._');
+    lines.push('_⚠️ Live feed frozen — prices are last-known, not live._');
   } else {
-    lines.push('_Source: Yahoo (tick-matches TradingView micro-futures)._');
+    lines.push('_Source: Yahoo micro-futures (~15min delayed; TradingView bridge offline)._');
   }
   await send(lines.join('\n'));
 }
