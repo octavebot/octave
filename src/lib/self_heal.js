@@ -100,7 +100,7 @@ const COMPONENTS = {
   'bot': {
     label: 'Telegram bot poller',
     macAgent: 'com.jqvier.octave-telegram',
-    systemdUnit: 'octave-bot.service',
+    systemdUnit: 'octave-telegram.service', // real unit (was octave-bot.service — nonexistent → bot would never auto-recover if it crashed)
     processPattern: 'webui/bot.js',
     heartbeat: 'bot',
   },
