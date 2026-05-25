@@ -42,24 +42,47 @@ if ! xcode-select -p >/dev/null 2>&1; then
 fi
 ok "Xcode CLI installed"
 
-# ─── Step 2: Homebrew ────────────────────────────────────────────────────────
-if ! command -v brew >/dev/null 2>&1; then
-  log "installing Homebrew (non-interactive, may take ~5 min)"
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-    || err "Homebrew install failed"
-  # Apple Silicon vs Intel — both common install paths.
-  if [ -f /opt/homebrew/bin/brew ]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [ -f /usr/local/bin/brew ]; then
-    eval "$(/usr/local/bin/brew shellenv)"
+# ─── Step 2: git (ships with Xcode CLI — no install needed) ──────────────────
+command -v git >/dev/null 2>&1 || err "git not found — Xcode CLI install may not be complete; re-run after it finishes"
+ok "git $(git --version | awk '{print $3}')"
+
+# ─── Step 3: Node — portable tarball into ~/.octave-bridge/node (no sudo) ────
+# We deliberately avoid Homebrew so this installer runs on non-admin accounts.
+# Node tarballs are signed, self-contained, and include npm. Pin to LTS so the
+# bot's package.json (Node 20+) is satisfied and we don't pull a rough nightly.
+NODE_VER="v20.20.2"
+NODE_HOME="$HOME/.octave-bridge/node"
+
+need_node_install=true
+if command -v node >/dev/null 2>&1; then
+  current="$(node -v)"
+  # Accept any v18+ that's already on PATH — npm needs to support modern lockfile v3.
+  major="${current#v}"; major="${major%%.*}"
+  if [ -n "$major" ] && [ "$major" -ge 18 ]; then
+    ok "system node $current — using it"
+    need_node_install=false
   fi
 fi
-ok "Homebrew ready ($(brew --version | head -1))"
 
-# ─── Step 3: Node + git ──────────────────────────────────────────────────────
-command -v node >/dev/null 2>&1 || { log "installing node"; brew install node; }
-command -v git  >/dev/null 2>&1 || { log "installing git";  brew install git;  }
-ok "node $(node -v) · git $(git --version | awk '{print $3}')"
+if [ "$need_node_install" = "true" ]; then
+  arch="$(uname -m)"
+  case "$arch" in
+    arm64)  NODE_ARCH="darwin-arm64" ;;
+    x86_64) NODE_ARCH="darwin-x64"   ;;
+    *) err "unknown CPU arch: $arch — open an issue, this needs a tarball" ;;
+  esac
+  tarball="node-${NODE_VER}-${NODE_ARCH}.tar.gz"
+  url="https://nodejs.org/dist/${NODE_VER}/${tarball}"
+
+  if [ ! -x "$NODE_HOME/bin/node" ]; then
+    log "downloading node ${NODE_VER} for ${NODE_ARCH} (~25MB)"
+    mkdir -p "$NODE_HOME"
+    curl -fsSL "$url" | tar -xz -C "$NODE_HOME" --strip-components=1 \
+      || err "node tarball download/extract failed"
+  fi
+  export PATH="$NODE_HOME/bin:$PATH"
+  ok "node $($NODE_HOME/bin/node -v) installed to $NODE_HOME (no sudo)"
+fi
 
 # ─── Step 4: Clone / update the trading-alerts repo ──────────────────────────
 REPO_DIR="$HOME/trading-alerts"
