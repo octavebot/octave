@@ -75,6 +75,13 @@ export async function fetchAllPanes() {
       const panes = await fetchYahoo(NEEDED_REQUESTS).catch(() => new Map());
       // Tag the panes so downstream code can tell where bars came from
       for (const [, p] of panes) p.source = p.source || 'yahoo';
+      // Synthesize stale higher-TF bars from the freshest lower-TF source.
+      // Yahoo's micro-futures feed lags 15m/60m/1D into the Sunday Asian open
+      // (sometimes by 50+ hours). 1m/5m stay fresh — aggregate those into the
+      // higher TFs so bias, every strategy's H1/D1 trend filter, and the
+      // precheck readouts all see CURRENT market structure.
+      try { backfillHigherTfs(panes); }
+      catch (err) { /* never block live data on a synth error */ console.error('[cloud-data] backfill failed:', err?.message || err); }
       fullCache = { panes, fetchedAt: Date.now() };
       // Heartbeat — the dashboard's "market-data" tile reads this so the
       // user knows live data is flowing (even if no alerts fire).
@@ -89,6 +96,119 @@ export async function fetchAllPanes() {
     }
   })();
   return inflightFull.then((m) => new Map(m));
+}
+
+// ─── Higher-TF synthesis ──────────────────────────────────────────────────
+
+const INSTRUMENTS_FOR_SYNTH = ['gold', 'nasdaq', 'sp'];
+const SYNTH_TARGETS = [
+  { tf: '15',  bucketSec: 15 * 60,      sourceTfs: ['5', '1'] },
+  { tf: '60',  bucketSec: 60 * 60,      sourceTfs: ['15', '5', '1'] },
+  { tf: '1D',  bucketSec: 24 * 60 * 60, sourceTfs: ['60', '15', '5'] },
+];
+
+function backfillHigherTfs(panes) {
+  for (const inst of INSTRUMENTS_FOR_SYNTH) {
+    for (const target of SYNTH_TARGETS) {
+      const dest = panes.get(`${inst}|${target.tf}`);
+      if (!dest?.bars?.length) continue;
+      const destLastTime = dest.bars[dest.bars.length - 1].time;
+      // Pick the freshest source pane available
+      let source = null;
+      for (const sTf of target.sourceTfs) {
+        const cand = panes.get(`${inst}|${sTf}`);
+        if (cand?.bars?.length && cand.bars[cand.bars.length - 1].time > destLastTime) {
+          source = cand;
+          break;
+        }
+      }
+      if (!source) continue;
+      const sourceBarSec = sourceBarSize(source);
+      if (!sourceBarSec) continue;
+      // Aggregate source bars that are NEWER than dest's last bar into
+      // target-TF buckets. Daily bars use the futures session boundary
+      // (close at 17:00 ET = 21:00 UTC daylight / 22:00 UTC standard).
+      const synth = target.tf === '1D'
+        ? aggregateToDaily(source.bars, destLastTime)
+        : aggregateToBucket(source.bars, target.bucketSec, destLastTime, sourceBarSec);
+      if (!synth.length) continue;
+      // Drop any partial bucket (the last bar of source might not fill the
+      // entire target bucket yet). We keep partial only if it's reasonably
+      // recent — within 25% of the bucket window of "now".
+      const nowSec = Math.floor(Date.now() / 1000);
+      const filtered = synth.filter((b, i) => {
+        const isLast = i === synth.length - 1;
+        if (!isLast) return true;
+        const bucketEnd = b.time + target.bucketSec;
+        // For sub-daily we accept partial bars (mid-bucket update is useful).
+        if (target.tf !== '1D') return true;
+        // Daily: only accept if the bucket "should" be open right now.
+        return nowSec < bucketEnd;
+      });
+      for (const b of filtered) b.synthetic = true;
+      dest.bars = dest.bars.concat(filtered);
+      dest.source = (dest.source || 'yahoo') + '+synth';
+    }
+  }
+}
+
+function sourceBarSize(p) {
+  if (!p?.bars || p.bars.length < 2) return null;
+  const n = p.bars.length;
+  return p.bars[n - 1].time - p.bars[n - 2].time;
+}
+
+function aggregateToBucket(bars, bucketSec, sinceExclusive, sourceBarSec) {
+  // Keep only source bars strictly newer than the existing dest tail.
+  const fresh = bars.filter((b) => b.time > sinceExclusive);
+  if (!fresh.length) return [];
+  const out = [];
+  let cur = null;
+  for (const b of fresh) {
+    const bucketTime = Math.floor(b.time / bucketSec) * bucketSec;
+    if (!cur || cur.time !== bucketTime) {
+      if (cur) out.push(cur);
+      cur = { time: bucketTime, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 };
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.volume += b.volume || 0;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function aggregateToDaily(bars, sinceExclusive) {
+  // Futures session "day" starts at 18:00 ET = 22:00 UTC (DST) / 23:00 UTC (std).
+  // Use 22:00 UTC year-round — close enough; bias filters tolerate ±1h shift.
+  // Each bar belongs to the session that ended at the next 22:00 UTC boundary.
+  const SESSION_UTC_HOUR = 22;
+  const fresh = bars.filter((b) => b.time > sinceExclusive);
+  if (!fresh.length) return [];
+  const out = [];
+  let cur = null;
+  for (const b of fresh) {
+    const sessionStart = sessionStartUtc(b.time, SESSION_UTC_HOUR);
+    if (!cur || cur.time !== sessionStart) {
+      if (cur) out.push(cur);
+      cur = { time: sessionStart, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 };
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.volume += b.volume || 0;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function sessionStartUtc(unixSec, hourUtc) {
+  const d = new Date(unixSec * 1000);
+  const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hourUtc, 0, 0) / 1000;
+  return unixSec < dayStart ? dayStart - 24 * 60 * 60 : dayStart;
 }
 
 /**
