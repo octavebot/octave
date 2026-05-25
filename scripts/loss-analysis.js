@@ -62,7 +62,9 @@ function bucketBy(trades, fn) {
 
 (async () => {
   console.log(`\nRunning ${days}-day backtest…`);
-  const r = await runBacktest({ days, step: 1 });
+  // step=3 matches scripts/strategy-report.js — fast enough for 30d × 6 strategies
+  // × 3 instruments to finish in ~60s while still capturing every trade.
+  const r = await runBacktest({ days, step: 3 });
   if (r.error) { console.error('backtest error:', r.error); process.exit(1); }
   const stats = r.stats || {};
   const all = Object.values(stats);
