@@ -161,45 +161,73 @@ function tgEscape(s) {
 // regardless of which chat invoked them. Usage: `sendOwner(text)`.
 async function sendOwner(text, opts = {}) { return send(text, { ...opts, ownerOnly: true }); }
 
-// Telegram hard cap is 4096; leave headroom for the truncation marker.
-const TG_MAX_LEN = 4000;
+// Telegram's hard cap is 4096 BYTES (UTF-8), not characters. Our messages are
+// emoji/box-drawing heavy (✓ █ ─ 🟢 are 3 bytes each), so a char-based cap
+// under-counts and still 400s with "message is too long". Cap on bytes, with
+// headroom for the keyboard/markup overhead.
+const TG_MAX_BYTES = 3900;
+const byteLen = (s) => Buffer.byteLength(s, 'utf8');
+
+// Split text into <=TG_MAX_BYTES chunks at line boundaries (never mid-line, so
+// Markdown stays balanced per chunk). A single over-long line is hard-split.
+function chunkByBytes(text) {
+  if (byteLen(text) <= TG_MAX_BYTES) return [text];
+  const chunks = [];
+  let cur = '';
+  for (const line of text.split('\n')) {
+    const candidate = cur ? cur + '\n' + line : line;
+    if (byteLen(candidate) <= TG_MAX_BYTES) { cur = candidate; continue; }
+    if (cur) { chunks.push(cur); cur = ''; }
+    if (byteLen(line) <= TG_MAX_BYTES) { cur = line; continue; }
+    // Single line longer than the cap — hard-split on bytes.
+    let buf = Buffer.from(line, 'utf8');
+    while (buf.length > TG_MAX_BYTES) {
+      // Slice on a UTF-8 boundary by decoding a safe prefix.
+      let cut = TG_MAX_BYTES;
+      while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--; // don't split a multibyte char
+      chunks.push(buf.subarray(0, cut).toString('utf8'));
+      buf = buf.subarray(cut);
+    }
+    cur = buf.toString('utf8');
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
 
 async function send(text, opts = {}) {
   // ownerOnly routes the reply to the owner DM regardless of which chat
   // triggered it. Used for eval/risk commands so friends don't see the
   // owner's account state when they happen to be in the same group.
   const target = opts.ownerOnly ? OWNER_ID : replyTarget();
-  // Long replies (cached backtest, large /summary, etc.) would otherwise
-  // hit Telegram's 4096-char limit and 400. Truncate cleanly at a line
-  // boundary so the Markdown stays balanced.
-  if (typeof text === 'string' && text.length > TG_MAX_LEN) {
-    const slice = text.slice(0, TG_MAX_LEN);
-    const cutAt = slice.lastIndexOf('\n');
-    text = (cutAt > TG_MAX_LEN - 400 ? slice.slice(0, cutAt) : slice)
-      + '\n\n_…(truncated — message exceeded Telegram length cap)_';
-  }
-  const body = {
-    chat_id: target, text,
-    parse_mode: opts.html ? 'HTML' : 'Markdown',
-    disable_web_page_preview: true,
-  };
-  if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
+  const parse_mode = opts.html ? 'HTML' : 'Markdown';
   const post = (payload) => fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   }).catch((err) => ({ ok: false, status: 0, text: async () => err.message }));
 
-  let res = await post(body);
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    // Markdown parse failure — never let a stray * / _ / ` swallow a whole
-    // reply. Resend as plain text so the command still answers the user.
-    if (res.status === 400 && /can't parse entities/i.test(errBody) && body.parse_mode) {
-      const { parse_mode, ...plain } = body;
-      res = await post(plain);
-      if (res.ok) { console.warn('[bot] markdown failed — sent plain'); return res; }
+  // Chunk long output into multiple messages so nothing is lost (the keyboard
+  // attaches to the LAST chunk only).
+  const chunks = typeof text === 'string' ? chunkByBytes(text) : [String(text)];
+  let res;
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    const body = { chat_id: target, text: chunks[i], parse_mode, disable_web_page_preview: true };
+    if (isLast && opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
+    res = await post(body);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      // Markdown parse failure — never let a stray * / _ / ` swallow a reply.
+      // Resend this chunk as plain text so the content still reaches the user.
+      if (res.status === 400 && /can't parse entities/i.test(errBody)) {
+        const { parse_mode: _pm, ...plain } = body;
+        res = await post(plain);
+        if (res.ok) { console.warn('[bot] markdown failed — sent plain'); continue; }
+        const e2 = await res.text().catch(() => '');
+        console.error('[bot] sendMessage (plain retry)', res.status, e2.slice(0, 200));
+      } else {
+        console.error('[bot] sendMessage', res.status, errBody.slice(0, 200));
+      }
     }
-    console.error('[bot] sendMessage', res.status, errBody.slice(0, 200));
   }
   return res;
 }
@@ -2621,7 +2649,7 @@ const COMMANDS = {
 
 // ─── DISPATCH ────────────────────────────────────────────────────────────
 
-async function handleUpdate(update) {
+export async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
   if (!msg) return;
   const chatId = msg.chat?.id;
