@@ -1014,7 +1014,7 @@ async function cmdBias() {
     const dn = b.factors.filter((f) => f.v < 0).length;
     const neu = b.factors.filter((f) => f.v === 0).length;
     lines.push(`   *Structural* · ${b.direction} (${up}↑ ${dn}↓ ${neu}→)`);
-    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label.replace(/^(H1|15m|D1) /, '')}`).join(' · '));
+    lines.push('   ' + b.factors.map((f) => `${fIcon(f.v)}${f.label}`).join(' · '));
 
     // Strategy vote — count + top 3 closest candidates.
     const vote = b.strategyVote || { long: 0, short: 0, candidates: [] };
