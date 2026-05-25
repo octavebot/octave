@@ -86,10 +86,11 @@
     <a href="https://www.tradingview.com/chart/" target="_blank" class="link">TradingView ↗</a>
   </div>
 </div>
+<div id="status" style="display:none;max-width:720px;margin:0 auto 16px;padding:10px 14px;border-radius:8px;background:rgba(232,90,113,0.15);border:1px solid var(--danger);color:var(--danger);font-size:13px;"></div>
 <div id="root" class="accounts">
   <div class="account"><div class="empty">Loading…</div></div>
 </div>
-<div class="footer"><span class="pulse"></span>Auto-refreshing every 3s · last update <span id="last">—</span></div>
+<div class="footer"><span class="pulse" id="pulse"></span><span id="state">Auto-refreshing every 3s</span> · last update <span id="last">—</span></div>
 
 <script>
 const fmt$ = (n) => {
@@ -124,16 +125,20 @@ function tradeProgress(t) {
 }
 
 function renderTrade(t) {
-  const dir = t.direction.toLowerCase();
+  // Guard against malformed records so one bad trade can't blank the panel.
+  const direction = String(t.direction || '').toUpperCase();
+  const dir = direction.toLowerCase() || 'long';
+  const instrument = String(t.instrument || '?').toUpperCase();
+  const strategy = String(t.strategy || '?');
   const prog = tradeProgress(t);
   const live = t.live;
   return `
     <div class="trade">
       <div class="trade-head">
-        <span class="trade-name">${t.strategy} · ${t.instrument.toUpperCase()}</span>
+        <span class="trade-name">${strategy} · ${instrument}</span>
         <span>
           ${live ? '<span class="trade-dir trade-live">LIVE</span> ' : ''}
-          <span class="trade-dir ${dir}">${t.direction}</span>
+          <span class="trade-dir ${dir}">${direction || '—'}</span>
         </span>
       </div>
       <div class="level-grid">
@@ -154,24 +159,29 @@ function renderTrade(t) {
 }
 
 function renderAccount(id, acc) {
-  const profit = acc.balance - 50000;
-  const ddFromPeak = (acc.peakEod || 50000) - acc.balance;
+  if (!acc) return '<div class="account"><div class="empty">No data for ' + id + '</div></div>';
+  const balance = Number(acc.balance) || 50000;
+  const dailyPnl = Number(acc.dailyPnl) || 0;
+  const mode = String(acc.mode || 'paper').toLowerCase();
+  const phase = String(acc.phase || 'eval');
+  const enabled = !!acc.enabled;
+  const profit = balance - 50000;
   return `
     <div class="account">
       <div class="account-head">
-        <div class="account-name">${id.toUpperCase()}</div>
+        <div class="account-name">${String(id).toUpperCase()}</div>
         <div class="account-status">
-          ${acc.enabled ? '<span class="' + acc.mode + '">' + acc.mode.toUpperCase() + '</span>' : '<span>DISABLED</span>'}
-          · ${acc.phase}
+          ${enabled ? '<span class="' + mode + '">' + mode.toUpperCase() + '</span>' : '<span>DISABLED</span>'}
+          · ${phase}
         </div>
       </div>
       <div class="stats">
-        <div><div class="stat-label">Balance</div><div class="stat-value">${fmt$(acc.balance)}</div></div>
+        <div><div class="stat-label">Balance</div><div class="stat-value">${fmt$(balance)}</div></div>
         <div><div class="stat-label">Profit</div><div class="stat-value ${profit >= 0 ? 'pos' : 'neg'}">${fmt$(profit)}</div></div>
-        <div><div class="stat-label">Today</div><div class="stat-value ${acc.dailyPnl >= 0 ? 'pos' : 'neg'}">${fmt$(acc.dailyPnl)}</div></div>
+        <div><div class="stat-label">Today</div><div class="stat-value ${dailyPnl >= 0 ? 'pos' : 'neg'}">${fmt$(dailyPnl)}</div></div>
       </div>
-      <div class="trades-head">Open trades · ${acc.openTrades.length}</div>
-      ${acc.openTrades.length === 0
+      <div class="trades-head">Open trades · ${(acc.openTrades || []).length}</div>
+      ${(acc.openTrades || []).length === 0
         ? '<div class="empty">No open positions</div>'
         : acc.openTrades.map(renderTrade).join('')
       }
@@ -179,17 +189,60 @@ function renderAccount(id, acc) {
   `;
 }
 
+let failStreak = 0;
+let lastGoodAt = null;
+
+function showError(msg) {
+  const el = document.getElementById('status');
+  el.style.display = 'block';
+  el.textContent = msg;
+  document.getElementById('pulse').style.background = 'var(--danger)';
+  document.getElementById('state').textContent = 'Connection lost · retrying';
+}
+
+function clearError() {
+  const el = document.getElementById('status');
+  el.style.display = 'none';
+  el.textContent = '';
+  document.getElementById('pulse').style.background = 'var(--accent)';
+  document.getElementById('state').textContent = 'Auto-refreshing every 3s';
+}
+
 async function refresh() {
   try {
-    const res = await fetch('/api/positions');
+    // Short timeout so the spinner doesn't sit on dead requests forever
+    // (e.g. tunnel rotated, network drop).
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 5000);
+    let res;
+    try { res = await fetch('/api/positions', { signal: ctrl.signal, cache: 'no-store' }); }
+    finally { clearTimeout(tid); }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    if (!data || !data.accounts) throw new Error('malformed response');
     const root = document.getElementById('root');
-    // Render every account the API returned (single-account era → just one).
-    root.innerHTML = Object.keys(data.accounts || {}).map((id) => renderAccount(id, data.accounts[id])).join('');
-    document.getElementById('last').textContent = new Date(data.at).toLocaleTimeString();
+    try {
+      root.innerHTML = Object.keys(data.accounts).map((id) => renderAccount(id, data.accounts[id])).join('')
+        || '<div class="account"><div class="empty">No accounts configured</div></div>';
+    } catch (renderErr) {
+      // A bad render shouldn't kill the loop — keep refreshing, surface the error.
+      throw new Error('render failed: ' + renderErr.message);
+    }
+    document.getElementById('last').textContent = new Date(data.at || Date.now()).toLocaleTimeString();
+    lastGoodAt = Date.now();
+    failStreak = 0;
+    clearError();
   } catch (err) {
-    console.error('refresh failed', err);
+    failStreak++;
+    console.error('[trade-panel] refresh failed (' + failStreak + '):', err);
+    // Two consecutive failures → surface to user. Single hiccups don't flash.
+    if (failStreak >= 2) {
+      const since = lastGoodAt ? Math.round((Date.now() - lastGoodAt) / 1000) + 's ago' : 'never';
+      const reason = err.name === 'AbortError' ? 'request timed out'
+        : err.message?.includes('Failed to fetch') ? 'server unreachable (tunnel rotated?)'
+        : err.message || 'unknown error';
+      showError('⚠ ' + reason + ' · last good fetch ' + since + ' · check /dashboard for the current URL');
+    }
   }
 }
 
