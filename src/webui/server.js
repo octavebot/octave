@@ -143,96 +143,106 @@ async function gatherState() {
   // Data-source truth for the dashboard's "feed" indicator: which feed produced
   // the live panes (tradingview when the Mac bridge is up, else yahoo) + the
   // bridge freshness so the user can see at a glance whether real-time is on.
-  let dataSource = marketHb?.source || 'yahoo';
-  let dataSources = marketHb?.sources || null;
-  let bridge = null;
-  try {
-    const { status } = await import('../lib/tv_ingest.js');
-    const s = status();
-    bridge = { connected: s.anyFresh, panes: s.paneCount };
-  } catch {}
-  const cloud = { lastTick: engineHb?.at || null, status: cloudAlive ? 'ok' : 'stale',
-                  phase: engineHb?.phase, pane_count: marketHb?.pane_count,
-                  source: dataSource, sources: dataSources, uptime_s: engineHb?.uptime_s };
+  const dataSource = marketHb?.source || 'yahoo';
+  const dataSources = marketHb?.sources || null;
 
   const session = readJson(SESSION_FILE, { lastSession: null });
 
-  // Service PID + uptime — pgrep works on both macOS and Linux
-  const pidR = await exec('pgrep', ['-f', 'trading-alerts/src/index.js']);
-  const servicePid = pidR.code === 0 ? Number(pidR.out.split('\n')[0]) || null : null;
-  let serviceUptime = null;
-  if (servicePid) {
-    const psR = await exec('ps', ['-p', String(servicePid), '-o', 'etime=']);
-    if (psR.code === 0) serviceUptime = psR.out.trim();
-  }
-
-  // TV + CDP — Mac-only concept. On Linux we skip entirely.
-  let tvPid = null, cdpOpen = false;
-  if (isMac) {
-    const tvR = await exec('pgrep', ['-f', 'TradingView']);
-    tvPid = tvR.code === 0 ? Number(tvR.out.split('\n')[0]) || null : null;
-    const cdpR = await exec('lsof', ['-i', ':9222', '-sTCP:LISTEN']);
-    cdpOpen = cdpR.code === 0;
-  }
-
-  // Caffeinate — Mac-only (it's a macOS power-management command via launchctl)
-  let caffActive = false;
-  if (isMac) {
-    const caffR = await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/com.jqvier.octave-caffeinate`]);
-    caffActive = caffR.code === 0 && /state\s*=\s*running/.test(caffR.out);
-  }
-
-  // Last alert from the signal-engine stdout log. STDOUT_LOG_NAME resolves
-  // to 'signal-engine.log' on the VPS (systemd) and 'stdout.log' on Mac dev.
-  // Only count alerts ACTUALLY DELIVERED to Telegram (telegram:'sent') — a
-  // setup that fired but was confidence-gated, muted, or suppressed was never
-  // seen by the user, so showing it as the dashboard "Last alert" was
-  // misleading (same fix as /setups' "Signals fired today").
-  let lastAlert = null;
-  try {
-    const out = readFileSync(join(LOG_DIR, STDOUT_LOG_NAME), 'utf8');
-    const lines = out.trim().split('\n');
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 800); i--) {
-      if (!lines[i].includes('"alert fired"')) continue;
-      let parsed; try { parsed = JSON.parse(lines[i]); } catch { continue; }
-      if (parsed.telegram !== 'sent') continue;
-      lastAlert = { strategy: parsed.strategy, status: parsed.status, ts: parsed.ts };
-      break;
-    }
-  } catch {}
-
-  // Active follow-up count = source of truth for "live setups" in dashboard.
-  let activeSetups = 0;
-  try {
-    const fu = await import('../lib/follow_up.js');
-    activeSetups = fu.active().length;
-  } catch {}
-
-  // User-editable strategies — surfaced so the dashboard can render the
-  // "My Strategies" folder + its enable/disable toggles.
-  let userStrategies = [];
-  try {
-    const us = await import('../lib/user_strategies.js');
-    userStrategies = us.list();
-  } catch {}
-
-  // Per-instrument live price — SAME source the Telegram bot uses (cmdPrice /
-  // cmdBias overlay), so the dashboard and Telegram never disagree on what the
-  // current price is. getLiveFuturesQuotes is TV-bridge first, then Yahoo,
-  // then OANDA+basis, with its own 10s cache. Was previously fetching all
-  // panes from scratch in this process — wasteful (signal-engine already did
-  // it) and a sync-drift risk vs Telegram.
-  let instrumentPrices = {};
-  try {
-    const cd = await import('../lib/cloud_data_supplement.js');
-    const quotes = await cd.getLiveFuturesQuotes();
-    for (const [key, q] of quotes) {
-      if (q?.price != null) instrumentPrices[key] = {
-        close: q.price, ts: q.barTimeSec || Math.floor(Date.now() / 1000),
-        source: q.source, stale: !!q.stale,
+  // ── Parallel I/O block ─────────────────────────────────────────────────
+  // Every await below is INDEPENDENT — running them serially was ~200ms on
+  // the VPS (most of /api/state's latency). Promise.all collapses them to
+  // ~max(individual), which on a typical call is the quotes fetch (~15ms).
+  // Module imports inside each helper are ESM-cached after the first call,
+  // so the per-request cost is essentially the helper's actual work.
+  const [bridge, svc, mac, lastAlert, activeSetups, userStrategies, instrumentPrices] = await Promise.all([
+    // tv_ingest bridge status (in-memory disk read)
+    (async () => {
+      try {
+        const { status } = await import('../lib/tv_ingest.js');
+        const s = status();
+        return { connected: s.anyFresh, panes: s.paneCount };
+      } catch { return null; }
+    })(),
+    // service PID + uptime — sequential by necessity (ps needs the pid from pgrep)
+    (async () => {
+      const pidR = await exec('pgrep', ['-f', 'trading-alerts/src/index.js']);
+      const pid = pidR.code === 0 ? Number(pidR.out.split('\n')[0]) || null : null;
+      let uptime = null;
+      if (pid) {
+        const psR = await exec('ps', ['-p', String(pid), '-o', 'etime=']);
+        if (psR.code === 0) uptime = psR.out.trim();
+      }
+      return { pid, uptime };
+    })(),
+    // Mac-only: TradingView + CDP + caffeinate. Whole block is a no-op on Linux.
+    (async () => {
+      if (!isMac) return { tvPid: null, cdpOpen: false, caffActive: false };
+      const [tvR, cdpR, caffR] = await Promise.all([
+        exec('pgrep', ['-f', 'TradingView']),
+        exec('lsof', ['-i', ':9222', '-sTCP:LISTEN']),
+        exec('/bin/launchctl', ['print', `gui/${process.getuid()}/com.jqvier.octave-caffeinate`]),
+      ]);
+      return {
+        tvPid: tvR.code === 0 ? Number(tvR.out.split('\n')[0]) || null : null,
+        cdpOpen: cdpR.code === 0,
+        caffActive: caffR.code === 0 && /state\s*=\s*running/.test(caffR.out),
       };
-    }
-  } catch {}
+    })(),
+    // Last DELIVERED alert from the signal-engine stdout log (telegram:'sent'
+    // only — gated/muted setups never reached the user so they shouldn't be
+    // labelled "last alert"). STDOUT_LOG_NAME = signal-engine.log on the VPS,
+    // stdout.log on Mac dev.
+    (async () => {
+      try {
+        const out = readFileSync(join(LOG_DIR, STDOUT_LOG_NAME), 'utf8');
+        const lines = out.trim().split('\n');
+        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 800); i--) {
+          if (!lines[i].includes('"alert fired"')) continue;
+          let parsed; try { parsed = JSON.parse(lines[i]); } catch { continue; }
+          if (parsed.telegram !== 'sent') continue;
+          return { strategy: parsed.strategy, status: parsed.status, ts: parsed.ts };
+        }
+      } catch {}
+      return null;
+    })(),
+    // Active follow-up count = source of truth for "live setups" everywhere.
+    (async () => {
+      try {
+        const fu = await import('../lib/follow_up.js');
+        return fu.active().length;
+      } catch { return 0; }
+    })(),
+    // User-editable strategies — dashboard's "My Strategies" folder.
+    (async () => {
+      try {
+        const us = await import('../lib/user_strategies.js');
+        return us.list();
+      } catch { return []; }
+    })(),
+    // Per-instrument live price — SAME source the Telegram bot uses (cmdPrice /
+    // cmdBias overlay), so the dashboard and Telegram never disagree. The
+    // 10s quotes cache means back-to-back /api/state calls are basically free.
+    (async () => {
+      try {
+        const cd = await import('../lib/cloud_data_supplement.js');
+        const quotes = await cd.getLiveFuturesQuotes();
+        const out = {};
+        for (const [key, q] of quotes) {
+          if (q?.price != null) out[key] = {
+            close: q.price, ts: q.barTimeSec || Math.floor(Date.now() / 1000),
+            source: q.source, stale: !!q.stale,
+          };
+        }
+        return out;
+      } catch { return {}; }
+    })(),
+  ]);
+  const { pid: servicePid, uptime: serviceUptime } = svc;
+  const { tvPid, cdpOpen, caffActive } = mac;
+
+  const cloud = { lastTick: engineHb?.at || null, status: cloudAlive ? 'ok' : 'stale',
+                  phase: engineHb?.phase, pane_count: marketHb?.pane_count,
+                  source: dataSource, sources: dataSources, uptime_s: engineHb?.uptime_s };
 
   return {
     config,
