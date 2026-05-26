@@ -422,9 +422,10 @@ const server = createServer(async (req, res) => {
       try {
         const at = await import('../lib/account_tracker.js');
         const cd = await import('../lib/cloud_data_supplement.js');
+        const fu = await import('../lib/follow_up.js');
         at.maybeRollDay();
         const which = (url.searchParams.get('account') || '').toLowerCase();
-        const ids = which === 'auto' || which === 'user' ? [which] : at.ACCOUNT_IDS;
+        const ids = which === 'auto' || which === 'user' ? ['user'] : at.ACCOUNT_IDS;
         // Live price per instrument — same source the Telegram /price uses.
         let prices = {};
         try {
@@ -433,16 +434,47 @@ const server = createServer(async (req, res) => {
             if (q?.price != null) prices[key] = { close: q.price, time: q.barTimeSec || Math.floor(Date.now() / 1000) };
           }
         } catch {}
+        // Canonical "open trades" = the follow-up tracker's active set — every
+        // signal being tracked for BE/TP/SL pings, the SAME source /setups and
+        // the dashboard active-setups counter read. Each row is enriched with
+        // the paper position when the account actually took it; a gate-blocked
+        // signal (e.g. circuit breaker) is tracked-but-not-taken and shows with
+        // paperTaken:false. Before this, the panel read account_tracker only, so
+        // it under-reported (0) while /setups showed the tracked signal (1).
+        let tracked = [];
+        try { tracked = fu.active(); } catch {}
         const out = {};
         for (const id of ids) {
           const acc = at.get(id);
+          const paperOpen = acc?.openTrades || [];
+          const trackedIds = new Set(tracked.map((s) => s.setupId));
+          const rows = tracked.map((s) => {
+            const paper = paperOpen.find((t) => t.setupId === s.setupId);
+            const beActive = !!s.milestonesFired?.be || !!s.milestonesFired?.tp1;
+            return {
+              setupId: s.setupId, instrument: s.instrument, direction: s.direction,
+              entry: s.entry, stop: beActive ? s.entry : s.stop, t1: s.t1, t2: s.t2,
+              strategy: s.strategy, phase: s.phase,
+              tp1Done: !!s.milestonesFired?.tp1, beStop: beActive,
+              openedAt: s.filledAt || s.createdAt,
+              contracts: paper ? paper.contracts : null,
+              riskUsd: paper ? paper.riskUsd : null,
+              paperTaken: !!paper,
+              currentPrice: prices[s.instrument]?.close ?? null,
+            };
+          });
+          // Safety net: never HIDE a real paper position the tracker isn't
+          // tracking (orphan) — append it so the panel can't under-report.
+          for (const t of paperOpen) {
+            if (!trackedIds.has(t.setupId)) {
+              rows.push({ ...t, paperTaken: true, currentPrice: prices[t.instrument]?.close ?? null });
+            }
+          }
           out[id] = {
             enabled: acc.enabled, phase: acc.phase,
             balance: acc.balance, dailyPnl: acc.dailyPnl, peakEod: acc.peakEodBalance,
-            openTrades: (acc.openTrades || []).map((t) => ({
-              ...t,
-              currentPrice: prices[t.instrument]?.close ?? null,
-            })),
+            paperOpenCount: paperOpen.length,
+            openTrades: rows,
           };
         }
         return sendJson(res, 200, { accounts: out, prices, at: Date.now() });

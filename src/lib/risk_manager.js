@@ -29,7 +29,7 @@
  * INSTRUMENT $/POINT (futures contract specs):
  *   - Gold   (MGC1!): $10 / point
  *   - Nasdaq (MNQ1!): $2  / point
- *   - SP500  (MES1!): $5  / point
+ *   (S&P/MES was dropped 2026-05-25 — gold + nasdaq only.)
  */
 
 export const EVAL_RULES = Object.freeze({

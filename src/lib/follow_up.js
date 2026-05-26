@@ -205,8 +205,11 @@ export function step(priceOrPriceMap) {
       continue;
     }
 
-    // BE-able? Fires once when price reaches +1R favorable
-    if (!s.milestonesFired.be && favReached(bePrice)) {
+    // BE-able? Fires once when price reaches +1R favorable. Suppressed if TP1
+    // already fired — TP1 moves the stop to BE itself, so a separate "move to
+    // breakeven" ping (possible when a structural TP1 sits below +1R) would be
+    // a confusing duplicate.
+    if (!s.milestonesFired.be && !s.milestonesFired.tp1 && favReached(bePrice)) {
       s.milestonesFired.be = true;
       events.push({ setup: { ...s }, milestone: 'be' });
       dirty = true;

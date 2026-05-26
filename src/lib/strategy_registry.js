@@ -7,7 +7,7 @@
  *     name: 'EMA Pullback Continuation',   // human label shown in alerts
  *     concept: 'Trend continuation on 20-EMA pullback',
  *     timeframes: ['15', '60'],            // panes the strategy needs
- *     instruments: ['gold', 'nasdaq', 'sp'], // (optional) default all three
+ *     instruments: ['gold', 'nasdaq'],     // (optional) default both
  *     defaultEnabled: true,
  *   };
  *   export const playbook = `# markdown playbook…`;

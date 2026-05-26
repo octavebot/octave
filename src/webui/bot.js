@@ -719,7 +719,11 @@ async function cmdSummary(arg) {
   // Limit orders that never filled — recorded, but NOT trades. Excluded
   // from the win rate (which is wins ÷ resolved trades only).
   const cancelled = trades.filter((t) => t.outcome === 'CANCELLED').length;
-  const sumR = trades.reduce((acc, t) => acc + (+t.result_R || 0), 0);
+  // Trade rows store the R-multiple as `risk_reward` (loop.js appendTrade /
+  // daily_report.js both use that key). Reading `result_R` here meant the
+  // summary's R total was silently always 0.00R. `result_R` kept only as a
+  // fallback for any legacy rows that may have used it.
+  const sumR = trades.reduce((acc, t) => acc + (+t.risk_reward || +t.result_R || 0), 0);
 
   const lines = [
     header('📊', days === 1 ? "Today's summary" : `${days}-day summary`),
@@ -1205,6 +1209,14 @@ async function cmdActiveSetups() {
   // (precheck snapshot from the signal engine), signals fired today.
   let open = [];
   try { const fu = await import('../lib/follow_up.js'); open = fu.active(); } catch {}
+  // Which tracked setups the paper account actually holds — lets the "Open"
+  // list flag gate-blocked signals (tracked for pings, but no paper position),
+  // matching the trade panel's "signal only · paper skipped" marker.
+  let paperOpenIds = new Set();
+  try {
+    const at = await import('../lib/account_tracker.js');
+    for (const id of at.ACCOUNT_IDS) for (const t of (at.get(id)?.openTrades || [])) paperOpenIds.add(t.setupId);
+  } catch {}
 
   const todayKey = nyDateKey(Date.now());
   // Only count signals actually DELIVERED to Telegram (telegram:'sent') — a
@@ -1230,7 +1242,8 @@ async function cmdActiveSetups() {
       const dir = s.direction === 'LONG' ? '🟢' : '🔴';
       const stage = Object.keys(s.milestonesFired || {}).filter((m) => m !== 'be').pop()?.toUpperCase()
         || (s.milestonesFired?.be ? 'BE' : 'live');
-      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* ${(s.instrument || '').toUpperCase()} · @${s.entry} · ${stage}`);
+      const skipped = !paperOpenIds.has(s.setupId) ? ' · ⚠️ paper skipped' : '';
+      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* ${(s.instrument || '').toUpperCase()} · @${s.entry} · ${stage}${skipped}`);
     }
   }
 

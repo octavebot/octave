@@ -59,6 +59,7 @@
   .trade-dir.short { background: rgba(232, 90, 113, 0.15); color: var(--short); }
   .trade-live { background: var(--accent); color: #000; }
   .trade-stage { background: rgba(214, 178, 92, 0.18); color: var(--gold, #d6b25c); }
+  .trade-pending { background: rgba(255,255,255,0.08); color: var(--text-dim); }
   .level-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 12px; }
   .level { padding: 6px 8px; border-radius: 4px; background: #181c26; }
   .level .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
@@ -135,12 +136,20 @@ function renderTrade(t) {
   const prog = tradeProgress(t);
   const live = t.live;
   // Stage badge — keeps the panel in step with the Telegram follow-ups:
-  // "TP1 ✓" once the runner is scaled out, "BE" once the stop is risk-free.
+  // "TP1 ✓" once the runner is scaled out, "BE" once the stop is risk-free,
+  // "PENDING" while the limit is still resting (not yet filled).
   const stage = t.tp1Done ? '<span class="trade-dir trade-stage">TP1 ✓</span> '
               : t.beStop ? '<span class="trade-dir trade-stage">BE</span> '
+              : t.phase === 'pending' ? '<span class="trade-dir trade-pending">PENDING</span> '
               : '';
   const stopLbl = t.beStop ? 'Stop (BE)' : 'Stop';
   const sizeNote = t.tp1Done ? ' · ½ runner' : '';
+  // Tracked-but-not-taken (e.g. circuit breaker blocked the paper trade): the
+  // signal is still followed for BE/TP/SL, but the paper account has no position.
+  const skipped = t.paperTaken === false;
+  const sizeMeta = skipped
+    ? '<span style="color:var(--text-dim)">⚠️ signal only · paper skipped</span>'
+    : `<span>${t.contracts} contract${t.contracts > 1 ? 's' : ''}${sizeNote}</span><span>Risk $${Math.round(t.riskUsd || 0)}</span>`;
   return `
     <div class="trade">
       <div class="trade-head">
@@ -158,8 +167,7 @@ function renderTrade(t) {
       </div>
       <div class="progress"><div class="${prog.neg ? 'neg' : ''}" style="width: ${prog.pct}%"></div></div>
       <div class="meta">
-        <span>${t.contracts} contract${t.contracts > 1 ? 's' : ''}${sizeNote}</span>
-        <span>Risk $${Math.round(t.riskUsd)}</span>
+        ${sizeMeta}
         <span>Current ${t.currentPrice == null ? '—' : fmtP(t.currentPrice)}</span>
         ${t.openedAt ? '<span>Opened ' + new Date(t.openedAt).toLocaleTimeString() + '</span>' : ''}
       </div>
