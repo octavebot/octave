@@ -100,6 +100,19 @@ const clients = new Map();
 let lastSuccessAt = Date.now();
 let blindAlertSent = false;
 
+// Delayed-data watch: distinct from the blind alert (which fires when pushes
+// FAIL). Here the bridge keeps pushing fine, but the BARS themselves are stale
+// — the tell-tale of a lapsed real-time data subscription, which silently drops
+// the charts to a 10-min delay. A healthy real-time 5m feed always shows the
+// current forming bar (age 0–5min); a band of ~9–25min sustained = delayed
+// (>25min = a closed market or feed outage, which the staleness/blind paths
+// already cover). We alert once when it holds for 2min, and re-arm once fresh.
+const DELAY_MIN_SEC = 9 * 60;
+const DELAY_MAX_SEC = 25 * 60;
+const DELAY_SUSTAIN_MS = 2 * 60 * 1000;
+let delayedSince = null;
+let delayedAlertSent = false;
+
 function log(...args) { console.log(`[${new Date().toISOString()}]`, ...args); }
 function errlog(...args) { console.error(`[${new Date().toISOString()}]`, ...args); }
 
@@ -282,6 +295,21 @@ async function sendBlindAlert(reason) {
   } catch (err) { errlog('blind alert post failed:', err.message); }
 }
 
+async function sendDelayedAlert(ageMin) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text: `⚠️ Real-time data looks DELAYED — the bridge is still pushing, but the latest bars are ~${ageMin}min old. This usually means the TradingView CME real-time subscription on the bridge account has lapsed (charts dropped to the 10-min delay).\n\nFix on the bridge Mac: open TradingView, confirm MGC1!/MNQ1! show real-time (no "D" badge), and renew the CME data add-on if needed.`,
+        parse_mode: 'Markdown',
+      }),
+    });
+  } catch (err) { errlog('delayed alert post failed:', err.message); }
+}
+
 let lastEnsureAt = 0;
 const ENSURE_EVERY_MS = 30 * 1000;
 
@@ -369,6 +397,23 @@ async function cycle() {
   await postBars({ at: Date.now(), bars: panes });
   lastSuccessAt = Date.now();
   blindAlertSent = false;
+
+  // Delayed-data watch — use the FRESHEST bar across symbols (so one quiet
+  // symbol can't trip it). If its age sits in the delayed band for 2min, the
+  // real-time subscription has likely lapsed → one-shot Telegram, re-arm on
+  // recovery. Ages above the band mean closed market / outage, not a lapse.
+  const nowSec = Date.now() / 1000;
+  const minAge = Math.min(...assetKeys.map((a) => nowSec - bars5mByAsset[a].bars.slice(-1)[0].time));
+  if (minAge > DELAY_MIN_SEC && minAge < DELAY_MAX_SEC) {
+    if (delayedSince == null) delayedSince = Date.now();
+    else if (Date.now() - delayedSince > DELAY_SUSTAIN_MS && !delayedAlertSent) {
+      delayedAlertSent = true;
+      await sendDelayedAlert(Math.round(minAge / 60));
+    }
+  } else {
+    delayedSince = null;
+    if (minAge <= DELAY_MIN_SEC) delayedAlertSent = false; // fresh again → re-arm
+  }
 
   const summary = assetKeys.map((a) => {
     const last = bars5mByAsset[a].bars.slice(-1)[0];
