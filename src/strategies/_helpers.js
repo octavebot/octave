@@ -111,6 +111,25 @@ export const TP1_R = 1.2;
 export const TP2_R = 1.8;
 export const STOP_PAD = 0.35;  // widen the structural stop by 35%
 
+// Reward guard-rails (in R, measured against the WIDENED risk). Every target —
+// whether an explicit structural price or an R-multiple — is clamped into this
+// band so no setup ever ships a target that's too tight (risk more than it
+// pays) or unrealistically long (a 30R structural level that never fills, so
+// the runner just scratches at breakeven). Bounds chosen to leave the
+// already-sane strategies untouched: DAILY-TREND-PB's 3.0R TP2 sits inside the
+// 4.0 cap; VWAP's 1.8R sits on the floor; only the structural-target outliers
+// (LONDON's Asian-extreme, NY-FVG's session-extreme, ASIAN's range multiples)
+// and the STOP_PAD-deflated sub-1R TP1s actually move.
+export const TP1_MIN_R = 1.0, TP1_MAX_R = 2.5;
+export const TP2_MIN_R = 1.8, TP2_MAX_R = 4.0;
+
+/** Clamp a target PRICE so |price-entry|/risk lands in [minR, maxR]. */
+function clampTargetR(entry, sign, risk, price, minR, maxR) {
+  const rr = Math.abs(price - entry) / risk;
+  const r = Math.min(maxR, Math.max(minR, rr));
+  return entry + sign * r * risk;
+}
+
 /**
  * Build the standard triggered DetectorResult shape that the alerter expects.
  * Targets + the executed stop are derived from a noise-padded risk so the
@@ -140,6 +159,15 @@ export function buildTriggered({
   const fav = (price) => Number.isFinite(price) && sign * (price - entry) > 0;
   const resolvedT1 = fav(t1) ? t1 : entry + sign * (t1Mult ?? TP1_R) * risk;
   const resolvedT2 = fav(t2) ? t2 : entry + sign * (t2Mult ?? TP2_R) * risk;
+  // Guard-rail every target into a tradeable RR band (see clampTargetR above).
+  let finalT1 = clampTargetR(entry, sign, risk, resolvedT1, TP1_MIN_R, TP1_MAX_R);
+  let finalT2 = clampTargetR(entry, sign, risk, resolvedT2, TP2_MIN_R, TP2_MAX_R);
+  // TP2 must sit strictly beyond TP1 (a clamped structural level could otherwise
+  // collide with or fall short of TP1).
+  if (sign * (finalT2 - finalT1) <= 0) {
+    const t1r = Math.abs(finalT1 - entry) / risk;
+    finalT2 = entry + sign * Math.min(TP2_MAX_R, t1r + 0.5) * risk;
+  }
   stop = widenedStop;
   return {
     strategy,
@@ -152,7 +180,7 @@ export function buildTriggered({
     timeframe,
     details: {},
     invalidationLevel: stop,
-    entryPlan: { entry, stop, t1: resolvedT1, t2: resolvedT2, runner: resolvedT2, risk },
+    entryPlan: { entry, stop, t1: finalT1, t2: finalT2, runner: finalT2, risk },
   };
 }
 
@@ -178,8 +206,16 @@ export function projectTrade({ direction, entry, stop, t1, t2, t1Mult, t2Mult })
   const widenedStop = entry - sign * risk;
   // Mirror buildTriggered's target resolution: explicit price → R-mult → default.
   const fav = (price) => Number.isFinite(price) && sign * (price - entry) > 0;
-  const rt1 = fav(t1) ? t1 : entry + sign * (t1Mult ?? TP1_R) * risk;
-  const rt2 = fav(t2) ? t2 : entry + sign * (t2Mult ?? TP2_R) * risk;
+  const rt1raw = fav(t1) ? t1 : entry + sign * (t1Mult ?? TP1_R) * risk;
+  const rt2raw = fav(t2) ? t2 : entry + sign * (t2Mult ?? TP2_R) * risk;
+  // Mirror buildTriggered's RR guard-rails so /setups shows the same levels the
+  // fired alert will use.
+  let rt1 = clampTargetR(entry, sign, risk, rt1raw, TP1_MIN_R, TP1_MAX_R);
+  let rt2 = clampTargetR(entry, sign, risk, rt2raw, TP2_MIN_R, TP2_MAX_R);
+  if (sign * (rt2 - rt1) <= 0) {
+    const t1r = Math.abs(rt1 - entry) / risk;
+    rt2 = entry + sign * Math.min(TP2_MAX_R, t1r + 0.5) * risk;
+  }
   return {
     entry: round4(entry),
     stop: round4(widenedStop),
