@@ -26,26 +26,15 @@ const days = parseInt(process.argv[2], 10) || 30;
 // a market rationale). Each must still survive the train/test gate below.
 const filters = {
   'DAILY-TREND-PB': {
-    name: 'Skip the lunch lull (12:00–14:00 ET)',  // loss bucket: n=45, 31% win, −11.1R
+    name: 'Extend chop gate to include PM lull (16:00–19:00 ET)',  // PM bucket: 28 trades, 29% win, −7.8R; train −5.5R, test −2.3R, both halves losing
     keep: (t) => {
       const h = nyParts(t.openTime).h;
-      return !(h >= 12 && h < 14);
-    },
-  },
-  'VWAP-REJ': {
-    name: 'Skip S&P (MES) — VWAP rejection net-negative there',  // sp: n=150, 44%, −1.6R
-    keep: (t) => t.instrument !== 'sp',
-  },
-  'ASIAN-BREAKOUT': {
-    name: 'Skip the 02:00 & 05:00 ET hours',  // hours 2 (n=117, flat) & 5 (n=54, −0.13R)
-    keep: (t) => {
-      const h = nyParts(t.openTime).h;
-      return h !== 2 && h !== 5;
+      return !(h >= 16 && h < 20);
     },
   },
   'NY-FVG': {
-    name: 'Skip the 09:00 ET open hour (lowest-edge bucket)',  // hour 9: n=152, +0.09R
-    keep: (t) => nyParts(t.openTime).h !== 9,
+    name: 'Skip LONG signals at NY hour 09',  // LONG×h09: 61 trades, 36% win, −8.4R; train 30%/−8R, test 43%/−0.4R, both halves losing
+    keep: (t) => !(t.direction === 'LONG' && nyParts(t.openTime).h === 9),
   },
 };
 
