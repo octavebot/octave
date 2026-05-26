@@ -8,32 +8,11 @@
 # OS noise + secrets + local state — never commit
 *.log
 node_modules/
-/src/state/heartbeats/
-/src/state/runtime-config.json
-/src/state/trades.jsonl
-# Runtime-regen state — per-environment, must NOT be in git. Mac runs of
-# strategy-report would otherwise collide with the VPS's live regen on pull.
-/src/state/backtest-stats.json
-/src/state/adaptive-thresholds.json
-/src/state/holy-ai-cache.json
-/src/state/daily-report.json
-/src/state/last-precheck.json
-src/state/dedup.json
-src/state/drawings.json
-src/state/session.json
-/src/state/pending-tg.jsonl
-src/state/follow-ups.json
-src/state/news-ff-cache.json
-src/state/user-strategies.json
-src/state/trade-journal.jsonl
-/src/state/backtest-cache.json
-/src/state/databento-cache/
-/src/state/tv_bars.json
-/src/state/last-bias.json
-/src/state/last-detect.json
-/src/state/accounts.json
-/src/state/paper-trades.jsonl
-/src/state/tg-sent/
+# Everything in src/state/ is per-environment runtime — never commit. The bot
+# auto-creates anything it needs at startup. Listing individual files here was
+# fragile (broker-config.json once slipped in that way). One blanket rule.
+/src/state/*
+/src/state/*/
 # Per-strategy PDF playbooks are a runtime artifact: regenerated from the
 # strategy files + backtest-stats.json on every strategy-change deploy. Like
 # backtest-stats.json, they must be per-environment and NOT tracked, or the
