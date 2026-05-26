@@ -216,16 +216,21 @@ async function gatherState() {
     userStrategies = us.list();
   } catch {}
 
-  // Pull per-instrument latest close from cloud data cache (live Yahoo).
-  // The signal-engine populates this map every ~15s via cloud_data_supplement.
+  // Per-instrument live price — SAME source the Telegram bot uses (cmdPrice /
+  // cmdBias overlay), so the dashboard and Telegram never disagree on what the
+  // current price is. getLiveFuturesQuotes is TV-bridge first, then Yahoo,
+  // then OANDA+basis, with its own 10s cache. Was previously fetching all
+  // panes from scratch in this process — wasteful (signal-engine already did
+  // it) and a sync-drift risk vs Telegram.
   let instrumentPrices = {};
   try {
     const cd = await import('../lib/cloud_data_supplement.js');
-    const panes = await cd.fetchAllPanes();
-    for (const inst of ['gold', 'nasdaq']) {
-      const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
-      const last = p?.bars?.[p.bars.length - 1];
-      if (last) instrumentPrices[inst] = { close: last.close, ts: last.time };
+    const quotes = await cd.getLiveFuturesQuotes();
+    for (const [key, q] of quotes) {
+      if (q?.price != null) instrumentPrices[key] = {
+        close: q.price, ts: q.barTimeSec || Math.floor(Date.now() / 1000),
+        source: q.source, stale: !!q.stale,
+      };
     }
   } catch {}
 
@@ -420,14 +425,12 @@ const server = createServer(async (req, res) => {
         at.maybeRollDay();
         const which = (url.searchParams.get('account') || '').toLowerCase();
         const ids = which === 'auto' || which === 'user' ? [which] : at.ACCOUNT_IDS;
-        // Current price per instrument (latest 15m close)
+        // Live price per instrument — same source the Telegram /price uses.
         let prices = {};
         try {
-          const panes = await cd.fetchAllPanes();
-          for (const inst of ['gold', 'nasdaq']) {
-            const p = panes.get(`${inst}|15`) || panes.get(`${inst}|5`);
-            const last = p?.bars?.[p.bars.length - 1];
-            if (last) prices[inst] = { close: last.close, time: last.time };
+          const quotes = await cd.getLiveFuturesQuotes();
+          for (const [key, q] of quotes) {
+            if (q?.price != null) prices[key] = { close: q.price, time: q.barTimeSec || Math.floor(Date.now() / 1000) };
           }
         } catch {}
         const out = {};
