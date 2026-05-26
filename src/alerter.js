@@ -243,6 +243,15 @@ export async function send(r, ctx = {}) {
 export async function sendFollowUp({ setup, milestone, currentPrice }) {
   const fmt = (v) => fmtPrice(v);
   const dir = setup.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+  // Identify WHICH trade this follow-up is about. With gold + nasdaq and
+  // several strategies able to run at once, "LONG · LONDON-SWEEP" alone is
+  // ambiguous — the instrument + entry price pin it to one specific trade.
+  const im = INSTRUMENT_META[setup.instrument] || { label: setup.instrument || '?', symbol: '' };
+  const instLabel = String(im.label || setup.instrument || '?').toUpperCase();
+  const idLine = [`${dir}`, `${instLabel}${im.symbol ? ` ${im.symbol}` : ''}`, setup.strategy || '']
+    .filter(Boolean).join('  ·  ');
+  const refLine = setup.entry != null ? `↳ _entry_ \`${fmt(setup.entry)}\`` : '';
+
   let head, body;
   switch (milestone) {
     case 'filled':
@@ -266,31 +275,39 @@ export async function sendFollowUp({ setup, milestone, currentPrice }) {
       body = `+1R reached. Drag SL to entry \`${fmt(setup.entry)}\` — trade is now risk-free.`;
       break;
     case 'tp1':
-      head = '🎯 *TP1 HIT*';
-      body = `Close 50% at \`${fmt(setup.t1)}\`. SL should be at BE; leave the runner.`;
+      head = '🎯 *TP1 HIT — SCALE OUT*';
+      body = `Close 50% at \`${fmt(setup.t1)}\`. SL now at breakeven \`${fmt(setup.entry)}\`; runner targets TP2 \`${fmt(setup.t2)}\`.`;
       break;
     case 'tp2':
       head = '🏆 *TP2 HIT — FULL TARGET*';
-      body = `Target reached at \`${fmt(setup.t2)}\`. Trade complete.`;
+      body = `Runner reached \`${fmt(setup.t2)}\`. Trade complete.`;
       break;
     case 'runner':
       head = '🚀 *RUNNER HIT*';
       body = `Extended past TP2 to \`${fmt(setup.runner)}\`. Banner trade — close it out.`;
       break;
     case 'sl':
-      head = '🛑 *STOP LOSS HIT*';
-      body = `Closed at \`${fmt(setup.stop)}\`. Risk managed per plan — next setup.`;
+      if (setup.wasBeStop) {
+        // Stop had already been moved to breakeven (+1R / TP1 reached), so this
+        // is a risk-free exit, not a -1R loss.
+        head = '🟡 *STOPPED AT BREAKEVEN*';
+        body = `Runner pulled back to entry \`${fmt(setup.entry)}\` — closed flat. No loss; any TP1 partial is banked.`;
+      } else {
+        head = '🛑 *STOP LOSS HIT*';
+        body = `Closed at \`${fmt(setup.stop)}\`. Risk managed per plan — next setup.`;
+      }
       break;
     case 'expired':
       head = '⏳ *SETUP EXPIRED*';
-      body = `No TP1/SL hit within the window. Close any remainder manually.`;
+      body = `No TP2/SL hit within the window. Close any remainder manually.`;
       break;
     default:
       return;
   }
   const text = [
     head,
-    `${dir}  ·  ${setup.strategy || ''}`,
+    idLine,
+    refLine,
     '',
     body,
     currentPrice != null ? `📍 Now: \`${fmt(currentPrice)}\`` : '',

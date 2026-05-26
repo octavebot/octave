@@ -58,6 +58,7 @@
   .trade-dir.long { background: rgba(76, 195, 138, 0.15); color: var(--long); }
   .trade-dir.short { background: rgba(232, 90, 113, 0.15); color: var(--short); }
   .trade-live { background: var(--accent); color: #000; }
+  .trade-stage { background: rgba(214, 178, 92, 0.18); color: var(--gold, #d6b25c); }
   .level-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 12px; }
   .level { padding: 6px 8px; border-radius: 4px; background: #181c26; }
   .level .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
@@ -108,12 +109,13 @@ function distancePct(price, level, direction) {
 }
 
 function tradeProgress(t) {
-  // Position progress 0..1 from entry to TP1 (or to SL if losing)
+  // Position progress 0..1 from entry to the active target (or to SL if losing).
+  // After TP1 scales out, the runner targets TP2 — track progress to t2.
   if (t.currentPrice == null) return { pct: 0, neg: false };
   const isLong = t.direction === 'LONG';
   const winning = isLong ? t.currentPrice > t.entry : t.currentPrice < t.entry;
   if (winning) {
-    const target = t.t1;
+    const target = t.tp1Done ? (t.t2 ?? t.t1) : t.t1;
     const span = Math.abs(target - t.entry);
     const moved = Math.abs(t.currentPrice - t.entry);
     return { pct: Math.min(100, (moved / span) * 100), neg: false };
@@ -132,24 +134,31 @@ function renderTrade(t) {
   const strategy = String(t.strategy || '?');
   const prog = tradeProgress(t);
   const live = t.live;
+  // Stage badge — keeps the panel in step with the Telegram follow-ups:
+  // "TP1 ✓" once the runner is scaled out, "BE" once the stop is risk-free.
+  const stage = t.tp1Done ? '<span class="trade-dir trade-stage">TP1 ✓</span> '
+              : t.beStop ? '<span class="trade-dir trade-stage">BE</span> '
+              : '';
+  const stopLbl = t.beStop ? 'Stop (BE)' : 'Stop';
+  const sizeNote = t.tp1Done ? ' · ½ runner' : '';
   return `
     <div class="trade">
       <div class="trade-head">
         <span class="trade-name">${strategy} · ${instrument}</span>
         <span>
-          ${live ? '<span class="trade-dir trade-live">LIVE</span> ' : ''}
+          ${stage}${live ? '<span class="trade-dir trade-live">LIVE</span> ' : ''}
           <span class="trade-dir ${dir}">${direction || '—'}</span>
         </span>
       </div>
       <div class="level-grid">
         <div class="level entry"><div class="lbl">Entry</div><div class="val">${fmtP(t.entry)}</div></div>
-        <div class="level sl"><div class="lbl">Stop</div><div class="val">${fmtP(t.stop)}</div></div>
+        <div class="level sl"><div class="lbl">${stopLbl}</div><div class="val">${fmtP(t.stop)}</div></div>
         <div class="level tp1"><div class="lbl">TP1</div><div class="val">${fmtP(t.t1)}</div></div>
         <div class="level tp2"><div class="lbl">TP2</div><div class="val">${fmtP(t.t2)}</div></div>
       </div>
       <div class="progress"><div class="${prog.neg ? 'neg' : ''}" style="width: ${prog.pct}%"></div></div>
       <div class="meta">
-        <span>${t.contracts} contract${t.contracts > 1 ? 's' : ''}</span>
+        <span>${t.contracts} contract${t.contracts > 1 ? 's' : ''}${sizeNote}</span>
         <span>Risk $${Math.round(t.riskUsd)}</span>
         <span>Current ${t.currentPrice == null ? '—' : fmtP(t.currentPrice)}</span>
         ${t.openedAt ? '<span>Opened ' + new Date(t.openedAt).toLocaleTimeString() + '</span>' : ''}

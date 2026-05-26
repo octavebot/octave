@@ -276,26 +276,42 @@ async function tick() {
           }, 'live');
         } else if (m.milestone === 'be') {
           journal.log({ action: 'be', setupId: s.setupId, auto: true });
-        } else if (['tp1', 'tp2', 'sl', 'runner', 'expired'].includes(m.milestone)) {
+        } else if (m.milestone === 'tp1') {
+          // TP1 is a PARTIAL scale-out, not a close — the runner stays live to
+          // TP2/SL. Record a breadcrumb only; the SINGLE terminal trade-log row
+          // (with net R) is written when the runner finally closes. Previously
+          // this wrote a WIN row at TP1 AND another at TP2 for the same setup,
+          // double-counting it in the live trade log + win-rate maths.
+          journal.log({ action: 'note', setupId: s.setupId, text: `TP1 partial @ ${s.t1} — scaled 50%, runner to TP2`, auto: true });
+        } else if (['tp2', 'sl', 'runner', 'expired'].includes(m.milestone)) {
           const exitPrice = lastPrice(inst);
           const reason = m.milestone === 'runner' ? 'tp2' : m.milestone;
           journal.log({ action: 'out', setupId: s.setupId, reason, price: exitPrice, auto: true });
-          const isWin = ['tp1', 'tp2', 'runner'].includes(m.milestone);
-          const isLoss = m.milestone === 'sl';
-          const entry = s.entry, stop = s.stop;
-          const risk = Math.abs(entry - stop);
-          const resultPoints = isWin && exitPrice != null ? Math.abs(exitPrice - entry)
-                              : isLoss ? -risk : 0;
+          const long = s.direction === 'LONG';
+          const entry = s.entry;
+          const risk = Math.abs(entry - s.stop);
+          const ptsFrom = (px) => px == null ? 0 : (long ? px - entry : entry - px);
+          const tp1Banked = !!s.milestonesFired?.tp1;
+          // Closing-leg points, BE-aware: an SL after +1R/TP1 exits at breakeven.
+          let legPts;
+          if (m.milestone === 'tp2' || m.milestone === 'runner') legPts = ptsFrom(s.t2 ?? s.t1);
+          else if (m.milestone === 'sl') legPts = ptsFrom(s.wasBeStop ? entry : s.stop);
+          else legPts = ptsFrom(exitPrice);   // expired
+          // Net = TP1 half (if scaled) + the closing leg on the remaining half.
+          const netPoints = tp1Banked ? 0.5 * ptsFrom(s.t1) + 0.5 * legPts : legPts;
+          const outcome = netPoints > 0 ? 'WIN'
+                        : netPoints < 0 ? 'LOSS'
+                        : m.milestone === 'expired' ? 'EXPIRED' : 'BE';
           appendTrade({
             setupId: s.setupId, strategy: s.strategy, instrument: inst,
-            direction: s.direction, entry, sl: stop, tp: s.t2 ?? s.t1 ?? null,
+            direction: s.direction, entry, sl: s.stop, tp: s.t2 ?? s.t1 ?? null,
             exit: exitPrice,
-            risk_reward: risk ? resultPoints / risk : null,
-            result_points: resultPoints,
+            risk_reward: risk ? netPoints / risk : null,
+            result_points: netPoints,
             duration_minutes: s.filledAt ? Math.round((Date.now() - s.filledAt) / 60000) : null,
             session: sessionLabel(Date.now() / 1000),
-            outcome: isWin ? 'WIN' : isLoss ? 'LOSS' : m.milestone === 'expired' ? 'EXPIRED' : 'OTHER',
-            exit_reason: m.milestone,   // tp1 | tp2 | runner | sl | expired
+            outcome,
+            exit_reason: m.milestone,   // tp2 | runner | sl | expired
           }, 'live');
         }
       } catch (err) {

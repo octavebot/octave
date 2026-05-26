@@ -135,8 +135,10 @@ export function checkGates(account, signal, sizing) {
     };
   }
   // Consistency: single largest profitable day ≤ $1500 (50% of $3000 target).
-  // Project the day's P&L if this trade wins at TP1 (1.5R) — most strategies
-  // bank at TP1. If projected day exceeds the cap, block the trade.
+  // Project the day's P&L if this trade is a full winner. With the 50%-at-TP1
+  // / 50%-runner-to-TP2 scale-out, a winner blends to ~1.5R (0.5·1.2R +
+  // 0.5·1.8R), so 1.5× the risk is the right projection. If projected day
+  // exceeds the cap, block the trade.
   const projectedDayWin = dayPnl + sizing.riskUsdActual * 1.5;
   if (projectedDayWin > EVAL_RULES.consistencyMaxDay) {
     return {

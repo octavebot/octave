@@ -101,7 +101,7 @@ const GROUP_ALLOWED_COMMANDS = new Set([
   '/bias', '/setups', '/setup', '/news', '/price', '/session',
   '/killzones',
   // Signal history (no account info — just the alert stream)
-  '/last', '/today', '/yesterday', '/range', '/summary', '/history',
+  '/last', '/today', '/yesterday', '/range', '/summary', '/results', '/history',
   // Strategy info (read-only — toggle is owner only via /enable /disable)
   '/strategies', '/playbook',
   // Help / discovery
@@ -747,6 +747,85 @@ async function cmdSummary(arg) {
   }
   if (alerts.length === 0) lines.push('', '_Quiet window. No alerts in this period._');
   lines.push('', '_`/summary 7` for the week · `/summary 30` for the month_');
+  await send(lines.join('\n'));
+}
+
+// ── Results — fired trades by instrument, with TP vs SL tally ──
+async function cmdResults(arg) {
+  const days = Math.max(1, Math.min(90, parseInt(arg, 10) || 1));
+  const sinceMs = Date.now() - days * 86_400_000;
+
+  // Live rows only (the file also holds tens of thousands of backtest sims).
+  let trades = [];
+  try {
+    if (existsSync(TRADE_LOG)) {
+      for (const ln of readFileSync(TRADE_LOG, 'utf8').split('\n').filter(Boolean)) {
+        try {
+          const t = JSON.parse(ln);
+          if (t.source !== 'live') continue;
+          const ts = Date.parse(t.opened_at || t.ts || '') || 0;
+          if (ts >= sinceMs) trades.push(t);
+        } catch {}
+      }
+    }
+  } catch {}
+
+  const INST = { gold: 'GOLD', nasdaq: 'NASDAQ' };
+  const instOf = (t) => INST[t.instrument] || String(t.instrument || '?').toUpperCase();
+  const rOf = (t) => (+t.risk_reward || +t.result_R || 0);
+  // Buckets per instrument. TP = a net-winning close (reached a take-profit),
+  // SL = a net loss (stopped out), BE = scratched at breakeven, exp = expired.
+  const by = {};
+  for (const t of trades) {
+    const b = (by[instOf(t)] ||= { tp: 0, sl: 0, be: 0, exp: 0, cancelled: 0, r: 0 });
+    switch (t.outcome) {
+      case 'WIN':       b.tp++; b.r += rOf(t); break;
+      case 'LOSS':      b.sl++; b.r += rOf(t); break;
+      case 'BE':        b.be++; b.r += rOf(t); break;
+      case 'EXPIRED':   b.exp++; b.r += rOf(t); break;
+      case 'CANCELLED': b.cancelled++; break;
+      default: break;
+    }
+  }
+
+  const lines = [header('📊', days === 1 ? 'Results · today' : `Results · ${days}d`)];
+  const rows = Object.entries(by).sort((a, b) => (b[1].tp + b[1].sl) - (a[1].tp + a[1].sl));
+  if (!rows.length) {
+    lines.push('', '_No live trades in this window._',
+      '', '_`/results 7` week · `/results 30` month_');
+    return send(lines.join('\n'));
+  }
+
+  let totTp = 0, totSl = 0, totBe = 0, totExp = 0, totCancel = 0, totR = 0;
+  lines.push('', section('By instrument'));
+  for (const [inst, b] of rows) {
+    const fired = b.tp + b.sl + b.be + b.exp;
+    totTp += b.tp; totSl += b.sl; totBe += b.be; totExp += b.exp; totCancel += b.cancelled; totR += b.r;
+    const extra = [b.be ? `${b.be}⚖️` : '', b.exp ? `${b.exp}⏳` : ''].filter(Boolean).join(' ');
+    lines.push(bullet(`*${inst}* — ${fired} fired · ${b.tp}🎯 TP · ${b.sl}🛑 SL${extra ? ' · ' + extra : ''}`));
+  }
+
+  const resolved = totTp + totSl;
+  const wr = resolved ? Math.round((totTp / resolved) * 100) : 0;
+  lines.push('', section('Totals'));
+  lines.push(bullet(`${totTp + totSl + totBe + totExp} trades · *${totTp}*🎯 TP / *${totSl}*🛑 SL${resolved ? ` · ${wr}% win` : ''} · ${totR >= 0 ? '+' : ''}${totR.toFixed(1)}R`));
+  if (totBe) lines.push(bullet(`${totBe} breakeven _(scratch — runner pulled back to BE)_`));
+  if (totExp) lines.push(bullet(`${totExp} expired`));
+  if (totCancel) lines.push(bullet(`${totCancel} unfilled limit${totCancel === 1 ? '' : 's'} _(never filled, not counted)_`));
+
+  // Individual fired trades, newest first — the actual trades behind the tally.
+  const recent = trades.filter((t) => ['WIN', 'LOSS', 'BE', 'EXPIRED'].includes(t.outcome)).slice(-8).reverse();
+  if (recent.length) {
+    lines.push('', section('Recent'));
+    for (const t of recent) {
+      const icon = t.outcome === 'WIN' ? '🎯' : t.outcome === 'LOSS' ? '🛑' : t.outcome === 'BE' ? '⚖️' : '⏳';
+      const reason = (t.outcome === 'WIN' && t.exit_reason === 'sl') ? 'TP1→BE'
+        : String(t.exit_reason || t.outcome || '').toUpperCase();
+      const r = rOf(t);
+      lines.push(bullet(`${icon} ${instOf(t)} · ${tgEscape(t.strategy || '?')} · ${reason} ${r >= 0 ? '+' : ''}${r.toFixed(1)}R`));
+    }
+  }
+  lines.push('', '_`/results 7` week · `/results 30` month_');
   await send(lines.join('\n'));
 }
 
@@ -1943,7 +2022,7 @@ const HELP_INDEX = [
   'Tap a topic or send `/help <topic>`:',
   '',
   bullet('`/help market`   — bias, setups, price, news'),
-  bullet('`/help history`  — today, yesterday, history, range, summary'),
+  bullet('`/help history`  — today, yesterday, history, range, summary, results'),
   bullet('`/help strats`   — list, enable/disable, custom strategies'),
   bullet('`/help settings` — mute, backtest'),
   bullet('`/help journal`  — log entries, exits, stats'),
@@ -1974,6 +2053,7 @@ const HELP_TOPICS = {
     kv('/range HH:MM-HH:MM', 'alerts in NY window today'),
     kv('/last', 'most recent alert detail'),
     kv('/summary [days]', 'alerts + trades digest'),
+    kv('/results [days]', 'fired trades by instrument · TP vs SL tally'),
   ].join('\n'),
   strats: [
     header('🎚', 'Strategy commands'),
@@ -2399,7 +2479,7 @@ const COMMANDS = {
   '/session': cmdSession, '/price': cmdPrice,
   '/bias': cmdBias, '/setups': cmdActiveSetups, '/setup': cmdSetup, '/news': cmdNews,
   '/history': cmdHistory, '/today': cmdToday, '/yesterday': cmdYesterday,
-  '/range': cmdRange, '/last': cmdLast, '/summary': cmdSummary,
+  '/range': cmdRange, '/last': cmdLast, '/summary': cmdSummary, '/results': cmdResults,
   '/strategies': cmdStrategies, '/enable': cmdEnable, '/disable': cmdDisable,
   '/playbook': cmdPlaybook, '/killzones': cmdKillzones,
   '/mystrategies': cmdMyStrategies, '/addstrategy': cmdAddStrategy,

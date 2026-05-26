@@ -181,13 +181,24 @@ export function step(priceOrPriceMap) {
       continue;
     }
 
+    // Once +1R (be) or TP1 is reached, the stop is at breakeven (entry) — that
+    // is exactly what the follow-up told the user to do ("trade is now risk-free"
+    // / "SL should be at BE"). SL detection must use that BE-moved stop, not the
+    // original structural stop. Otherwise a trade we already announced as
+    // risk-free could still reverse to the original stop and book a full -1R,
+    // which is the "not using proper risk management" bug.
+    const beActive = !!s.milestonesFired.be || !!s.milestonesFired.tp1;
+    const slLevel = beActive ? s.entry : s.stop;
+
     // SL hit closes the trade entirely. Checked before TPs so an ambiguous bar
     // that tagged both the stop and a target resolves to the stop (conservative).
-    if (advReached(s.stop)) {
+    if (advReached(slLevel)) {
       if (!s.milestonesFired.sl) {
         s.milestonesFired.sl = true;
         s.closedAt = now;
-        s.closedReason = 'sl';
+        s.closedReason = beActive ? 'be-stop' : 'sl';
+        s.exitLevel = slLevel;        // entry when BE-active, else original stop
+        s.wasBeStop = beActive;
         events.push({ setup: { ...s }, milestone: 'sl' });
         dirty = true;
       }

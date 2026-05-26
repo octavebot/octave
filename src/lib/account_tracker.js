@@ -37,7 +37,7 @@ function defaultAccount(id) {
     dailyPnl: 0,
     todayTrades: 0,
     dailyResetDate: null,           // NY dateKey of last reset
-    openTrades: [],                 // [{ setupId, entry, stop, t1, t2, contracts, riskUsd, openedAt }]
+    openTrades: [],                 // [{ setupId, entry, stop, t1, t2, contracts, riskUsd, openedAt, tp1Done?, beStop?, realizedUsd? }]
     closedTrades: 0,
     wins: 0,
     losses: 0,
@@ -183,12 +183,58 @@ export function openTrade(accountId, trade) {
 }
 
 /**
- * Record a closed trade. Called when the follow-up tracker fires a terminal
- * milestone (TP1/TP2/SL/expiry/invalidated/missed/unfilled).
+ * Move an open trade's stop to breakeven (entry). Called when the follow-up
+ * tracker fires the `be` milestone (+1R reached) or `tp1`. The displayed stop
+ * becomes the entry so the dashboard panel shows the same risk-free state the
+ * Telegram follow-up just announced.
+ */
+export function moveStopToBE(accountId, setupId) {
+  reloadIfStale();
+  const acc = state.accounts[accountId];
+  if (!acc) return false;
+  const t = (acc.openTrades || []).find((x) => x.setupId === setupId);
+  if (!t || t.beStop) return false;
+  t.stop = t.entry;     // effective stop is now breakeven
+  t.beStop = true;
+  save();
+  return true;
+}
+
+/**
+ * Bank a partial result on an open trade WITHOUT closing it (TP1 scale-out).
+ * The runner stays open with its stop at breakeven. P&L is added to the balance
+ * now; the whole-trade win/loss is classified on the final close from the sum
+ * of the banked partial + the final leg.
  *
  * @param {string} accountId
  * @param {string} setupId
- * @param {number} pnlUsd  net dollar result of the trade (signed)
+ * @param {number} pnlUsd  realized dollars from the partial (signed)
+ * @param {object} patch   { stop?, tp1Done?, beStop? } fields to set on the trade
+ */
+export function partialClose(accountId, setupId, pnlUsd, patch = {}) {
+  maybeRollDay();
+  const acc = state.accounts[accountId];
+  if (!acc) return false;
+  const t = (acc.openTrades || []).find((x) => x.setupId === setupId);
+  if (!t || t.tp1Done) return false;   // idempotent — only one TP1 scale-out
+  acc.balance += pnlUsd;
+  acc.dailyPnl += pnlUsd;
+  t.realizedUsd = (t.realizedUsd || 0) + pnlUsd;
+  if (patch.stop != null) t.stop = patch.stop;
+  if (patch.tp1Done) t.tp1Done = true;
+  if (patch.beStop) t.beStop = true;
+  save();
+  return true;
+}
+
+/**
+ * Record a closed trade. Called when the follow-up tracker fires a terminal
+ * milestone (TP2/SL/expiry/invalidated/missed/unfilled, or a full TP1 close).
+ *
+ * @param {string} accountId
+ * @param {string} setupId
+ * @param {number} pnlUsd  dollar result of the CLOSING leg (signed). Any partial
+ *                         already banked via partialClose() is added separately.
  */
 export function closeTrade(accountId, setupId, pnlUsd) {
   // Ensure we're billing P&L to the CURRENT NY day. If the day flipped
@@ -200,12 +246,17 @@ export function closeTrade(accountId, setupId, pnlUsd) {
   if (!acc) return false;
   const idx = acc.openTrades.findIndex((t) => t.setupId === setupId);
   if (idx < 0) return false;
+  // Whole-trade net = the partial already banked at TP1 + this closing leg.
+  // Classify win/loss on the net so a TP1-then-breakeven trade counts as the
+  // small win it is, not a loss from the runner scratching at BE.
+  const banked = acc.openTrades[idx].realizedUsd || 0;
+  const net = banked + pnlUsd;
   acc.openTrades.splice(idx, 1);
   acc.balance += pnlUsd;
   acc.dailyPnl += pnlUsd;
   acc.closedTrades++;
-  if (pnlUsd > 0) acc.wins++;
-  else if (pnlUsd < 0) acc.losses++;
+  if (net > 0) acc.wins++;
+  else if (net < 0) acc.losses++;
   // EOD trailing DD: peak only ratchets at day rollover, NOT on every trade.
   // Mark eval-killing violations against the EOD peak.
   const ddFromPeakEod = (acc.peakEodBalance || EVAL_RULES.startingBalance) - acc.balance;
