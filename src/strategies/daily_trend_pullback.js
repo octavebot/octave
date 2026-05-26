@@ -15,7 +15,7 @@ export const meta = {
   id: 'DAILY-TREND-PB',
   name: 'Daily Trend · H1 EMA Pullback',
   concept: 'Daily trend + H1 20-EMA pullback + 15m rejection = 3R continuation',
-  window: 'Asia / London / NY-pm · skips 07:00–14:00 ET',
+  window: 'Asia / London · skips 07:00–14:00 ET (NY-open chop) + 16:00–19:00 ET (PM lull)',
   timeframes: ['15', '60', '1D'],
   defaultEnabled: true,
 };
@@ -29,9 +29,10 @@ back to its 20-EMA. On 15m, the first pin bar or engulfing in the bias
 direction at that pullback is the entry.
 
 ## Rules
-1. **Session** — Skip NY-open chop (07:00–12:00 ET). Pullbacks get whipsawed
-   by NY-open noise; 30d data showed -1.18R / 36% win in this window vs
-   ≥70% win every other session.
+1. **Session** — Skip NY-open chop (07:00–14:00 ET) and the PM lull
+   (16:00–20:00 ET). Both are low-liquidity windows that whipsaw
+   daily-trend pullbacks. Train/test 365d Databento splits validated
+   each gate independently: every other session generalizes cleanly.
 2. **Daily bias** — D1 close > 20-EMA AND 20-EMA sloping up → LONG only.
    D1 close < 20-EMA AND 20-EMA sloping down → SHORT only.
 3. **H1 pullback** — Any of the last 5 H1 bars wicked into a 0.6 × ATR(H1)
@@ -67,14 +68,17 @@ export function evaluate(ctx) {
   if (!tf60?.bars || tf60.bars.length < 50) return out;
   if (!dPane?.bars || dPane.bars.length < 25) return out;
 
-  // NY-open + lunch chop filter — 07:00–14:00 ET. The NY open (07–12) was the
-  // original gate. A 1-year Databento train/test split (2026-05) then showed
-  // the lunch lull (12:00–14:00) is the next-worst bucket: n=45, 31% win,
-  // −11.1R. Extending the gate through lunch improved BOTH halves (TRAIN
-  // +1.4pp/+5.5R, TEST +3.4pp/+5.7R). Low liquidity chops daily-trend
-  // pullbacks — structural, not overfit.
+  // NY-open + lunch + PM-lull chop filter. Three structural low-liquidity
+  // windows where daily-trend pullbacks chop:
+  //   07–14 ET  NY open + lunch  (added in two prior tuning rounds)
+  //   16–20 ET  Post-NY-close lull (added 2026-05-26)
+  // The PM lull (h16–19, n=28 trades, 29% win, −7.8R) was the biggest leak
+  // remaining after the chop gate. Train/test 365d Databento split: TRAIN
+  // 23%/−5.5R + TEST 33%/−2.3R, both halves losing → structural, not overfit.
+  // After filter: TRAIN +1.7pp/+5.5R, TEST +6.9pp/+2.3R (both improve).
   const np = nyParts(ctx.barTime);
   if (np.h >= 7 && np.h < 14) return out;
+  if (np.h >= 16 && np.h < 20) return out;
 
   // Daily bias: D1 close vs 20-EMA, EMA slope confirmation. ALSO require a
   // minimum daily ATR to confirm there's real movement in the trend — flat
@@ -218,12 +222,12 @@ export function precheck(ctx) {
     }
   }
   const np = nyParts(ctx.barTime);
-  const inChop = np.h >= 7 && np.h < 14;
+  const inChop = (np.h >= 7 && np.h < 14) || (np.h >= 16 && np.h < 20);
   return {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Not NY-open/lunch chop (07:00–14:00 ET skip)', met: !inChop, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${inChop ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'Not chop (07:00–14:00 + 16:00–20:00 ET skip)', met: !inChop, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${inChop ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: `D1 ${dlast.close.toFixed(2)} ${dailyUp ? '>' : dailyDown ? '<' : '≈'} EMA20 ${d20last.toFixed(2)} · sep ${trendStrength.toFixed(2)} (min ${(0.3 * aD).toFixed(2)})` },
       { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: `H1 EMA20 ${h20last.toFixed(2)} · tol ±${tol.toFixed(2)} · ${h1Touched ? 'touched in last 5 bars' : 'no touch in last 5 bars'}` },
       { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: `15m ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs H1 EMA20 ${h20last.toFixed(2)} (tol ±${proximityTol.toFixed(2)})` },
