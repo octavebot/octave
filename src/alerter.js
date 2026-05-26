@@ -350,6 +350,11 @@ export async function sendDown(reason) {
   return postRaw(`⚠️ *OCTAVE STOPPING*\n${tgEscape(reason || '')}`, null, config.telegramOwnerChatId);
 }
 
+/** Operational alert to the OWNER DM (state corruption, silent-state warnings). */
+export async function sendOpsAlert(text) {
+  return postRaw(text, null, config.telegramOwnerChatId);
+}
+
 /** End-of-day report — pre-formatted text from lib/daily_report.js. Owner only. */
 export async function sendDailyReport(text) {
   return postRaw(text, null, config.telegramOwnerChatId);

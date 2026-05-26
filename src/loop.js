@@ -7,7 +7,8 @@ import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
 import * as journal from './lib/trade_journal.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
-import { refresh as refreshConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
+import { refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
+import { drainCorruptionEvents } from './lib/safe_json.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
 import * as paperTrader from './lib/paper_trader.js';
@@ -332,9 +333,65 @@ async function tick() {
   try { await maybeDailyReport(suppressTelegram); }
   catch (err) { log.warn('daily report threw', { err: err.message }); }
 
+  // Surface state-file corruption (recovered or reset) — never silent now.
+  try {
+    for (const ev of drainCorruptionEvents()) {
+      const base = String(ev.file || '').split('/').pop();
+      const what = ev.action === 'recovered-from-bak'
+        ? 'was corrupt — auto-recovered from backup'
+        : 'was corrupt and had NO usable backup — reset to default';
+      await alerter.sendOpsAlert(`🟠 *State file corruption*\n\`${base}\` ${what}.\nEngine kept running; verify /account and /setups if numbers look off.`);
+    }
+  } catch (err) { log.warn('corruption drain threw', { err: err.message }); }
+
+  // Silent-state dead-man's switch — catches "alive but can't/won't fire".
+  try { await maybeHealthCheck(); }
+  catch (err) { log.warn('health check threw', { err: err.message }); }
+
   // End-of-tick heartbeat with a count of results so dashboards see activity
   heartbeat('signal-engine', { phase: 'tick-end', last_result_count: results?.length || 0 });
   await sleep(config.pollIntervalMs);
+}
+
+// ─── Silent-state dead-man's switch ───────────────────────────────────────
+// Catches states where the bot is fully alive (fresh heartbeat) yet structurally
+// CANNOT deliver signals — the kind of failure the watchdog can't see. Runs at
+// most every 15 min; each condition is deduped on its own timer. In-memory only
+// (a restart legitimately re-checks: if strategies are still all-off, re-warn).
+let _lastHealthCheck = 0;
+const _health = { allDisabledAt: 0, mutedReminderAt: 0 };
+
+async function maybeHealthCheck() {
+  const now = Date.now();
+  if (now - _lastHealthCheck < 15 * 60 * 1000) return;
+  _lastHealthCheck = now;
+
+  const cfg = getConfig() || {};
+  const stratIds = Object.keys(cfg.strategies || {});
+  const enabled = stratIds.filter((id) => cfg.strategies[id]).length;
+
+  // All strategies OFF → the engine can never fire. Only meaningful once the
+  // registry has populated the config (stratIds non-empty) to avoid a
+  // first-boot false alarm.
+  if (stratIds.length > 0 && enabled === 0) {
+    if (now - _health.allDisabledAt > 6 * 3600 * 1000) {
+      _health.allDisabledAt = now;
+      await alerter.sendOpsAlert('⚠️ *All strategies are OFF* — Octave will not fire any signals.\nSend `/strategies`, then `/enable <n>` to resume.');
+    }
+  } else {
+    _health.allDisabledAt = 0;
+  }
+
+  // Muted-and-maybe-forgot reminder: only when a long mute remains.
+  const muteLeftSec = muteRemainingSec();
+  if (muteLeftSec > 12 * 3600) {
+    if (now - _health.mutedReminderAt > 12 * 3600 * 1000) {
+      _health.mutedReminderAt = now;
+      await alerter.sendOpsAlert(`🔕 *Alerts still muted* (~${Math.round(muteLeftSec / 3600)}h left). \`/unmute\` to resume signals.`);
+    }
+  } else {
+    _health.mutedReminderAt = 0;
+  }
 }
 
 // ─── End-of-day report ──────────────────────────────────────────────────

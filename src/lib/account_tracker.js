@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EVAL_RULES } from './risk_manager.js';
 import { nyParts } from './time.js';
+import { readJsonSafe, backupJson } from './safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,30 +48,30 @@ function defaultAccount(id) {
   };
 }
 
+function freshInit() {
+  const init = { version: 1, accounts: {} };
+  for (const id of ACCOUNT_IDS) init.accounts[id] = defaultAccount(id);
+  return init;
+}
+
 function load() {
   if (!existsSync(STATE_FILE)) {
     mkdirSync(dirname(STATE_FILE), { recursive: true });
-    const init = { version: 1, accounts: {} };
-    for (const id of ACCOUNT_IDS) init.accounts[id] = defaultAccount(id);
-    return init;
+    return freshInit();
   }
-  try {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
-    if (!raw?.accounts) throw new Error('no accounts');
-    // Backfill any missing fields when schema evolves.
-    for (const id of ACCOUNT_IDS) {
-      raw.accounts[id] = { ...defaultAccount(id), ...(raw.accounts[id] || {}) };
-    }
-    // Drop deprecated account ids (e.g. 'auto' from the old 2-account era).
-    for (const id of Object.keys(raw.accounts)) {
-      if (!ACCOUNT_IDS.includes(id)) delete raw.accounts[id];
-    }
-    return raw;
-  } catch {
-    const init = { version: 1, accounts: {} };
-    for (const id of ACCOUNT_IDS) init.accounts[id] = defaultAccount(id);
-    return init;
+  // readJsonSafe recovers from a .bak on corruption (recording the event)
+  // instead of silently resetting the eval account balance/peak/open trades.
+  const raw = readJsonSafe(STATE_FILE, freshInit());
+  if (!raw?.accounts) return freshInit();
+  // Backfill any missing fields when schema evolves.
+  for (const id of ACCOUNT_IDS) {
+    raw.accounts[id] = { ...defaultAccount(id), ...(raw.accounts[id] || {}) };
   }
+  // Drop deprecated account ids (e.g. 'auto' from the old 2-account era).
+  for (const id of Object.keys(raw.accounts)) {
+    if (!ACCOUNT_IDS.includes(id)) delete raw.accounts[id];
+  }
+  return raw;
 }
 
 let state = load();
@@ -97,6 +98,7 @@ function save() {
     const tmp = STATE_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify(state, null, 2));
     renameSync(tmp, STATE_FILE);
+    backupJson(STATE_FILE);   // last-known-good for corruption recovery
     try { stateMtimeMs = statSync(STATE_FILE).mtimeMs; } catch {}
   } catch {
     /* swallow — next save will retry */

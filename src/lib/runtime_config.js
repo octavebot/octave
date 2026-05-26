@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readJsonSafe, backupJson } from './safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,23 +34,21 @@ let cache = null;
 
 export function load() {
   if (!existsSync(CONFIG_FILE)) return { ...DEFAULTS };
-  try {
-    const raw = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
-    return {
-      version: raw.version ?? DEFAULTS.version,
-      strategies: { ...(raw.strategies || {}) },
-      mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
-      alertChartImages: raw.alertChartImages === true,  // default off
-      aiEngine: {
-        enabled: raw.aiEngine?.enabled !== false,
-        threshold: Number(raw.aiEngine?.threshold) || 0.55,
-      },
-      riskPerTradeUsd: Number(raw.riskPerTradeUsd) > 0 ? Number(raw.riskPerTradeUsd) : 250,
-      lastUpdated: raw.lastUpdated || 0,
-    };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  // readJsonSafe recovers from a .bak on corruption (and records it) instead of
+  // silently resetting strategy enable-state + mute to defaults.
+  const raw = readJsonSafe(CONFIG_FILE, { ...DEFAULTS });
+  return {
+    version: raw.version ?? DEFAULTS.version,
+    strategies: { ...(raw.strategies || {}) },
+    mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
+    alertChartImages: raw.alertChartImages === true,  // default off
+    aiEngine: {
+      enabled: raw.aiEngine?.enabled !== false,
+      threshold: Number(raw.aiEngine?.threshold) || 0.55,
+    },
+    riskPerTradeUsd: Number(raw.riskPerTradeUsd) > 0 ? Number(raw.riskPerTradeUsd) : 250,
+    lastUpdated: raw.lastUpdated || 0,
+  };
 }
 
 /** Cached load. Call refresh() to re-read from disk. */
@@ -75,6 +74,7 @@ export function save(next) {
   const tmp = CONFIG_FILE + '.tmp';
   writeFileSync(tmp, JSON.stringify(merged, null, 2));
   renameSync(tmp, CONFIG_FILE);
+  backupJson(CONFIG_FILE);   // refresh last-known-good copy
   cache = merged;
   return merged;
 }

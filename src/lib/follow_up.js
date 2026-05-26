@@ -25,6 +25,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../logger.js';
+import { readJsonSafe, backupJson } from './safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,12 +39,10 @@ function load() {
     mkdirSync(dirname(STATE_FILE), { recursive: true });
     return { setups: {} };
   }
-  try {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
-    return raw?.setups ? raw : { setups: {} };
-  } catch {
-    return { setups: {} };
-  }
+  // readJsonSafe recovers from a .bak on corruption (recording it) instead of
+  // silently dropping every tracked trade.
+  const raw = readJsonSafe(STATE_FILE, { setups: {} });
+  return raw?.setups ? raw : { setups: {} };
 }
 
 const state = load();
@@ -53,6 +52,7 @@ function save() {
     const tmp = STATE_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify(state, null, 2));
     renameSync(tmp, STATE_FILE);
+    backupJson(STATE_FILE);   // last-known-good for corruption recovery
   } catch (err) {
     log.warn('follow-up state save failed', { err: err.message });
   }
