@@ -46,7 +46,11 @@ function recordCorruption(file, action, errMsg) {
 export function readJsonSafe(file, fallback) {
   if (!existsSync(file)) return clone(fallback);
   try {
-    return JSON.parse(readFileSync(file, 'utf8'));
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    // Snapshot a .bak on first successful read so a corruption BEFORE the file
+    // is ever mutated still has a recovery point (save() only runs on writes).
+    try { if (!existsSync(file + '.bak')) copyFileSync(file, file + '.bak'); } catch {}
+    return parsed;
   } catch (err) {
     const bak = file + '.bak';
     if (existsSync(bak)) {

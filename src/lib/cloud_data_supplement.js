@@ -329,9 +329,18 @@ export async function getLiveFuturesQuotes() {
   // network fetches entirely — those are only needed to ESTIMATE the price via
   // basis when TV/Yahoo are stale. This is what kept /price and /session fast
   // vs the ~20s cold call that hit Yahoo+OANDA for all three instruments.
+  //
+  // Scope: ONLY the bridge-served instruments (gold + nasdaq). The TV bridge
+  // has a hard 2-tab limit, so sp will NEVER come from TV — including it here
+  // would silently break the fast path on every call (the first sp lookup
+  // returns null → allFresh=false → fall through to the slow path, even when
+  // gold+nasdaq are perfectly fresh). The slow path below handles sp via its
+  // own per-instrument cascade (Yahoo → OANDA+basis), and we merge sp into the
+  // fast-path output before returning.
+  const FAST_INSTS = QUOTE_INSTRUMENTS.filter((i) => i.key !== 'sp');
   if (tvConfigured()) {
     let allFresh = true;
-    for (const inst of QUOTE_INSTRUMENTS) {
+    for (const inst of FAST_INSTS) {
       let tvBars = null, tvLast = null;
       try {
         const p = await fetchTvBars(inst.key, '5');
@@ -359,7 +368,32 @@ export async function getLiveFuturesQuotes() {
         stale: false, ageMs: now - tvLast.time * 1000, asOfMs: tvLast.time * 1000,
       });
     }
-    if (allFresh && out.size === QUOTE_INSTRUMENTS.length) {
+    if (allFresh && out.size === FAST_INSTS.length) {
+      // TV-fresh path covers gold+nasdaq. Resolve sp from Yahoo (fast — one
+      // call) so the consumer gets all three live without paying the full
+      // Yahoo+OANDA round-trip for the bridge-served instruments.
+      const spInst = QUOTE_INSTRUMENTS.find((i) => i.key === 'sp');
+      if (spInst) {
+        try {
+          const { meta, bars } = await fetchYahooQuote(spInst.yh);
+          const last = bars?.length ? bars[bars.length - 1] : null;
+          const yPrice = meta?.regularMarketPrice ?? last?.close ?? null;
+          const yTimeMs = last ? last.time * 1000 : null;
+          const yFresh = yTimeMs != null && (now - yTimeMs) < FUTURES_FRESH_MS;
+          const ref = meta?.chartPreviousClose ?? lastPrevClose.sp ?? null;
+          if (ref != null) lastPrevClose.sp = ref;
+          if (yPrice != null) {
+            out.set('sp', {
+              sym: spInst.sym, label: spInst.label, price: yPrice,
+              change: ref != null ? yPrice - ref : null,
+              changePct: (ref != null && ref) ? ((yPrice - ref) / ref) * 100 : null,
+              source: yFresh ? 'yahoo' : 'yahoo-stale',
+              estimated: false, basis: null,
+              stale: !yFresh, ageMs: yTimeMs != null ? now - yTimeMs : null, asOfMs: yTimeMs,
+            });
+          }
+        } catch { /* sp absent — caller tolerates partial */ }
+      }
       quoteCache = { at: Date.now(), map: out };
       return new Map(out);
     }
