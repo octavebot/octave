@@ -336,10 +336,6 @@
         <div class="value" id="nasdaq-price">—</div>
       </div>
       <div class="stat">
-        <div class="label">MES1! S&amp;P</div>
-        <div class="value" id="sp-price">—</div>
-      </div>
-      <div class="stat">
         <div class="label">Open Positions</div>
         <div class="value" id="active-setups">—</div>
       </div>
@@ -620,7 +616,6 @@ function renderState(s) {
   };
   setPx('gold-price', 'gold');
   setPx('nasdaq-price', 'nasdaq');
-  setPx('sp-price', 'sp');
 
   // Active setups: prefer the live follow-up tracker count (bot uses same source)
   // and fall back to drawings.json for old systems that don't expose it.
