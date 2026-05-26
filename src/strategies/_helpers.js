@@ -113,15 +113,24 @@ export const STOP_PAD = 0.35;  // widen the structural stop by 35%
 
 // Reward guard-rails (in R, measured against the WIDENED risk). Every target —
 // whether an explicit structural price or an R-multiple — is clamped into this
-// band so no setup ever ships a target that's too tight (risk more than it
-// pays) or unrealistically long (a 30R structural level that never fills, so
-// the runner just scratches at breakeven). Bounds chosen to leave the
-// already-sane strategies untouched: DAILY-TREND-PB's 3.0R TP2 sits inside the
-// 4.0 cap; VWAP's 1.8R sits on the floor; only the structural-target outliers
-// (LONDON's Asian-extreme, NY-FVG's session-extreme, ASIAN's range multiples)
-// and the STOP_PAD-deflated sub-1R TP1s actually move.
-export const TP1_MIN_R = 1.0, TP1_MAX_R = 2.5;
-export const TP2_MIN_R = 1.8, TP2_MAX_R = 4.0;
+// band so no setup ships a target that's unrealistically long (a 30R structural
+// level that never fills, so the runner just scratches at breakeven) or one
+// where the reward is smaller than the risk.
+//
+// Bounds tuned against a 90d before/after backtest (NOT precision-fit — round
+// structural numbers, validated for mechanism not just outcome):
+//   - The CAP is the win: capping LONDON's ~8R-median / 32R-max Asian-extreme
+//     TP2 at 4R lifts avgWinR (0.96→1.07) because capped runners actually reach
+//     TP2 instead of scratching at BE.
+//   - The FLOORS are deliberately GENTLE. An earlier 1.0R/1.8R floor pushed
+//     EMA-CROSS's legitimately tight, high-hit-rate targets out and cost it
+//     9pp win-rate / 13R. So TP1 floors at 0.8 (only catches ASIAN's broken
+//     0.2R) and TP2 floors at 1.2 (only the genuinely sub-1R reward cases).
+//   - VWAP (1.8R) and DAILY-TREND-PB (1.5/3.0R) sit inside the band → the
+//     backtest shows them byte-identical before/after, confirming the clamp is
+//     a no-op when a strategy's targets are already sane.
+export const TP1_MIN_R = 0.8, TP1_MAX_R = 2.5;
+export const TP2_MIN_R = 1.2, TP2_MAX_R = 4.0;
 
 /** Clamp a target PRICE so |price-entry|/risk lands in [minR, maxR]. */
 function clampTargetR(entry, sign, risk, price, minR, maxR) {
