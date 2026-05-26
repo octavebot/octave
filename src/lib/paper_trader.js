@@ -191,10 +191,11 @@ export function onMilestone(setup, milestone, exitPrice) {
   try {
     if (!setup?.setupId) return;
     accounts.maybeRollDay();
-    const isWin = ['tp1', 'tp2', 'runner', 'filled'].includes(milestone)
-      ? milestone !== 'filled'
-      : false;  // 'filled' is not a close — bot still holds the trade
-    if (milestone === 'filled') return;
+    // 'filled' (entry happened) and 'be' (+1R reached → move stop to breakeven)
+    // are NOT closes — the trade stays open. Only tp1/tp2/runner/sl/expired and
+    // the flat outcomes below close a position.
+    if (milestone === 'filled' || milestone === 'be') return;
+    const isWin = ['tp1', 'tp2', 'runner'].includes(milestone);
     const isLoss = milestone === 'sl';
     const isFlat = ['invalidated', 'missed', 'unfilled'].includes(milestone);
     // Expired = close at last known price; treat as 0 if no exit price
