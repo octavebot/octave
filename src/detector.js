@@ -154,6 +154,21 @@ async function fetchBiasPanesSafe() {
 //
 // Each entry carries staleness metadata (lastBarMs / dataAgeMs) so the bot can
 // flag a frozen read instead of presenting stale numbers as a live bias.
+// Merge the OANDA/TV bias panes ON TOP of the always-complete main feed.
+// OANDA periodically 522s (Cloudflare timeout) and returns a PARTIAL set —
+// e.g. nasdaq|60 cached but gold|60 missing. With the old all-or-nothing
+// `biasPanes || mainPanes` fallback, a partial OANDA result dropped gold
+// entirely (computeInstrumentBias needs 15+60+1D; missing 60 → null → gold
+// vanishes from /bias). Overlaying instead guarantees every instrument keeps
+// its 15/60/1D from the main Yahoo/TV feed, with OANDA's real-time direction
+// layered over wherever it IS available. Direction is basis-insensitive, so
+// falling back to the futures feed for a pane is directionally identical.
+function mergedBiasPanes(mainPanes, biasPanes) {
+  const merged = new Map(mainPanes || []);
+  if (biasPanes) for (const [k, v] of biasPanes) if (v?.bars?.length) merged.set(k, v);
+  return merged;
+}
+
 function computeBiasSnapshot(biasPanesByTf, precheckRows) {
   if (!biasPanesByTf) return {};
   const rowsByInstrument = new Map();
@@ -219,9 +234,10 @@ export async function detect() {
     // so /bias reflects real-time direction instead of re-stamping a frozen
     // read. Falls back to the last bias if OANDA is unavailable.
     const biasPanes = await fetchBiasPanesSafe();
-    const freshBias = biasPanes
-      ? computeBiasSnapshot(biasPanes, _lastDetect.precheck)
-      : _lastDetect.bias;
+    // Always merge over the main feed so a partial/empty OANDA result never
+    // drops an instrument. panesByTf is in scope (fetched at the top of this
+    // call) and always carries gold/nasdaq 15/60/1D.
+    const freshBias = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), _lastDetect.precheck);
     writeBiasSnapshot(freshBias);
     writePrecheckSnapshot(_lastDetect.precheck);
     _lastDetect.bias = freshBias;
@@ -258,7 +274,7 @@ export async function detect() {
   // vote, combined. Strategies below stay on the Yahoo (futures) panes; only
   // the directional bias uses OANDA. Falls back to Yahoo if OANDA is down.
   const biasPanes = await fetchBiasPanesSafe();
-  const biasByInstrument = computeBiasSnapshot(biasPanes || panesByTf, precheckRows);
+  const biasByInstrument = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), precheckRows);
 
   for (const instrument of INSTRUMENTS) {
     const ctx = buildInstrumentCtx(instrument, panesByTf);
