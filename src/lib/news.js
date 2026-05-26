@@ -14,6 +14,9 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fetchWithTimeout } from './http.js';
+// Cap the ForexFactory fetch so a slow endpoint can't hang the caller.
+const fetch = (url, opts) => fetchWithTimeout(url, opts, 12000);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

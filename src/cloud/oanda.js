@@ -19,6 +19,10 @@
  * Unset OANDA_API_TOKEN → adapter is silent no-op. Yahoo remains primary.
  */
 
+import { fetchWithTimeout } from '../lib/http.js';
+// Hard-cap every OANDA request so a hung connection can't stall callers.
+const fetch = (url, opts) => fetchWithTimeout(url, opts, 12000);
+
 const SYMBOLS = {
   gold:   'XAU_USD',
   silver: 'XAG_USD',

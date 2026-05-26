@@ -30,6 +30,9 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fetchWithTimeout } from '../lib/http.js';
+// Backtest-only feed, but still cap it so a hung request can't wedge a run.
+const fetch = (url, opts) => fetchWithTimeout(url, opts, 30000);
 
 const API = 'https://hist.databento.com/v0/timeseries.get_range';
 const DATASET = 'GLBX.MDP3';

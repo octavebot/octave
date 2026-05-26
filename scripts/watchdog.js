@@ -39,6 +39,12 @@ const ALERT_AFTER_MS = 5 * 60 * 1000;     // alert when stale > 5 minutes
 const FLAP_WINDOW_MS = 30 * 60 * 1000;    // count restarts within this window
 const FLAP_THRESHOLD = 3;                 // 3+ restarts in 30min = flapping
 const ALERT_DEDUPE_MS = 30 * 60 * 1000;   // don't re-alert same service for 30min
+// Dead-man's switch for the always-on Mac TV bridge (the live-data SPOF). The
+// VPS writes a 'tv-bridge' heartbeat on every ingest push (~3s); if the Mac
+// stops (off, TV closed, tunnel URL rotated, secret mismatch) it goes silent
+// and the engine quietly falls back to Yahoo. The other watchdog checks only
+// see fresh local heartbeats, so this would otherwise collapse WITHOUT a peep.
+const BRIDGE_STALE_MS = 10 * 60 * 1000;   // alert if the bridge is silent >10min
 
 // Per-service state tracked across ticks
 const restartHistory = new Map();  // service → [timestamps]
@@ -108,11 +114,42 @@ function shouldRestart(service) {
   return (Date.now() - last) > RESTART_COOLDOWN_MS;
 }
 
+// Alert-only monitor for the remote Mac TV bridge. Nothing to restart here (it
+// lives on the user's Mac), so this just notifies — turning a silent live-data
+// outage into one the user actually hears about. Gated on the heartbeat having
+// EVER existed so a setup that doesn't run the bridge never false-alarms.
+async function checkBridge(beats) {
+  const key = 'tv-bridge';
+  const b = beats[key];
+  const at = b && (b.at || b.ts);
+  if (!at) return;                       // bridge never seen on this host — skip
+  const age = Date.now() - at;
+  if (age <= BRIDGE_STALE_MS) {
+    if (lastAlertAt.has(key)) {          // had alerted → announce recovery
+      await alertTelegram('✅ *TV bridge reconnected* — live CME bars flowing again.');
+      lastAlertAt.delete(key); firstStaleAt.delete(key);
+    }
+    return;
+  }
+  if (!firstStaleAt.has(key)) firstStaleAt.set(key, Date.now());
+  if (Date.now() - (lastAlertAt.get(key) || 0) > ALERT_DEDUPE_MS) {
+    const mins = Math.round(age / 60000);
+    await alertTelegram(
+      `🚨 *TV bridge silent ${mins}m* — the always-on Mac stopped pushing live CME bars.\n\n` +
+      `The engine has fallen back to Yahoo (delayed; frozen outside RTH). Check the Mac: ` +
+      `TradingView open? bridge running? tunnel URL current?`
+    );
+    lastAlertAt.set(key, Date.now());
+  }
+}
+
 async function tick() {
   heartbeat('watchdog', { restartHistory: Object.fromEntries(restartHistory) });
   let beats = {};
   try { beats = readAllBeats(); }
   catch (err) { console.error('[watchdog] readAllBeats threw:', err.message); return; }
+  try { await checkBridge(beats); }
+  catch (err) { console.error('[watchdog] checkBridge threw:', err.message); }
 
   for (const service of Object.keys(SERVICE_MAP)) {
     const b = beats[service];

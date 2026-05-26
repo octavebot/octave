@@ -10,6 +10,10 @@
  *   - personal use OK; commercial restricted by Yahoo TOS
  */
 
+import { fetchWithTimeout } from '../lib/http.js';
+// Hard-cap every Yahoo request — a hung connection must never stall the 3s tick.
+const fetch = (url, opts) => fetchWithTimeout(url, opts, 12000);
+
 // Yahoo symbol map for our internal asset keys.
 // All three primary instruments use micro futures (matches what retail traders
 // run on TopstepX / Apex / Lucid prop accounts and keeps tick math consistent

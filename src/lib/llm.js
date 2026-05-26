@@ -16,6 +16,11 @@
  * gets its own converter.
  */
 
+import { fetchWithTimeout } from './http.js';
+// 30s ceiling per LLM call — generous for inference, but a hung provider must
+// never block the engine tick (holy_ai is awaited inside the detection loop).
+const fetch = (url, opts) => fetchWithTimeout(url, opts, 30000);
+
 const GROQ_MODEL = process.env.OCTAVE_GROQ_MODEL || 'llama-3.3-70b-versatile';
 const GEMINI_MODEL = process.env.OCTAVE_GEMINI_MODEL || 'gemini-2.0-flash';
 
