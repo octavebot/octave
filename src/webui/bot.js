@@ -89,7 +89,7 @@ let ALLOWED_CHATS = new Set();
 const OWNER_ONLY = new Set([
   '/enable', '/disable', '/mute', '/unmute', '/ai-engine', '/aiengine',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy', '/clearchat',
-  '/ai', '/backtest', '/risk', '/broker', '/cleanup-group',
+  '/ai', '/backtest', '/risk', '/cleanup-group',
 ]);
 
 // Friends in the group chat can only invoke these commands. Anything else
@@ -1637,7 +1637,7 @@ async function cmdAccount(arg) {
     const acc = at.get(id);
     const st = rm.evalStatus(acc);
     lines.push('');
-    lines.push(`*${id.toUpperCase()}* · ${acc.mode} · ${acc.enabled ? '🟢 active' : '⚫ disabled'} · ${st.phase}`);
+    lines.push(`*${id.toUpperCase()}* · paper · ${acc.enabled ? '🟢 active' : '⚫ disabled'} · ${st.phase}`);
     lines.push('```');
     lines.push(`Balance        $${st.balance.toFixed(2)}`);
     lines.push(`Peak (EOD)     $${st.peakEod.toFixed(2)}`);
@@ -1672,8 +1672,6 @@ async function cmdRisk(arg) {
   // /risk            → show
   // /risk on         → enable
   // /risk off        → disable
-  // /risk live       → live mode (requires webhook)
-  // /risk paper      → paper mode
   // /risk funded     → mark account as funded
   // /risk eval       → mark account back to eval
   // /risk per 250    → set risk-per-trade USD
@@ -1683,11 +1681,10 @@ async function cmdRisk(arg) {
     return sendOwner([
       header('⚙️', 'Risk control'),
       '',
-      `*${ID.toUpperCase()}*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · ${a.mode} · ${a.phase}`,
+      `*${ID.toUpperCase()}*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · paper · ${a.phase}`,
       '',
       'Commands:',
       bullet('`/risk on` · `/risk off` — enable/disable'),
-      bullet('`/risk paper` · `/risk live` — switch mode'),
       bullet('`/risk eval` · `/risk funded` — phase'),
       bullet('`/risk per 250` — set risk-per-trade USD'),
       bullet('`/risk reset` — wipe back to fresh $50k'),
@@ -1703,26 +1700,6 @@ async function cmdRisk(arg) {
   if (parts[0] === 'reset' || (parts[0] === 'reset' && parts[1] === ID)) {
     at.reset(ID);
     return sendOwner(`account reset to fresh $50k`);
-  }
-  if (parts[0] === 'paper' || parts[0] === 'live') {
-    if (parts[0] === 'live') {
-      const le = await import('../lib/live_executor.js');
-      const cfg = le.getConfig();
-      if (!cfg.webhooks[ID] && parts[1] !== 'force') {
-        return sendOwner([
-          `⚠️ *live mode refused* — no webhook configured`,
-          '',
-          `Configure first:  \`/broker set-url <https-url>\``,
-          `Test it:          \`/broker test\``,
-          `Then enable:      \`/risk live\``,
-          '',
-          `Override (no execution until webhook set):`,
-          `  \`/risk live force\``,
-        ].join('\n'));
-      }
-    }
-    at.setMode(ID, parts[0]);
-    return sendOwner(`mode → *${parts[0]}*${parts[0] === 'live' ? '\n🚀 Live execution active. Every passing signal will fire to broker.' : ''}`);
   }
   if (parts[0] === 'funded' || parts[0] === 'eval') {
     const acc = at.get(ID);
@@ -1806,87 +1783,6 @@ async function cmdPayout() {
     }
   }
   await sendOwner(lines.join('\n'));
-}
-
-async function cmdBroker(arg) {
-  const le = await import('../lib/live_executor.js');
-  const at = await import('../lib/account_tracker.js');
-  const parts = (arg || '').trim().split(/\s+/).filter(Boolean);
-  const subcmd = parts[0]?.toLowerCase();
-  // Single-account era: alias 'auto' → 'user' so old commands keep working.
-  const resolveId = (raw) => {
-    const id = (raw || '').toLowerCase();
-    if (id === 'auto') return 'user';
-    return at.ACCOUNT_IDS.includes(id) ? id : null;
-  };
-
-  // /broker → status
-  if (!subcmd || subcmd === 'status') {
-    const cfg = le.getConfig();
-    const lines = [header('🔌', 'Broker bridge status')];
-    lines.push('');
-    for (const id of at.ACCOUNT_IDS) {
-      const url = cfg.webhooks[id];
-      lines.push(`*${id.toUpperCase()}*  webhook: ${url ? '✅ set' : '⚫ none'}`);
-      if (url) {
-        const masked = url.replace(/^(https:\/\/[^/]+).*$/, '$1/…' + url.slice(-6));
-        lines.push(`  \`${masked}\``);
-      }
-    }
-    lines.push('');
-    lines.push(`Cooldown: ${cfg.cooldownMs / 1000}s between fires`);
-    lines.push(`Auth:     ${cfg.authHeader ? 'header set' : 'none'}`);
-    lines.push('');
-    lines.push('Commands:');
-    lines.push(bullet('`/broker set-url <https-url>` — set webhook'));
-    lines.push(bullet('`/broker set-url off` — clear webhook'));
-    lines.push(bullet('`/broker test` — fire a test ping'));
-    lines.push(bullet('`/broker set-auth <header>` — set authorization header'));
-    lines.push(bullet('`/broker set-cooldown <ms>` — between-fire cooldown'));
-    lines.push('');
-    lines.push('🛑 *Live fires* require ALL three:');
-    lines.push('  1. `/risk live` (account mode)');
-    lines.push('  2. `/broker set-url <url>`');
-    lines.push('  3. Signal passes risk gates');
-    return sendOwner(lines.join('\n'));
-  }
-
-  if (subcmd === 'set-url') {
-    // Single-account: accept `set-url <url>` (account inferred) OR legacy
-    // `set-url <id> <url>`.
-    let id = at.ACCOUNT_IDS[0];
-    let url = parts[1];
-    if (parts.length >= 3) { id = resolveId(parts[1]) || id; url = parts[2]; }
-    if (!url) return sendOwner('usage: `/broker set-url <https-url|off>`');
-    const r = le.setWebhook(id, url);
-    if (!r.ok) return sendOwner(`⚠️ ${r.error}`);
-    if (r.cleared) return sendOwner(`✅ webhook cleared`);
-    return sendOwner(`✅ webhook set\n_Type \`/broker test\` to verify it works before going live._`);
-  }
-
-  if (subcmd === 'test') {
-    // Single-account: no arg needed; legacy `test <id>` still accepted.
-    const id = resolveId(parts[1]) || at.ACCOUNT_IDS[0];
-    await sendOwner(`⏳ Firing test ping to ${id} webhook…`);
-    const r = await le.testPing(id);
-    if (r.ok) return sendOwner(`✅ Test OK — HTTP ${r.status}\n\`\`\`\n${(r.body || '(no body)').slice(0, 300)}\n\`\`\``);
-    return sendOwner(`⚠️ Test FAILED${r.status ? ` — HTTP ${r.status}` : ''}\n\`\`\`\n${(r.body || r.error || '(no body)').slice(0, 300)}\n\`\`\``);
-  }
-
-  if (subcmd === 'set-auth') {
-    const val = parts.slice(1).join(' ');
-    le.setAuthHeader(val || null);
-    return sendOwner(val ? '✅ auth header set' : '✅ auth header cleared');
-  }
-
-  if (subcmd === 'set-cooldown') {
-    const ms = parseInt(parts[1], 10);
-    if (!isFinite(ms) || ms < 5000) return sendOwner('cooldown must be ≥5000ms');
-    le.setCooldown(ms);
-    return sendOwner(`✅ cooldown set to ${ms}ms`);
-  }
-
-  return sendOwner('unknown subcommand — try `/broker` for help');
 }
 
 async function cmdCleanupGroup(arg) {
@@ -2062,7 +1958,7 @@ const HELP_TOPICS = {
   market: [
     header('📊', 'Market commands'),
     '',
-    kv('/bias', 'multi-instrument bias (gold + nasdaq + S&P)'),
+    kv('/bias', 'multi-instrument bias (gold + nasdaq)'),
     kv('/setups', "what's forming on every strategy now"),
     kv('/setup <num>', 'detail + chart for one strategy'),
     kv('/price', 'live micro-futures prices'),
@@ -2328,9 +2224,7 @@ async function cmdMenu() {
 
 // Inline-button kinds that change state — owner only. 'view' (navigation),
 // and 'act' verbs that just display info, are open to everyone in the group.
-// 'pt' (paper-trader confirm/skip) is owner-only — only the account owner
-// should be able to promote a trade to live on their account.
-const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt', 'pt']);
+const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt']);
 const OWNER_ONLY_ACTS = new Set(['restart', 'shutdown-confirm', 'shutdown-do']);
 
 async function handleCallback(cq) {
@@ -2409,31 +2303,6 @@ async function handleCallback(cq) {
       await editMessage(chatId, messageId, `⏳ Running ${days}-day backtest…`, { keyboard: [] });
       await ackCallback(cq.id);
       return cmdBacktest(String(days));
-    }
-
-    // Paper trader confirm/skip — callback_data format:
-    //   pt:exec:<accountId>:<setupId>   (accountId = 'auto' | 'user')
-    //   pt:skip:<setupId>
-    if (kind === 'pt') {
-      const [verb, ...rest3] = arg.split(':');
-      const pt = await import('../lib/paper_trader.js');
-      const at = await import('../lib/account_tracker.js');
-      if (verb === 'exec') {
-        const accountId = rest3[0];
-        const setupId = rest3.slice(1).join(':');
-        if (!at.ACCOUNT_IDS.includes(accountId)) return ackCallback(cq.id, 'bad account');
-        const acc = at.get(accountId);
-        const promoted = pt.confirm(accountId, setupId);
-        if (!promoted) return ackCallback(cq.id, 'trade not open (may have already closed)');
-        const modeLabel = acc?.mode === 'live' ? 'LIVE BROKER' : 'live-tracked (paper P&L)';
-        return ackCallback(cq.id, `✅ ${accountId.toUpperCase()} → ${modeLabel}`);
-      }
-      if (verb === 'skip') {
-        const setupId = rest3.join(':');
-        pt.skip(setupId);
-        return ackCallback(cq.id, '⏭ skipped');
-      }
-      return ackCallback(cq.id, 'unknown pt verb');
     }
 
     if (kind === 'act') {
@@ -2542,7 +2411,7 @@ const COMMANDS = {
   '/ai': cmdAi, '/clearchat': cmdClearChat,
   '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
   '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
-  '/dd': cmdDd, '/payout': cmdPayout, '/broker': cmdBroker,
+  '/dd': cmdDd, '/payout': cmdPayout,
   '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,
   '/version': cmdVersion, '/dashboard': cmdDashboard,

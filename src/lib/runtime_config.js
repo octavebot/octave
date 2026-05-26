@@ -94,16 +94,6 @@ export function muteRemainingSec() {
 }
 
 /**
- * Always 'send' — the dual-bot architecture (a Mac 'local' bot deferring to a
- * separate cloud bot) is retired. The VPS is the SOLE sender. Mode is kept on
- * runtime-config for backward compat but no longer drives suppression. Only an
- * explicit /mute silences (handled by the caller via isMuted()).
- */
-export function localTelegramBehavior() {
-  return 'send';
-}
-
-/**
  * Async helper to merge any new strategies (from the registry) into the
  * persisted config with their defaultEnabled flag. Called by detector on
  * startup so newly-added strategies appear in the config automatically.

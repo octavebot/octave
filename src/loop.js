@@ -7,7 +7,7 @@ import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
 import * as journal from './lib/trade_journal.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
-import { localTelegramBehavior, refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
+import { refresh as refreshConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as holyAi from './lib/holy_ai.js';
 import * as paperTrader from './lib/paper_trader.js';
@@ -80,22 +80,15 @@ async function tick() {
   // SIGKILLed when the VPS is busy → "detect crashed (exit null)").
   writeDetectSnapshot(results || []);
 
-  // Config + mute state — needed by BOTH the alert path and the follow-up
-  // tracker below, so compute once up front before any early bail. The
-  // follow-up tracker MUST run every tick (open trades have to be monitored
-  // against the live feed even on bars where no strategy produced a result),
-  // so it lives AFTER this block and outside the results-guard below.
+  // Mute state — checked once per tick before any early bail. The follow-up
+  // tracker MUST run every tick (open trades have to be monitored against the
+  // live feed even on bars where no strategy produced a result), so it lives
+  // AFTER this block and outside the results-guard below.
   refreshConfig();
-  const cfg = getConfig();
-  const muted = isMuted();
-  // The Mac 'local' bot is decommissioned, so the cloud-vs-local mode dance is
-  // a vestige — the VPS is the sole sender. localTelegramBehavior returns
-  // 'send'; only an explicit /mute silences.
-  const behavior = localTelegramBehavior();
-  const suppressTelegram = muted || behavior === 'suppress';
+  const suppressTelegram = isMuted();
   if (suppressTelegram) {
     log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
-      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec() })
+      log.info('telegram suppressed (muted)', { muteSecRemaining: muteRemainingSec() })
     );
   }
 

@@ -136,19 +136,9 @@ export function setEnabled(accountId, enabled) {
   return true;
 }
 
-/** Switch an account between 'paper' and 'live'. */
-export function setMode(accountId, mode) {
-  if (!['paper', 'live'].includes(mode)) return false;
-  const acc = state.accounts[accountId];
-  if (!acc) return false;
-  acc.mode = mode;
-  save();
-  return true;
-}
-
 /**
- * Record an open trade. Called by the paper trader (and later, the live
- * executor) when a signal passes the risk gates.
+ * Record an open trade. Called by the paper trader when a signal passes the
+ * risk gates.
  */
 export function openTrade(accountId, trade) {
   // Ensure today bucket is current before incrementing todayTrades.
@@ -207,45 +197,12 @@ export function closeTrade(accountId, setupId, pnlUsd) {
   return true;
 }
 
-/**
- * Mark an open trade as live-executed (user confirmed the trade and either
- * placed it manually in TradingView OR the bot fired it to a broker bridge).
- * Sets `live: true` on the open-trade record. Paper P&L still tracks it,
- * but downstream consumers can filter by `live` to know what's real money.
- */
-export function markLive(accountId, setupId) {
-  const acc = state.accounts[accountId];
-  if (!acc) return false;
-  const t = acc.openTrades.find((x) => x.setupId === setupId);
-  if (!t) return false;
-  t.live = true;
-  t.confirmedAt = Date.now();
-  save();
-  return true;
-}
-
-/**
- * Cancel a still-open paper trade. Removes it without P&L impact — used
- * when the user clicks "Skip" on the Telegram signal card.
- */
-export function cancelOpen(accountId, setupId) {
-  const acc = state.accounts[accountId];
-  if (!acc) return false;
-  const idx = acc.openTrades.findIndex((x) => x.setupId === setupId);
-  if (idx < 0) return false;
-  acc.openTrades.splice(idx, 1);
-  acc.todayTrades = Math.max(0, (acc.todayTrades || 0) - 1);
-  save();
-  return true;
-}
-
 /** Reset an account to fresh state (eval restart). */
 export function reset(accountId) {
   const acc = state.accounts[accountId];
   if (!acc) return false;
   const enabled = acc.enabled;
-  const mode = acc.mode;
-  state.accounts[accountId] = { ...defaultAccount(accountId), enabled, mode };
+  state.accounts[accountId] = { ...defaultAccount(accountId), enabled };
   save();
   return true;
 }

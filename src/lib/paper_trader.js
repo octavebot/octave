@@ -19,7 +19,6 @@
 import { log } from '../logger.js';
 import * as accounts from './account_tracker.js';
 import { computeSize, checkGates, INSTRUMENT_DOLLARS_PER_POINT } from './risk_manager.js';
-import * as liveExecutor from './live_executor.js';
 
 // One log line per executed paper trade — JSONL for /paper trades.
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -81,7 +80,8 @@ export function onTriggered(signal) {
         continue;
       }
       if (sizing.contracts <= 0) continue;
-      // Open the paper trade (tracks P&L regardless of live/paper mode).
+      // Open the paper trade. Paper-only — live execution is intentionally
+      // not wired (user runs the bot as a reference signal source).
       accounts.openTrade(accId, {
         setupId: signal.setupId,
         instrument: signal.instrument,
@@ -93,7 +93,6 @@ export function onTriggered(signal) {
         contracts: sizing.contracts,
         riskUsd: sizing.riskUsdActual,
         strategy: signal.strategy,
-        live: false,  // set true if live execution succeeds below
       });
       logTrade({
         event: 'open', accountId: accId, setupId: signal.setupId,
@@ -101,85 +100,12 @@ export function onTriggered(signal) {
         direction: signal.direction, contracts: sizing.contracts,
         riskUsd: sizing.riskUsdActual, entry: signal.entryPlan.entry,
         stop: signal.entryPlan.stop, t1: signal.entryPlan.t1, t2: signal.entryPlan.t2,
-        mode: acc.mode,
       });
-
-      // LIVE EXECUTION — fully autonomous when account.mode === 'live'.
-      // Three independent conditions ALL required (defense in depth):
-      //   acc.mode === 'live'  (default 'paper'; requires /risk auto live)
-      //   webhook URL configured (/broker set-url <url>)
-      //   gate already passed (above)
-      // Fires asynchronously; result handled via owner Telegram notification.
-      // markLive() called only on success — paper P&L tracks all trades
-      // regardless of execution outcome.
-      if (acc.mode === 'live') {
-        liveExecutor.fireLive(accId, signal, sizing)
-          .then((result) => {
-            if (result.fired) accounts.markLive(accId, signal.setupId);
-            logTrade({
-              event: result.fired ? 'live-fired' : 'live-skipped',
-              accountId: accId, setupId: signal.setupId,
-              reason: result.reason, status: result.status,
-            });
-          })
-          .catch((err) => log.warn('fireLive promise rejected', { err: err.message }));
-      }
     }
   } catch (err) {
     log.warn('paper_trader.onTriggered threw', { err: err.message, setupId: signal?.setupId });
   }
   return decisions;
-}
-
-/**
- * Owner clicked "Execute Auto" or "Execute User" on the signal card.
- * Promotes the existing paper trade to live (still tracked via paper P&L,
- * but marked so downstream knows to consider it real-money).
- *
- * Idempotent: clicking twice has no effect.
- * Returns true if the trade was found and promoted; false if not (e.g.
- * already closed by SL/TP between alert and click).
- */
-export function confirm(accountId, setupId) {
-  try {
-    const acc = accounts.get(accountId);
-    if (!acc) return false;
-    const t = acc.openTrades.find((x) => x.setupId === setupId);
-    if (!t) return false;
-    if (t.live) return true;  // already promoted
-    accounts.markLive(accountId, setupId);
-    logTrade({
-      event: 'promote-live', accountId, setupId,
-      strategy: t.strategy, contracts: t.contracts, riskUsd: t.riskUsd,
-    });
-    return true;
-  } catch (err) {
-    log.warn('paper_trader.confirm threw', { accountId, setupId, err: err.message });
-    return false;
-  }
-}
-
-/**
- * Owner clicked "Skip" on the signal card. Cancels any still-open paper
- * trades for this setup across every enabled account. Idempotent.
- */
-export function skip(setupId) {
-  try {
-    for (const id of accounts.ACCOUNT_IDS) {
-      const acc = accounts.get(id);
-      if (!acc?.enabled) continue;
-      const t = acc.openTrades.find((x) => x.setupId === setupId);
-      if (t) {
-        if (t.live) continue;  // can't skip an already-promoted live trade
-        accounts.cancelOpen(id, setupId);
-        logTrade({ event: 'skip', accountId: id, setupId, strategy: t.strategy });
-      }
-    }
-    return true;
-  } catch (err) {
-    log.warn('paper_trader.skip threw', { setupId, err: err.message });
-    return false;
-  }
 }
 
 /**
