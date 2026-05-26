@@ -138,11 +138,11 @@ export function precheck(ctx) {
     if (direction === 'SHORT') {
       const entry = (last.high + asianHi) / 2;
       const stop = last.high + 0.3 * a;
-      projection = projectTrade({ direction: 'SHORT', entry, stop });
+      projection = projectTrade({ direction: 'SHORT', entry, stop, t1: entry - 1.3 * (stop - entry), t2: asianLo });
     } else if (direction === 'LONG') {
       const entry = (last.low + asianLo) / 2;
       const stop = last.low - 0.3 * a;
-      projection = projectTrade({ direction: 'LONG', entry, stop });
+      projection = projectTrade({ direction: 'LONG', entry, stop, t1: entry + 1.3 * (entry - stop), t2: asianHi });
     }
   }
   return {
