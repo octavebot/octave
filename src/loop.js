@@ -34,7 +34,20 @@ function writeDetectSnapshot(results) {
       entryPlan: r.entryPlan,
     }));
     const body = JSON.stringify(slim);
-    if (body === _lastSnapshotHash) return;  // unchanged → no write
+    // Always refresh the `at` timestamp on disk so consumers (bot.js's
+    // runDetectChild has a 120s staleness gate) know the snapshot is current
+    // even when the slim payload is byte-identical to the prior tick. Without
+    // this, a quiet market with no signal-state changes would let the snapshot
+    // go "stale" while still being CORRECT, triggering a wasteful detect child
+    // spawn every 2 minutes.
+    if (body === _lastSnapshotHash) {
+      try {
+        const at = Date.now();
+        writeFileSync(DETECT_SNAPSHOT + '.tmp', JSON.stringify({ at, results: slim }));
+        renameSync(DETECT_SNAPSHOT + '.tmp', DETECT_SNAPSHOT);
+      } catch {}
+      return;
+    }
     _lastSnapshotHash = body;
     writeFileSync(DETECT_SNAPSHOT + '.tmp', JSON.stringify({ at: Date.now(), results: slim }));
     renameSync(DETECT_SNAPSHOT + '.tmp', DETECT_SNAPSHOT);
