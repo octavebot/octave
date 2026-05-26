@@ -131,7 +131,7 @@ async function buildSignalCard(r, ctx) {
 
   const last = ctx.lastClose;
   const fillsNow = last != null && (r.direction === 'LONG' ? last <= ep.entry : last >= ep.entry);
-  const DOLLAR_PER_POINT = { gold: 10, nasdaq: 2 };
+  const DOLLAR_PER_POINT = { gold: 10, nasdaq: 2, sp: 5 };
   const dpp = DOLLAR_PER_POINT[r.instrument] || 1;
   const perContract = risk * dpp;
   const riskBudget = Number(cfg.riskPerTradeUsd) > 0 ? Number(cfg.riskPerTradeUsd) : 250;
@@ -336,7 +336,7 @@ export async function sendStartup() {
     '🎵   *O C T A V E   O N L I N E*',
     '━━━━━━━━━━━━━━━━━━━━',
     '',
-    `📡  *Watching*   MGC1! · MNQ1!`,
+    `📡  *Watching*   MGC1! · MNQ1! · MES1!`,
     `🎚  *Strategies*   ${enabled}/${total} active`,
     `🤖  *Holy AI*   ${cfg.aiEngine?.enabled !== false ? 'on' : 'off'}`,
     `${muteSec > 0 ? '🔕' : '🔔'}  *Alerts*   ${muteSec > 0 ? `muted ${Math.round(muteSec / 60)}m` : 'live'}`,

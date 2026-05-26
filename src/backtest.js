@@ -53,15 +53,17 @@ export async function getAllStrategies() {
 // All three primary instruments are fetched. Gold-only strategies (Gold/Silver
 // SMT, DXY-driven gold bias, Trinity, etc.) simply produce no triggered results
 // when ctx.instrument !== 'gold'; the walk still runs them.
-const INSTRUMENTS = ['gold', 'nasdaq'];
+const INSTRUMENTS = ['gold', 'nasdaq', 'sp'];
 const INSTRUMENT_META = {
   gold:   { pair: 'XAUUSD', symbol: 'MGC1!', dollarPerPoint: 10 }, // MGC = $10/point
   nasdaq: { pair: 'NQ100',  symbol: 'MNQ1!', dollarPerPoint: 2 },  // MNQ = $2/point
+  sp:     { pair: 'SP500',  symbol: 'MES1!', dollarPerPoint: 5 },  // MES = $5/point
 };
 
 const PANE_REQUESTS = [
   ['gold',   '1'], ['gold',   '5'], ['gold',   '15'], ['gold',   '60'], ['gold',   '1D'],
   ['nasdaq', '5'], ['nasdaq', '15'], ['nasdaq', '60'], ['nasdaq', '1D'],
+  ['sp',     '5'], ['sp',     '15'], ['sp',     '60'], ['sp',     '1D'],
   ['silver', '5'], ['silver', '15'],
   ['dxy',    '1D'],
 ];

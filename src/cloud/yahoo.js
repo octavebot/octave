@@ -21,6 +21,7 @@ const fetch = (url, opts) => fetchWithTimeout(url, opts, 12000);
 const SYMBOLS = {
   gold:    'MGC=F',    // Micro Gold futures      → COMEX:MGC1!
   nasdaq:  'MNQ=F',    // Micro Nasdaq-100 E-mini → CME_MINI:MNQ1!
+  sp:      'MES=F',    // Micro S&P 500 E-mini    → CME_MINI:MES1!
   silver:  'SI=F',     // Silver futures          → COMEX:SI1!  (cross-asset for SMT)
   dxy:     'DX-Y.NYB', // US Dollar Index         → TVC:DXY     (macro bias)
 };

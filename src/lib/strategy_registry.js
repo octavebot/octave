@@ -7,7 +7,7 @@
  *     name: 'EMA Pullback Continuation',   // human label shown in alerts
  *     concept: 'Trend continuation on 20-EMA pullback',
  *     timeframes: ['15', '60'],            // panes the strategy needs
- *     instruments: ['gold', 'nasdaq'],     // (optional) default both
+ *     instruments: ['gold', 'nasdaq', 'sp'], // (optional) default all three
  *     defaultEnabled: true,
  *   };
  *   export const playbook = `# markdown playbook…`;
@@ -81,7 +81,7 @@ export async function loadRegistry() {
         concept: mod.meta.concept,
         window: mod.meta.window || 'Any session hour',
         timeframes: mod.meta.timeframes || ['15'],
-        instruments: mod.meta.instruments || ['gold', 'nasdaq'],
+        instruments: mod.meta.instruments || ['gold', 'nasdaq', 'sp'],
         defaultEnabled: mod.meta.defaultEnabled !== false,
         playbook: mod.playbook || '',
         evaluate: mod.evaluate,

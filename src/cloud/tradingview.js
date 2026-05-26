@@ -21,7 +21,7 @@
 
 import { getPane, status as ingestStatus } from '../lib/tv_ingest.js';
 
-const INSTRUMENTS = new Set(['gold', 'nasdaq']);
+const INSTRUMENTS = new Set(['gold', 'nasdaq', 'sp']);
 
 /**
  * Fetch OHLCV bars for a single asset+timeframe from the bridge cache.

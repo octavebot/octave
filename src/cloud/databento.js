@@ -42,6 +42,7 @@ const DATASET = 'GLBX.MDP3';
 const SYMBOLS = {
   gold:   'MGC.v.0',  // Micro Gold      → COMEX:MGC1!
   nasdaq: 'MNQ.v.0',  // Micro Nasdaq    → CME_MINI:MNQ1!
+  sp:     'MES.v.0',  // Micro S&P 500   → CME_MINI:MES1!
 };
 
 const TF_SECONDS = { '1': 60, '5': 300, '15': 900, '60': 3600, '1D': 86400 };

@@ -297,7 +297,7 @@ async function buildRegimeSnapshot() {
     // spot is fine. Fall back to Yahoo panes if OANDA is unavailable.
     const panes = (await cd.fetchBiasPanes().catch(() => null)) || await cd.fetchAllPanes();
     const lines = [];
-    for (const inst of ['gold', 'nasdaq']) {
+    for (const inst of ['gold', 'nasdaq', 'sp']) {
       const p60 = panes.get(`${inst}|60`);
       const p15 = panes.get(`${inst}|15`);
       const bars = p15?.bars || p60?.bars || [];
