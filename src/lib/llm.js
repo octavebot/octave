@@ -18,7 +18,8 @@
 
 import { fetchWithTimeout } from './http.js';
 // 30s ceiling per LLM call — generous for inference, but a hung provider must
-// never block the engine tick (holy_ai is awaited inside the detection loop).
+// never wedge a caller. (Only user left is strategy_extractor for /addstrategy;
+// the live trading AI was removed.)
 const fetch = (url, opts) => fetchWithTimeout(url, opts, 30000);
 
 const GROQ_MODEL = process.env.OCTAVE_GROQ_MODEL || 'llama-3.3-70b-versatile';

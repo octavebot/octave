@@ -1,8 +1,9 @@
 /**
- * Sentiment — two flavours:
+ * Sentiment — deterministic only (the LLM narrative flavour was removed with
+ * the AI layer).
  *
  *   sentimentSnapshot(ctx)
- *     Deterministic. Combines structural signals into a score in [-1, +1]:
+ *     Combines structural signals into a score in [-1, +1]:
  *       - News blackout proximity (negative if event within 60min)
  *       - Recent triggered direction balance from journal (longs - shorts)
  *       - Price vs daily VWAP (above = +, below = -)
@@ -10,20 +11,14 @@
  *       - HTF trend bias (from regime classifier on daily/4H if available)
  *     Cheap, runs in the auto-journal path. No LLM calls.
  *
- *   sentimentDeep({ ctx, panes })
- *     Calls Gemini with the snapshot + recent triggered setups + upcoming news
- *     and asks for a 2-sentence narrative read. Burns 1 LLM call. Only use on
- *     explicit user request.
- *
- * Both return:
- *   { score: number, label: 'bearish'|'neutral'|'bullish', factors: string[], notes?: string }
+ * Returns:
+ *   { score: number, label: 'bearish'|'neutral'|'bullish', factors: string[] }
  */
 
 import { checkBlackout, nextEvent, upcomingEvents } from './news.js';
 import { rsiLast, vwap } from './indicators.js';
 import { recentTrades } from './trade_journal.js';
 import { classifyRegime } from './regime.js';
-import { oneShot, pickProvider } from './llm.js';
 
 const RECENT_TRIGGER_WINDOW_HRS = 4;
 
@@ -97,37 +92,5 @@ export function sentimentSnapshot(ctx) {
   return { score, label, factors };
 }
 
-/**
- * LLM-powered narrative. Only call on explicit user request — burns 1 Gemini
- * call. Returns the deterministic snapshot fields plus a `notes` narrative.
- */
-export async function sentimentDeep(ctx) {
-  const snap = sentimentSnapshot(ctx);
-  if (!pickProvider()) {
-    return { ...snap, notes: '(no GEMINI_API_KEY — narrative skipped, snapshot only)' };
-  }
-  const upcoming = upcomingEvents(Date.now() / 1000, 12).slice(0, 5)
-    .map((e) => `${e.title} in ${e.minutesAway ?? '?'}m (${e.currency || ''})`);
-  const inst = ctx?.instrument || 'unknown';
-
-  const system = `You are a trading-desk analyst writing a 2-sentence sentiment read for ${inst}.
-Be specific, neutral on tone, and grounded in the inputs only. Do not invent prices or events.
-Reply with ONLY the 2 sentences, no preamble.`;
-  const userText = [
-    `Quantitative snapshot: score=${snap.score.toFixed(2)} (${snap.label}).`,
-    `Factors: ${snap.factors.join('; ') || 'none'}.`,
-    `Upcoming events (next 12h): ${upcoming.length ? upcoming.join('; ') : 'none'}.`,
-    `Instrument: ${inst}.`,
-  ].join('\n');
-
-  try {
-    const reply = await oneShot({
-      system,
-      userParts: [{ kind: 'text', text: userText }],
-      maxTokens: 200,
-    });
-    return { ...snap, notes: reply.trim() };
-  } catch (err) {
-    return { ...snap, notes: `(narrative failed: ${err.message})` };
-  }
-}
+// sentimentDeep (LLM narrative) was removed with the AI layer — only the
+// deterministic sentimentSnapshot above remains (used by trade_enrichment).

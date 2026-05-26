@@ -87,9 +87,9 @@ let ALLOWED_CHATS = new Set();
 
 // Commands that change state — restricted to the owner.
 const OWNER_ONLY = new Set([
-  '/enable', '/disable', '/mute', '/unmute', '/ai-engine', '/aiengine',
-  '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy', '/clearchat',
-  '/ai', '/backtest', '/risk', '/cleanup-group',
+  '/enable', '/disable', '/mute', '/unmute',
+  '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy',
+  '/backtest', '/risk', '/cleanup-group',
 ]);
 
 // Friends in the group chat can only invoke these commands. Anything else
@@ -1597,84 +1597,6 @@ async function cmdJournal(arg) {
   await send(lines.join('\n'));
 }
 
-// ── Holy AI Engine ──
-
-async function cmdCoach(arg) {
-  const days = Math.max(1, Math.min(30, parseInt(arg, 10) || 7));
-  await send(`🧠 Coaching from last ${days}d trades…`);
-  try {
-    const holyAi = await import('../lib/holy_ai.js');
-    const r = await holyAi.coachTrades(days);
-    await send([
-      header('🧠', `Coach · last ${days}d`),
-      '',
-      `_${tgEscape(r.text)}_`,
-      '',
-      r.aiEnabled ? '_Cached per NY date · re-runs once a day._' : '_AI offline._',
-    ].join('\n'));
-  } catch (err) { await send(`⚠️ Coach failed: ${err.message}`); }
-}
-
-async function cmdAiEngine(arg) {
-  const a = (arg || '').trim().toLowerCase();
-  if (a === '') {
-    const holyAi = await import('../lib/holy_ai.js');
-    const c = holyAi.getEngineConfig();
-    return send([
-      header('🤖', `Holy AI Engine · ${c.enabled ? 'ON' : 'OFF'}`),
-      '',
-      kv('Provider', c.provider),
-      kv('Gate threshold', `${Math.round(c.threshold * 100)}% adjusted confidence`),
-      '',
-      'When ON: every triggered setup is re-scored by the LLM, multiplied into the strategy confidence, and dropped from Telegram if below threshold.',
-      '',
-      `Toggle: \`/ai-engine ${c.enabled ? 'off' : 'on'}\``,
-      `Set threshold: \`/ai-engine threshold 0.55\``,
-    ].join('\n'));
-  }
-  if (a === 'on' || a === 'off') {
-    await updateConfig((c) => { c.aiEngine = c.aiEngine || {}; c.aiEngine.enabled = (a === 'on'); return c; });
-    return send(`🤖 Holy AI Engine → ${a === 'on' ? '*ON*' : '*OFF*'}${a === 'off' ? '\n_Raw strategy output reaches Telegram without AI gating._' : ''}`);
-  }
-  if (a.startsWith('threshold')) {
-    const v = Number(a.split(/\s+/)[1]);
-    if (!Number.isFinite(v) || v < 0 || v > 1) return send('Usage: `/ai-engine threshold <0..1>` (e.g. `0.55`)');
-    await updateConfig((c) => { c.aiEngine = c.aiEngine || { enabled: true }; c.aiEngine.threshold = v; return c; });
-    return send(`🤖 Gate threshold → *${Math.round(v * 100)}%*`);
-  }
-  await send('Usage: `/ai-engine` · `/ai-engine on|off` · `/ai-engine threshold 0.55`');
-}
-
-// ── AI (free-form chat) ──
-
-async function cmdAi(arg) {
-  if (!arg) return send('Usage: `/ai <message>` — or send any non-command text.');
-  await runAiChat(arg);
-}
-
-async function cmdClearChat() {
-  const ai = await import('../lib/ai_chat.js');
-  ai.clearSession(replyTarget());
-  await send('🧹 Chat memory cleared. Next message starts a fresh thread.');
-}
-
-async function runAiChat(userText) {
-  const chat = replyTarget();
-  try {
-    await fetch(`https://api.telegram.org/bot${TOKEN}/sendChatAction`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, action: 'typing' }),
-    });
-  } catch {}
-  try {
-    const ai = await import('../lib/ai_chat.js');
-    const reply = await ai.chat(chat, userText);
-    await send(reply);
-  } catch (err) {
-    await send(`⚠️ AI error: ${err.message}\n\nFalls back to commands — send \`/help\`.`);
-  }
-}
-
 // ── System ──
 
 // Service name → (linux systemd unit, mac launchd label). Keep in sync with
@@ -2042,10 +1964,8 @@ const HELP_INDEX = [
   bullet('`/help settings` — mute, backtest'),
   bullet('`/help journal`  — log entries, exits, stats'),
   bullet('`/help system`   — health, perf, restart, diagnose, fix'),
-  bullet('`/help ai`       — free-form chat, file uploads'),
-  bullet('`/help holy`     — Holy AI Engine: coach, gating'),
   '',
-  '_Free-form text goes to AI. `/menu` opens the tap-to-use UI._',
+  '_`/menu` opens the tap-to-use UI._',
 ].join('\n');
 
 const HELP_TOPICS = {
@@ -2122,37 +2042,6 @@ const HELP_TOPICS = {
     kv('/fix [name]', 'auto-heal (e.g. `/fix all`, `/fix bot`)'),
     kv('/restart [name]', 'restart service (all/bot/signals/webui/watchdog)'),
     kv('/shutdown confirm', 'stop everything'),
-  ].join('\n'),
-  ai: [
-    header('🤖', 'AI assistant'),
-    '',
-    'Just send any non-command text and the AI handles it. Examples:',
-    bullet('"I entered MGC long at 4520 with 2 contracts"'),
-    bullet('"what\'s my win rate this week?"'),
-    bullet('"create a strategy that fades RSI extremes on 1h"'),
-    bullet('"run a 14-day backtest"'),
-    '',
-    kv('/ai <message>', 'explicit prompt'),
-    kv('/clearchat', 'wipe AI memory'),
-    '',
-    '_Upload a PDF/image/text file and the AI will extract a strategy from it._',
-  ].join('\n'),
-  holy: [
-    header('✨', 'Holy AI Engine'),
-    '',
-    'Adaptive LLM layer that boosts precision of every strategy:',
-    bullet('Re-scores every triggered setup with the current market regime + news + geometry'),
-    bullet('Multiplies into the strategy confidence to gate weak alerts before they ring your phone'),
-    bullet('Appends a 1-line senior-trader read to each alert'),
-    bullet('Caches per setupId so the LLM is never spent twice'),
-    '',
-    section('Commands'),
-    kv('/coach [days]', 'AI coaching from recent trades (cached daily)'),
-    kv('/ai-engine', 'status · provider · threshold'),
-    kv('/ai-engine on|off', 'master toggle (default ON)'),
-    kv('/ai-engine threshold 0.55', 'gate min adjusted confidence (0..1)'),
-    '',
-    '_When the LLM is offline (no GROQ/GEMINI key), the engine no-ops cleanly — strategies pass through unchanged._',
   ].join('\n'),
 };
 
@@ -2273,18 +2162,15 @@ function buildBacktestView() {
 
 function buildSettingsView() {
   const cfg = loadConfig() || {};
-  const aiOn = cfg.aiEngine?.enabled !== false;
-  const aiThr = Math.round((Number(cfg.aiEngine?.threshold) || 0.55) * 100);
+  const gateThr = Math.round((Number(cfg.aiEngine?.threshold) || 0.55) * 100);
   const text = [
     header('⚙️', 'Settings'),
     '',
     `Chart images · ${cfg.alertChartImages !== false ? '🟢 ON' : '⚫ OFF'}`,
-    `Holy AI      · ${aiOn ? '🟢 ON' : '⚫ OFF'} · gate ${aiThr}%`,
+    `Signal gate  · min confidence ${gateThr}% (win-rate based)`,
   ].join('\n');
   const keyboard = [
     [{ text: cfg.alertChartImages !== false ? '⚫ Disable chart images' : '🟢 Enable chart images', callback_data: `set:charts:${cfg.alertChartImages !== false ? 'off' : 'on'}` }],
-    [{ text: aiOn ? '⚫ Disable Holy AI' : '✨ Enable Holy AI', callback_data: `set:ai:${aiOn ? 'off' : 'on'}` }],
-    [{ text: '🧠 Coach', callback_data: 'act:coach' }],
     [{ text: '🚨 System (restart/shutdown)', callback_data: 'view:system' }],
     [{ text: '« Back', callback_data: 'view:main' }],
   ];
@@ -2382,7 +2268,6 @@ async function handleCallback(cq) {
     if (kind === 'set') {
       const [what, val] = arg.split(':');
       if (what === 'charts') await updateConfig((c) => { c.alertChartImages = (val === 'on'); return c; });
-      else if (what === 'ai') await updateConfig((c) => { c.aiEngine = c.aiEngine || {}; c.aiEngine.enabled = (val === 'on'); return c; });
       else return ackCallback(cq.id, 'unknown setting');
       const v = buildSettingsView();
       await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });
@@ -2405,7 +2290,7 @@ async function handleCallback(cq) {
       const map = {
         bias: cmdBias, setups: cmdActiveSetups, today: cmdToday, last: cmdLast,
         price: cmdPrice, session: cmdSession, health: cmdHealth, dashboard: cmdDashboard,
-        coach: cmdCoach, news: cmdNews,
+        news: cmdNews,
         account: cmdAccount, paper: cmdPaper, dd: cmdDd, payout: cmdPayout,
       };
       if (map[verb]) { await map[verb](); return ackCallback(cq.id); }
@@ -2503,8 +2388,6 @@ const COMMANDS = {
   '/backtest': cmdBacktest,
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
   '/note': cmdJournalNote, '/journal': cmdJournal,
-  '/ai': cmdAi, '/clearchat': cmdClearChat,
-  '/coach': cmdCoach, '/ai-engine': cmdAiEngine, '/aiengine': cmdAiEngine,
   '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
   '/dd': cmdDd, '/payout': cmdPayout,
   '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
@@ -2563,9 +2446,9 @@ export async function handleUpdate(update) {
 
   const m = /^\/([a-z0-9_-]+)(?:@\w+)?(?:\s+([\s\S]+))?$/i.exec(rawText);
   if (!m) {
-    // Free-form text → AI chat, but ONLY in the owner's private DM. In a group
-    // the bot must stay quiet during ordinary conversation (use /ai there).
-    if (msg.chat?.type === 'private' && owner) return runAiChat(rawText);
+    // Non-command text. The bot is rules-based (no AI chat) — nudge the owner
+    // to the command menu; stay silent in groups during ordinary conversation.
+    if (msg.chat?.type === 'private' && owner) return send('Send `/menu` for the control panel or `/help` for commands.');
     return;
   }
   const cmd = '/' + m[1].toLowerCase();

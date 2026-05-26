@@ -116,8 +116,9 @@ async function buildSignalCard(r, ctx) {
   const zLo = ep.entry - band;
   const zHi = ep.entry + band;
 
-  // Confidence: prefer the AI-adjusted figure (what actually gated the send).
-  const conf = r.adjustedConfidence ?? r.confidence ?? 0;
+  // Confidence: the strategy's win-rate-derived base confidence (the figure the
+  // gate uses). No AI adjustment — signals are pure rules-based.
+  const conf = r.confidence ?? 0;
   const confPct = Math.round(conf * 100);
 
   // RR — to the furthest target.
@@ -166,11 +167,6 @@ async function buildSignalCard(r, ctx) {
   if (confirmations.length) {
     lines.push('');
     for (const c of confirmations.slice(0, 4)) lines.push(`  ✓ ${tgEscape(c)}`);
-  }
-
-  if (r.aiCommentary) {
-    lines.push('');
-    lines.push(`🤖 _${tgEscape(r.aiCommentary)}_`);
   }
 
   // Paper-trader block — only shown when the account participated.

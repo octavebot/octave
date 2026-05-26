@@ -10,7 +10,6 @@ import { appendTrade, sessionLabel } from './lib/trade_log.js';
 import { refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { drainCorruptionEvents } from './lib/safe_json.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
-import * as holyAi from './lib/holy_ai.js';
 import * as paperTrader from './lib/paper_trader.js';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -117,15 +116,13 @@ async function tick() {
     return (b.confidence || 0) - (a.confidence || 0);
   });
 
-  // ── HOLY AI ENGINE — score triggered setups before sending ──
-  // Runs once per tick (regime is cached 30min, scores cached per setupId).
-  // If engine is disabled OR LLM is offline, scoreSetup returns a no-op that
-  // preserves the original confidence — trading flow is never blocked.
-  const aiCfg = holyAi.getEngineConfig();
-  let regimeCtx = null;
-  if (aiCfg.enabled) {
-    try { regimeCtx = await holyAi.marketRegime(); } catch (err) { log.warn('holy_ai regime threw', { err: err.message }); }
-  }
+  // ── Confidence gate ──
+  // Gate triggered setups on the strategy's BASE confidence (win-rate-derived
+  // qualityConfidence), which is DATA-VALIDATED: a 1-year backtest shows base
+  // conf <0.55 is net NEGATIVE (−6R) while ≥0.55 is +690R. The threshold lives
+  // in runtime-config (aiEngine.threshold, default 0.55) — kept under that key
+  // for config back-compat; it's a pure confidence gate, no AI/LLM involved.
+  const confThreshold = getConfig().aiEngine?.threshold ?? 0.55;
 
   for (const r of results) {
     const key = dedupKey(r);
@@ -136,46 +133,18 @@ async function tick() {
     // chart (visible via /history), they just don't ring the phone.
     const isTelegramWorthy = r.status === 'triggered';
 
-    // AI scoring gate — only run on triggered setups (rest don't fire Telegram anyway).
-    // The AI score multiplies into r.confidence. Setups below aiCfg.threshold
-    // are dropped from Telegram but still logged (so backtesting + audit shows
-    // what AI filtered out).
-    let aiScore = null;
-    if (isTelegramWorthy && aiCfg.enabled) {
-      try {
-        aiScore = await holyAi.scoreSetup(r, { regime: regimeCtx });
-        r.aiScore = aiScore;
-        r.adjustedConfidence = aiScore.adjusted_confidence;
-      } catch (err) {
-        log.warn('holy_ai scoreSetup threw', { setupId: r.setupId, err: err.message });
-      }
-    }
-    // Gate on the strategy's BASE confidence (win-rate-derived qualityConfidence),
-    // which is DATA-VALIDATED: a 1-year backtest shows base conf <0.55 is net
-    // NEGATIVE (−6R) while ≥0.55 is +690R. The AI's LLM re-score stays ADVISORY
-    // (shown on the card as a read of the setup) but no longer GATES — it was
-    // killing good base-confidence setups (e.g. EMA-CROSS base 0.68 slashed to
-    // 0.34 "low conviction in range") and, unlike base confidence, the LLM
-    // adjustment isn't validated against actual outcomes.
     const baseConf = r.confidence ?? 0;
-    const confGated = isTelegramWorthy && baseConf < aiCfg.threshold;
+    const confGated = isTelegramWorthy && baseConf < confThreshold;
     const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !confGated;
 
     // Mark BEFORE sending, then roll back on failure (avoids dup spam if send is slow)
     dedup.add(key, { strategy: r.strategy, status: r.status });
     let ok = true;
     if (shouldSendTelegram) {
-      // Generate commentary (best-effort; '' if AI offline or fails)
-      if (aiCfg.enabled) {
-        try {
-          const cmt = await holyAi.commentary(r, { regime: regimeCtx });
-          if (cmt?.text) r.aiCommentary = cmt.text;
-        } catch (err) { log.warn('holy_ai commentary threw', { setupId: r.setupId, err: err.message }); }
-      }
       // Paper trader runs BEFORE alerter.send so its per-account decisions
       // can be displayed on the signal card. Decisions array is empty if
-      // no account is enabled, in which case the card looks identical to
-      // pre-Phase-2 behavior. Fully wrapped — never throws.
+      // no account is enabled, in which case the card looks identical.
+      // Fully wrapped — never throws.
       try { r.paperDecisions = paperTrader.onTriggered(r); }
       catch (err) {
         log.warn('paper_trader.onTriggered threw', { setupId: r.setupId, err: err.message });
@@ -190,8 +159,7 @@ async function tick() {
     } else if (confGated) {
       log.info('alert conf-gated', {
         strategy: r.strategy, setupId: r.setupId,
-        confidence: baseConf, threshold: aiCfg.threshold,
-        aiRead: aiScore?.reasoning,  // advisory only — does not gate
+        confidence: baseConf, threshold: confThreshold,
       });
     }
     if (!ok) {
