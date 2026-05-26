@@ -8,8 +8,8 @@
  * the VPS can verify the bridge is the one that pushed it (TV_BRIDGE_SECRET
  * shared between this script's env and the VPS .env).
  *
- * Assumes the user has 2 TV tabs open, each showing one of MGC1! / MNQ1!
- * at the 5-minute timeframe. The bridge auto-discovers them by reading
+ * Assumes the user has 3 TV tabs open, each showing one of MGC1! / MNQ1! /
+ * MES1! at the 5-minute timeframe. The bridge auto-discovers them by reading
  * the active symbol from each CDP target — order doesn't matter, they just
  * need to exist. Higher timeframes (15m) are aggregated from the 5m stream
  * before sending so the VPS receives both panes per symbol.
@@ -76,9 +76,12 @@ if (!currentVpsUrl() || !SECRET) {
 const SYMBOL_TO_ASSET = {
   'MGC1!': 'gold',
   'MNQ1!': 'nasdaq',
+  'MES1!': 'sp',
   // Tolerate the prefixed exchange forms TV sometimes returns
   'COMEX:MGC1!': 'gold',
+  'COMEX_MINI:MGC1!': 'gold',
   'CME_MINI:MNQ1!': 'nasdaq',
+  'CME_MINI:MES1!': 'sp',
 };
 
 // Lifted from the TradingView MCP — internal path to the in-memory bars buffer.
@@ -91,6 +94,7 @@ const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 const REQUIRED = [
   { symbol: 'MGC1!', asset: 'gold' },
   { symbol: 'MNQ1!', asset: 'nasdaq' },
+  { symbol: 'MES1!', asset: 'sp' },
 ];
 const REQUIRED_TF = '5';
 
@@ -288,7 +292,7 @@ async function sendBlindAlert(reason) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: TG_CHAT,
-        text: `⚠️ TV bridge has been unable to push to the VPS for ${Math.round(BLIND_ALERT_MS/60000)}min — bot will be on delayed Yahoo data until this clears.\n\nReason: ${reason}\nFix on the always-on Mac: open TradingView, verify the 2 charts (MGC1!/MNQ1! at 5m), then it should auto-recover.`,
+        text: `⚠️ TV bridge has been unable to push to the VPS for ${Math.round(BLIND_ALERT_MS/60000)}min — bot will be on delayed Yahoo data until this clears.\n\nReason: ${reason}\nFix on the always-on Mac: open TradingView, verify the 3 charts (MGC1!/MNQ1!/MES1! at 5m), then it should auto-recover.`,
         parse_mode: 'Markdown',
       }),
     });
@@ -303,7 +307,7 @@ async function sendDelayedAlert(ageMin) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: TG_CHAT,
-        text: `⚠️ Real-time data looks DELAYED — the bridge is still pushing, but the latest bars are ~${ageMin}min old. This usually means the TradingView CME real-time subscription on the bridge account has lapsed (charts dropped to the 10-min delay).\n\nFix on the bridge Mac: open TradingView, confirm MGC1!/MNQ1! show real-time (no "D" badge), and renew the CME data add-on if needed.`,
+        text: `⚠️ Real-time data looks DELAYED — the bridge is still pushing, but the latest bars are ~${ageMin}min old. This usually means the TradingView CME real-time subscription on the bridge account has lapsed (charts dropped to the 10-min delay).\n\nFix on the bridge Mac: open TradingView, confirm MGC1!/MNQ1!/MES1! show real-time (no "D" badge), and renew the CME data add-on if needed.`,
         parse_mode: 'Markdown',
       }),
     });

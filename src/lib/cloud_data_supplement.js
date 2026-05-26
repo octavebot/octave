@@ -85,10 +85,12 @@ export async function fetchAllPanes() {
       // outage automatically: stale TV pane → null → falls back to Yahoo.
       if (tvConfigured()) {
         try {
-          // TV bridge has a hard 2-tab limit (MGC1!/MNQ1! only) — S&P
-          // intentionally rides Yahoo+OANDA, the same fallback the others use
-          // when TV goes stale. Asking TV for 'sp' would just be wasted work.
-          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq');
+          // Ask TV for every micro the bridge might be pushing. Bridge with
+          // only 2 tabs (gold+nasdaq) silently returns null for sp → falls back
+          // to Yahoo. Bridge with 3 tabs (gold+nasdaq+sp) serves all three
+          // with real-time CME bars — the engine prefers TV whenever available.
+          // Both modes are correct; this just uses TV's sp when it's there.
+          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq' || asset === 'sp');
           const tv = await fetchTradingview(tvRequests).catch(() => new Map());
           for (const [key, p] of tv) {
             if (p?.bars?.length) panes.set(key, p);
@@ -100,8 +102,9 @@ export async function fetchAllPanes() {
           // Friday's close while the 15m is live. Here we keep Yahoo's DEEP
           // history (needed for the daily 20-EMA etc.) and splice the live TV
           // tail on top: deep[time < tvTail[0]] + aggregate(TV 15m).
-          // (S&P excluded — see TV-bridge-limit comment above.)
-          for (const inst of ['gold', 'nasdaq']) {
+          // sp is included opportunistically — if TV doesn't have it the inner
+          // `tv15?.source !== 'tradingview'` guard makes this a no-op for sp.
+          for (const inst of ['gold', 'nasdaq', 'sp']) {
             const tv15 = panes.get(`${inst}|15`);
             if (tv15?.source !== 'tradingview' || !tv15.bars?.length) continue;
             for (const { tf, bucketSec, daily } of [{ tf: '60', bucketSec: 3600 }, { tf: '1D', daily: true }]) {
@@ -224,8 +227,10 @@ export async function fetchBiasPanes() {
       // window isn't deep enough.
       if (tvConfigured()) {
         try {
-          // gold + nasdaq only — TV bridge carries 2 tabs; S&P stays on OANDA.
-          const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15']]).catch(() => new Map());
+          // Request all 3; if the bridge only carries 2 tabs, sp silently
+          // returns null and bias for sp stays on OANDA. With 3 tabs the
+          // engine picks up the extra real-time pane for free.
+          const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15'], ['sp', '15']]).catch(() => new Map());
           const nowSec = Date.now() / 1000;
           for (const [key, p] of tv) {
             const lastBar = p?.bars?.[p.bars.length - 1];
@@ -327,20 +332,19 @@ export async function getLiveFuturesQuotes() {
   // TV-fresh FAST PATH: when the Mac bridge is up it provides the EXACT live
   // futures price, so we skip the (slow, sometimes 5-7s-each) Yahoo + OANDA
   // network fetches entirely — those are only needed to ESTIMATE the price via
-  // basis when TV/Yahoo are stale. This is what kept /price and /session fast
-  // vs the ~20s cold call that hit Yahoo+OANDA for all three instruments.
+  // basis when TV/Yahoo are stale. This is what keeps /price and /session fast
+  // vs the ~20s cold call that hit Yahoo+OANDA for all instruments.
   //
-  // Scope: ONLY the bridge-served instruments (gold + nasdaq). The TV bridge
-  // has a hard 2-tab limit, so sp will NEVER come from TV — including it here
-  // would silently break the fast path on every call (the first sp lookup
-  // returns null → allFresh=false → fall through to the slow path, even when
-  // gold+nasdaq are perfectly fresh). The slow path below handles sp via its
-  // own per-instrument cascade (Yahoo → OANDA+basis), and we merge sp into the
-  // fast-path output before returning.
-  const FAST_INSTS = QUOTE_INSTRUMENTS.filter((i) => i.key !== 'sp');
+  // The bridge MAY or may not carry sp (depends on whether the always-on Mac
+  // has the MES1! tab open). Fast path requires gold+nasdaq from TV; sp comes
+  // from TV when available, else from a single Yahoo fast-call before return.
+  // If gold or nasdaq are missing from TV (rare — bridge restarting), fall
+  // through to the slow per-instrument cascade.
+  const CORE_INSTS = QUOTE_INSTRUMENTS.filter((i) => i.key !== 'sp');
+  const SP_INST = QUOTE_INSTRUMENTS.find((i) => i.key === 'sp');
   if (tvConfigured()) {
     let allFresh = true;
-    for (const inst of FAST_INSTS) {
+    for (const inst of CORE_INSTS) {
       let tvBars = null, tvLast = null;
       try {
         const p = await fetchTvBars(inst.key, '5');
@@ -368,31 +372,54 @@ export async function getLiveFuturesQuotes() {
         stale: false, ageMs: now - tvLast.time * 1000, asOfMs: tvLast.time * 1000,
       });
     }
-    if (allFresh && out.size === FAST_INSTS.length) {
-      // TV-fresh path covers gold+nasdaq. Resolve sp from Yahoo (fast — one
-      // call) so the consumer gets all three live without paying the full
-      // Yahoo+OANDA round-trip for the bridge-served instruments.
-      const spInst = QUOTE_INSTRUMENTS.find((i) => i.key === 'sp');
-      if (spInst) {
+    if (allFresh && out.size === CORE_INSTS.length) {
+      // Core (gold+nasdaq) is fresh from TV. Now sp: prefer TV (if the bridge
+      // also pushes MES1!), else one Yahoo call. Either way, the consumer gets
+      // all three without paying the full Yahoo+OANDA round-trip for cores.
+      if (SP_INST) {
+        let spFromTv = null;
         try {
-          const { meta, bars } = await fetchYahooQuote(spInst.yh);
-          const last = bars?.length ? bars[bars.length - 1] : null;
-          const yPrice = meta?.regularMarketPrice ?? last?.close ?? null;
-          const yTimeMs = last ? last.time * 1000 : null;
-          const yFresh = yTimeMs != null && (now - yTimeMs) < FUTURES_FRESH_MS;
-          const ref = meta?.chartPreviousClose ?? lastPrevClose.sp ?? null;
-          if (ref != null) lastPrevClose.sp = ref;
-          if (yPrice != null) {
-            out.set('sp', {
-              sym: spInst.sym, label: spInst.label, price: yPrice,
-              change: ref != null ? yPrice - ref : null,
-              changePct: (ref != null && ref) ? ((yPrice - ref) / ref) * 100 : null,
-              source: yFresh ? 'yahoo' : 'yahoo-stale',
-              estimated: false, basis: null,
-              stale: !yFresh, ageMs: yTimeMs != null ? now - yTimeMs : null, asOfMs: yTimeMs,
-            });
+          const p = await fetchTvBars('sp', '5');
+          if (p?.bars?.length) spFromTv = { bars: p.bars, last: p.bars[p.bars.length - 1] };
+        } catch { /* no sp from TV — fall through to Yahoo */ }
+        if (spFromTv) {
+          const SESSION_UTC_HOUR = 22;
+          const d = new Date(now);
+          let sessStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), SESSION_UTC_HOUR) / 1000;
+          if (now / 1000 < sessStart) sessStart -= 86400;
+          let priorClose = null;
+          for (let i = spFromTv.bars.length - 1; i >= 0; i--) {
+            if (spFromTv.bars[i].time < sessStart) { priorClose = spFromTv.bars[i].close; break; }
           }
-        } catch { /* sp absent — caller tolerates partial */ }
+          const ref = priorClose ?? lastPrevClose.sp ?? spFromTv.bars[0]?.close ?? null;
+          const change = ref != null ? spFromTv.last.close - ref : null;
+          out.set('sp', {
+            sym: SP_INST.sym, label: SP_INST.label, price: spFromTv.last.close,
+            change, changePct: (change != null && ref) ? (change / ref) * 100 : null,
+            source: 'tradingview', estimated: false, basis: null,
+            stale: false, ageMs: now - spFromTv.last.time * 1000, asOfMs: spFromTv.last.time * 1000,
+          });
+        } else {
+          try {
+            const { meta, bars } = await fetchYahooQuote(SP_INST.yh);
+            const last = bars?.length ? bars[bars.length - 1] : null;
+            const yPrice = meta?.regularMarketPrice ?? last?.close ?? null;
+            const yTimeMs = last ? last.time * 1000 : null;
+            const yFresh = yTimeMs != null && (now - yTimeMs) < FUTURES_FRESH_MS;
+            const ref = meta?.chartPreviousClose ?? lastPrevClose.sp ?? null;
+            if (ref != null) lastPrevClose.sp = ref;
+            if (yPrice != null) {
+              out.set('sp', {
+                sym: SP_INST.sym, label: SP_INST.label, price: yPrice,
+                change: ref != null ? yPrice - ref : null,
+                changePct: (ref != null && ref) ? ((yPrice - ref) / ref) * 100 : null,
+                source: yFresh ? 'yahoo' : 'yahoo-stale',
+                estimated: false, basis: null,
+                stale: !yFresh, ageMs: yTimeMs != null ? now - yTimeMs : null, asOfMs: yTimeMs,
+              });
+            }
+          } catch { /* sp absent — caller tolerates partial */ }
+        }
       }
       quoteCache = { at: Date.now(), map: out };
       return new Map(out);
