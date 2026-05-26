@@ -12,7 +12,6 @@
     "verify": "node src/index.js --verify"
   },
   "dependencies": {
-    "busboy": "^1.6.0",
     "chrome-remote-interface": "^0.34.0"
   }
 }

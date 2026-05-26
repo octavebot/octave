@@ -21,7 +21,6 @@ const CONFIG_FILE = join(__dirname, '..', 'state', 'runtime-config.json');
 
 const DEFAULTS = Object.freeze({
   version: 2,
-  mode: 'auto',
   strategies: {},  // populated by registry on first run
   mute: { untilMs: 0, reason: null },
   alertChartImages: false,  // chart images disabled — text-only signal cards
@@ -38,7 +37,6 @@ export function load() {
     const raw = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
     return {
       version: raw.version ?? DEFAULTS.version,
-      mode: ['auto', 'cloud', 'local'].includes(raw.mode) ? raw.mode : DEFAULTS.mode,
       strategies: { ...(raw.strategies || {}) },
       mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
       alertChartImages: raw.alertChartImages === true,  // default off

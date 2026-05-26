@@ -12,7 +12,7 @@
  * through this module so daily-pnl, peak-balance, history all stay coherent.
  */
 
-import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EVAL_RULES } from './risk_manager.js';
@@ -32,7 +32,6 @@ function defaultAccount(id) {
     id,
     phase: 'eval',                  // 'eval' | 'funded'
     enabled: false,                 // master switch — set via /risk on
-    mode: 'paper',                  // 'paper' | 'live'
     balance: EVAL_RULES.startingBalance,
     peakEodBalance: EVAL_RULES.startingBalance, // EOD trailing DD basis
     dailyPnl: 0,
@@ -74,7 +73,23 @@ function load() {
   }
 }
 
-const state = load();
+let state = load();
+let stateMtimeMs = (() => { try { return statSync(STATE_FILE).mtimeMs; } catch { return 0; } })();
+
+// accounts.json is written from MULTIPLE processes (signal-engine on every TP/SL
+// close, bot on user commands like /risk reset, etc.). Without re-reading from
+// disk before a mutation, an earlier-loaded in-memory snapshot would clobber
+// the other process's writes on save(). Hot reads (`get()`) stay in-memory for
+// speed; mutators call `reloadIfStale()` first so they apply to the fresh state.
+function reloadIfStale() {
+  try {
+    const mt = statSync(STATE_FILE).mtimeMs;
+    if (mt > stateMtimeMs) {
+      state = load();
+      stateMtimeMs = mt;
+    }
+  } catch { /* file missing → keep in-memory state, save() will recreate it */ }
+}
 
 function save() {
   try {
@@ -82,6 +97,7 @@ function save() {
     const tmp = STATE_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify(state, null, 2));
     renameSync(tmp, STATE_FILE);
+    try { stateMtimeMs = statSync(STATE_FILE).mtimeMs; } catch {}
   } catch {
     /* swallow — next save will retry */
   }
@@ -102,6 +118,7 @@ export function getAll() {
  * Safe to call every tick — only acts on day rollover.
  */
 export function maybeRollDay() {
+  reloadIfStale();
   const today = nyParts(Date.now() / 1000).dateKey;
   let changed = false;
   for (const id of ACCOUNT_IDS) {
@@ -129,6 +146,7 @@ export function maybeRollDay() {
 
 /** Toggle whether an account participates in paper/live trading. */
 export function setEnabled(accountId, enabled) {
+  reloadIfStale();
   const acc = state.accounts[accountId];
   if (!acc) return false;
   acc.enabled = !!enabled;
@@ -142,6 +160,7 @@ export function setEnabled(accountId, enabled) {
  */
 export function openTrade(accountId, trade) {
   // Ensure today bucket is current before incrementing todayTrades.
+  // maybeRollDay() already calls reloadIfStale, so state is fresh here.
   maybeRollDay();
   const acc = state.accounts[accountId];
   if (!acc) return false;
@@ -175,6 +194,7 @@ export function closeTrade(accountId, setupId, pnlUsd) {
   // Ensure we're billing P&L to the CURRENT NY day. If the day flipped
   // since the last call, roll yesterday's bucket into history first so
   // this close's P&L lands in today's record, not yesterday's.
+  // maybeRollDay() already calls reloadIfStale, so state is fresh here.
   maybeRollDay();
   const acc = state.accounts[accountId];
   if (!acc) return false;
@@ -199,6 +219,7 @@ export function closeTrade(accountId, setupId, pnlUsd) {
 
 /** Reset an account to fresh state (eval restart). */
 export function reset(accountId) {
+  reloadIfStale();
   const acc = state.accounts[accountId];
   if (!acc) return false;
   const enabled = acc.enabled;

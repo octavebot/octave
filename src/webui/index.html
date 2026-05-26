@@ -523,9 +523,7 @@ async function renderAccounts() {
       const open = a.openTrades || [];
       const profitColor = profit >= 0 ? 'var(--accent)' : '#e85a71';
       const dayColor = (a.dailyPnl || 0) >= 0 ? 'var(--accent)' : '#e85a71';
-      const modeBadge = a.mode === 'live'
-        ? '<span style="background:#4cc38a;color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">LIVE</span>'
-        : '<span style="background:rgba(240,185,65,0.2);color:#f0b941;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">PAPER</span>';
+      const modeBadge = '<span style="background:rgba(240,185,65,0.2);color:#f0b941;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">PAPER</span>';
       return `
         <div style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">

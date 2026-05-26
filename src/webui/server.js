@@ -42,7 +42,6 @@ const PORT = parseInt(process.env.OCTAVE_WEBUI_PORT || '7345', 10);
 
 const DEFAULTS = {
   version: 2,
-  mode: 'auto',
   strategies: {},  // populated from the strategy registry at runtime
   lastUpdated: 0,
 };
@@ -78,7 +77,6 @@ function loadConfig() {
   const raw = readJson(CONFIG_FILE, DEFAULTS);
   return {
     version: raw.version ?? DEFAULTS.version,
-    mode: ['auto', 'cloud', 'local'].includes(raw.mode) ? raw.mode : DEFAULTS.mode,
     strategies: { ...DEFAULTS.strategies, ...(raw.strategies || {}) },
     lastUpdated: raw.lastUpdated || 0,
   };
@@ -354,6 +352,37 @@ function isAllowedHost(host) {
   return false;
 }
 
+// Admin-token guard for state-mutating endpoints. Port 7345 is reachable via
+// the public Cloudflare tunnel, so any POST that changes config / executes a
+// shutdown / uploads a strategy / etc. needs auth. The ingest endpoint stays
+// HMAC-signed (its own scheme). Set OCTAVE_ADMIN_TOKEN in the VPS .env and
+// pass it as the X-Octave-Admin-Token header (or ?admin_token= for ad-hoc curl).
+// If the env var is unset, the guard NO-OPS — backward-compat for local dev or
+// purely-private deployments where the dashboard is not exposed.
+const ADMIN_TOKEN = process.env.OCTAVE_ADMIN_TOKEN || '';
+function adminAuthOk(req, url) {
+  if (!ADMIN_TOKEN) return true; // no token configured → allow (dev mode)
+  const supplied = req.headers['x-octave-admin-token']
+    || url.searchParams.get('admin_token')
+    || '';
+  // Constant-time compare to avoid timing side channels.
+  if (supplied.length !== ADMIN_TOKEN.length) return false;
+  let diff = 0;
+  for (let i = 0; i < supplied.length; i++) diff |= supplied.charCodeAt(i) ^ ADMIN_TOKEN.charCodeAt(i);
+  return diff === 0;
+}
+// POST routes that mutate runtime state. /api/ingest-bars is excluded because
+// it already has stronger HMAC auth.
+const ADMIN_ROUTES = new Set([
+  '/api/config',
+  '/api/user-strategies',
+  '/api/user-strategies/upload',
+  '/api/fix',
+  '/api/shutdown',
+  '/api/launch-tv',
+  '/api/open-logs',
+]);
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
@@ -361,6 +390,11 @@ const server = createServer(async (req, res) => {
     if (!isAllowedHost(host)) {
       res.statusCode = 403;
       return res.end('forbidden');
+    }
+    if (req.method === 'POST' && ADMIN_ROUTES.has(url.pathname) && !adminAuthOk(req, url)) {
+      res.statusCode = 401;
+      res.setHeader('content-type', 'application/json');
+      return res.end(JSON.stringify({ error: 'unauthorized' }));
     }
 
     if (req.method === 'GET' && url.pathname === '/') {
@@ -400,7 +434,7 @@ const server = createServer(async (req, res) => {
         for (const id of ids) {
           const acc = at.get(id);
           out[id] = {
-            enabled: acc.enabled, mode: acc.mode, phase: acc.phase,
+            enabled: acc.enabled, phase: acc.phase,
             balance: acc.balance, dailyPnl: acc.dailyPnl, peakEod: acc.peakEodBalance,
             openTrades: (acc.openTrades || []).map((t) => ({
               ...t,

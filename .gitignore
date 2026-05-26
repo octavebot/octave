@@ -11,8 +11,6 @@ node_modules/
 /src/state/heartbeats/
 /src/state/runtime-config.json
 /src/state/trades.jsonl
-/src/state/cloud-heartbeat.json
-/src/state/cloud-dedup.json
 # Runtime-regen state — per-environment, must NOT be in git. Mac runs of
 # strategy-report would otherwise collide with the VPS's live regen on pull.
 /src/state/backtest-stats.json
@@ -35,8 +33,6 @@ src/state/trade-journal.jsonl
 /src/state/last-detect.json
 /src/state/accounts.json
 /src/state/paper-trades.jsonl
-/src/state/broker-config.json
-/src/state/live-executions.jsonl
 /src/state/tg-sent/
 # Per-strategy PDF playbooks are a runtime artifact: regenerated from the
 # strategy files + backtest-stats.json on every strategy-change deploy. Like

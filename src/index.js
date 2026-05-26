@@ -25,15 +25,14 @@ async function main() {
   }
 
   // Auto-enable the Lucid Flex paper trader for both accounts on startup.
-  // Paper-mode is the default — live execution requires an explicit
-  // `/risk auto live` opt-in. This is the "connect my account" automation:
-  // the user doesn't have to remember to type `/risk on` every time the
-  // service restarts. Wrapped so a bad import never blocks startup.
+  // Auto-enable paper tracking on startup so the user doesn't have to type
+  // `/risk on` after every restart. Wrapped so a bad import never blocks
+  // startup. (Live execution is intentionally not wired — paper only.)
   try {
     const at = await import('./lib/account_tracker.js');
     for (const id of at.ACCOUNT_IDS) {
       const acc = at.get(id);
-      if (acc && !acc.enabled && (acc.mode || 'paper') === 'paper') {
+      if (acc && !acc.enabled) {
         at.setEnabled(id, true);
         log.info('paper trader auto-enabled', { account: id });
       }
