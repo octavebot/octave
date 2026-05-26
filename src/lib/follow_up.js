@@ -98,8 +98,11 @@ export function register(r) {
  * The caller decides what to do (typically send Telegram).
  *
  * @param {number|object} priceOrPriceMap  Either a single price (legacy: assumed
- *   gold) or a map keyed by instrument: `{ gold: 4520.0, nasdaq: 29380, sp: 7430 }`.
- *   Setups are matched against the price for their own instrument.
+ *   gold) or a map keyed by instrument. Each value is either a bare number or a
+ *   bar snapshot `{ last, high, low }` — e.g. `{ gold: { last: 4536, high: 4541,
+ *   low: 4528 } }`. When high/low are supplied, TP/SL/fill detection uses the
+ *   intrabar EXTREME, so a wick that tags a target counts as a hit (not just a
+ *   close-through). Setups are matched against the price for their own instrument.
  * @returns {Array<{setup: object, milestone: 'filled'|'invalidated'|'missed'|'unfilled'|'be'|'tp1'|'tp2'|'runner'|'sl'|'expired'}>}
  */
 export function step(priceOrPriceMap) {
@@ -113,12 +116,21 @@ export function step(priceOrPriceMap) {
   for (const id of Object.keys(state.setups)) {
     const s = state.setups[id];
     if (s.closedAt) continue;
-    const price = priceMap[s.instrument || 'gold'];
-    if (price == null || !Number.isFinite(price)) continue;
+    const q = priceMap[s.instrument || 'gold'];
+    if (q == null) continue;
+    // Accept a bare number (legacy) or a {last,high,low} bar snapshot.
+    const last = typeof q === 'number' ? q : q.last;
+    if (last == null || !Number.isFinite(last)) continue;
+    const hi = (typeof q === 'object' && Number.isFinite(q.high)) ? q.high : last;
+    const lo = (typeof q === 'object' && Number.isFinite(q.low)) ? q.low : last;
 
     const long = s.direction === 'LONG';
-    const fav = (level) => long ? price >= level : price <= level;
-    const adv = (level) => long ? price <= level : price >= level;
+    // favReached: price tagged a FAVORABLE level (TP/BE) — checks the favorable
+    // intrabar extreme (high for longs, low for shorts) so a wick to the target
+    // counts. advReached: price tagged an ADVERSE level (stop, or the limit
+    // entry on the initial pullback) — checks the adverse extreme.
+    const favReached = (level) => long ? hi >= level : lo <= level;
+    const advReached = (level) => long ? lo <= level : hi >= level;
     const bePrice = long ? s.entry + s.risk : s.entry - s.risk;
 
     // ─── PENDING phase — limit order not yet filled ──────────────────────
@@ -128,11 +140,11 @@ export function step(priceOrPriceMap) {
       // Fill: price reached the limit entry (LONG fills on a dip to entry,
       // SHORT on a rally to entry). A setup whose entry is at the current
       // price fills on the very first tick — that is the "market" case.
-      const reachedEntry = long ? price <= s.entry : price >= s.entry;
+      const reachedEntry = advReached(s.entry);
       // Blown through: price gapped past the entry all the way to the stop.
-      const pastStop = adv(s.stop);
+      const pastStop = advReached(s.stop);
       // Missed: price ran to the first target without ever filling.
-      const ranToTarget = s.t1 != null && fav(s.t1);
+      const ranToTarget = s.t1 != null && favReached(s.t1);
       const unfilledExpired = now - (s.placedAt || s.createdAt) > FILL_WINDOW_HOURS * 3600 * 1000;
 
       if (pastStop) {
@@ -169,8 +181,9 @@ export function step(priceOrPriceMap) {
       continue;
     }
 
-    // SL hit closes the trade entirely
-    if (adv(s.stop)) {
+    // SL hit closes the trade entirely. Checked before TPs so an ambiguous bar
+    // that tagged both the stop and a target resolves to the stop (conservative).
+    if (advReached(s.stop)) {
       if (!s.milestonesFired.sl) {
         s.milestonesFired.sl = true;
         s.closedAt = now;
@@ -182,19 +195,19 @@ export function step(priceOrPriceMap) {
     }
 
     // BE-able? Fires once when price reaches +1R favorable
-    if (!s.milestonesFired.be && fav(bePrice)) {
+    if (!s.milestonesFired.be && favReached(bePrice)) {
       s.milestonesFired.be = true;
       events.push({ setup: { ...s }, milestone: 'be' });
       dirty = true;
     }
     // TP1
-    if (!s.milestonesFired.tp1 && s.t1 != null && fav(s.t1)) {
+    if (!s.milestonesFired.tp1 && s.t1 != null && favReached(s.t1)) {
       s.milestonesFired.tp1 = true;
       events.push({ setup: { ...s }, milestone: 'tp1' });
       dirty = true;
     }
     // TP2 — also closes the trade
-    if (!s.milestonesFired.tp2 && s.t2 != null && fav(s.t2)) {
+    if (!s.milestonesFired.tp2 && s.t2 != null && favReached(s.t2)) {
       s.milestonesFired.tp2 = true;
       events.push({ setup: { ...s }, milestone: 'tp2' });
       // If no runner defined, this is the natural close
@@ -205,7 +218,7 @@ export function step(priceOrPriceMap) {
       dirty = true;
     }
     // Runner
-    if (!s.milestonesFired.runner && s.runner != null && s.runner !== s.t2 && fav(s.runner)) {
+    if (!s.milestonesFired.runner && s.runner != null && s.runner !== s.t2 && favReached(s.runner)) {
       s.milestonesFired.runner = true;
       s.closedAt = now;
       s.closedReason = 'runner';

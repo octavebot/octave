@@ -102,6 +102,29 @@ function buildInstrumentCtx(instrument, panesByTf) {
 // 15s window during the trading day.
 let _lastDetect = { sig: null, results: null, bias: null, precheck: null };
 
+// Latest per-instrument price snapshot ({ gold: {last, high, low}, ... }) from
+// the freshest intraday pane. The follow-up tracker reads this DIRECTLY (via
+// getLivePrices) every tick so open trades are monitored against the live feed
+// regardless of whether any strategy emitted a result this bar — and it carries
+// the bar HIGH/LOW so an intrabar TP/SL touch (a wick) is caught, not just a
+// close-through. Set on every detect() call (both the full and short-circuit
+// paths), since panesByTf is available in both.
+let _lastPrices = {};
+function pricesFromPanes(panesByTf) {
+  const out = {};
+  for (const inst of INSTRUMENTS) {
+    const pane = ['5', '15', '60'].map((tf) => panesByTf.get(`${inst}|${tf}`)).find((p) => p?.bars?.length);
+    const b = pane?.bars?.[pane.bars.length - 1];
+    if (b && Number.isFinite(b.close)) {
+      out[inst] = { last: b.close, high: b.high ?? b.close, low: b.low ?? b.close, time: b.time };
+    }
+  }
+  return out;
+}
+
+/** Latest live per-instrument prices ({inst:{last,high,low,time}}) for the follow-up tracker. */
+export function getLivePrices() { return _lastPrices; }
+
 function writeBiasSnapshot(biasByInstrument) {
   if (!biasByInstrument || Object.keys(biasByInstrument).length === 0) return;
   try {
@@ -188,6 +211,7 @@ export async function detect() {
   // Skip the work if no instrument has a new anchor bar since the last call.
   // Returns the cached result array so writeDetectSnapshot keeps the snapshot
   // fresh (with stable contents) and downstream behavior is identical.
+  _lastPrices = pricesFromPanes(panesByTf);
   const sig = signatureOf(panesByTf);
   if (sig && sig === _lastDetect.sig && _lastDetect.results) {
     // Strategies are unchanged (no new Yahoo bar), but the OANDA bias feed

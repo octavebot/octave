@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { log } from './logger.js';
-import { detect } from './detector.js';
+import { detect, getLivePrices } from './detector.js';
 import * as alerter from './alerter.js';
 import * as dedup from './dedup.js';
 import * as sessionTracker from './lib/session_tracker.js';
@@ -214,15 +214,27 @@ async function tick() {
   }
 
   // === Follow-up tracker — fire milestone Telegrams (BE/TP1/TP2/SL/expiry) ===
-  // Build a per-instrument price map from the freshest result for each.
-  // Each setup is matched against the price for ITS instrument so a gold
-  // setup never gets stopped by a nasdaq tick.
-  const priceMap = {};
-  for (const r of results) {
-    if (r.instrument && r.lastClose != null && priceMap[r.instrument] == null) {
-      priceMap[r.instrument] = r.lastClose;
+  // Price the tracker DIRECTLY off the live feed (detector.getLivePrices), not
+  // off this tick's strategy results. Two reasons: (1) an open trade must be
+  // checked every tick regardless of whether a strategy emitted a result for
+  // its instrument this bar — otherwise TP/SL go unmonitored on quiet bars;
+  // (2) getLivePrices carries the bar HIGH/LOW so an intrabar wick to a target
+  // is detected, not just a close-through. Falls back to result lastClose if
+  // the live-price snapshot is somehow empty.
+  let priceMap = getLivePrices() || {};
+  if (Object.keys(priceMap).length === 0) {
+    priceMap = {};
+    for (const r of results) {
+      if (r.instrument && r.lastClose != null && priceMap[r.instrument] == null) {
+        priceMap[r.instrument] = r.lastClose;
+      }
     }
   }
+  // Numeric current price per instrument, for follow-up Telegram + exit price.
+  const lastPrice = (inst) => {
+    const q = priceMap[inst];
+    return q == null ? null : (typeof q === 'number' ? q : q.last);
+  };
   if (Object.keys(priceMap).length > 0) {
     let milestones = [];
     try { milestones = followUp.step(priceMap); }
@@ -231,7 +243,7 @@ async function tick() {
       const inst = m.setup.instrument || 'gold';
       log.info('follow-up milestone', { setupId: m.setup.setupId, milestone: m.milestone, strategy: m.setup.strategy, instrument: inst });
       if (!suppressTelegram) {
-        try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: priceMap[inst] }); }
+        try { await alerter.sendFollowUp({ setup: m.setup, milestone: m.milestone, currentPrice: lastPrice(inst) }); }
         catch (err) { log.warn('follow-up send threw', { err: err.message }); }
       }
       // Record milestone events. The limit lifecycle has three outcome classes:
@@ -262,7 +274,7 @@ async function tick() {
         } else if (m.milestone === 'be') {
           journal.log({ action: 'be', setupId: s.setupId, auto: true });
         } else if (['tp1', 'tp2', 'sl', 'runner', 'expired'].includes(m.milestone)) {
-          const exitPrice = priceMap[inst];
+          const exitPrice = lastPrice(inst);
           const reason = m.milestone === 'runner' ? 'tp2' : m.milestone;
           journal.log({ action: 'out', setupId: s.setupId, reason, price: exitPrice, auto: true });
           const isWin = ['tp1', 'tp2', 'runner'].includes(m.milestone);
@@ -290,7 +302,7 @@ async function tick() {
       // Paper trader close — fully wrapped, never throws into the loop.
       try {
         const inst = m.setup.instrument || 'gold';
-        paperTrader.onMilestone(m.setup, m.milestone, priceMap[inst]);
+        paperTrader.onMilestone(m.setup, m.milestone, lastPrice(inst));
       } catch (err) {
         log.warn('paper_trader.onMilestone threw', { setupId: m.setup.setupId, milestone: m.milestone, err: err.message });
       }
