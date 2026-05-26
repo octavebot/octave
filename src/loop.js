@@ -80,12 +80,27 @@ async function tick() {
   // SIGKILLed when the VPS is busy → "detect crashed (exit null)").
   writeDetectSnapshot(results || []);
 
-  if (!results || results.length === 0) {
-    log.debug('tick (no results)');
-    await sleep(config.pollIntervalMs);
-    return;
+  // Config + mute state — needed by BOTH the alert path and the follow-up
+  // tracker below, so compute once up front before any early bail. The
+  // follow-up tracker MUST run every tick (open trades have to be monitored
+  // against the live feed even on bars where no strategy produced a result),
+  // so it lives AFTER this block and outside the results-guard below.
+  refreshConfig();
+  const cfg = getConfig();
+  const muted = isMuted();
+  // The Mac 'local' bot is decommissioned, so the cloud-vs-local mode dance is
+  // a vestige — the VPS is the sole sender. localTelegramBehavior returns
+  // 'send'; only an explicit /mute silences.
+  const behavior = localTelegramBehavior();
+  const suppressTelegram = muted || behavior === 'suppress';
+  if (suppressTelegram) {
+    log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
+      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec() })
+    );
   }
 
+  // Alert generation only runs when strategies produced results this tick.
+  if (results && results.length > 0) {
   // Sort: highest-priority status first, then highest confidence
   const PRI = { triggered: 0, invalidated: 1, near_trigger: 2, forming: 3 };
   results.sort((a, b) => {
@@ -94,25 +109,6 @@ async function tick() {
     if (pa !== pb) return pa - pb;
     return (b.confidence || 0) - (a.confidence || 0);
   });
-
-  // Refresh config so mode/strategy/mute toggles take effect immediately
-  refreshConfig();
-  const cfg = getConfig();
-  // Mute first — if user told the bot /mute, no telegram at all
-  const muted = isMuted();
-  // Compute effective Telegram behavior:
-  // The Mac 'local' bot is decommissioned, so the cloud-vs-local mode dance is
-  // a vestige — the VPS is the sole sender. localTelegramBehavior now returns
-  // 'send' for both 'cloud' and 'auto' modes (the cloudAlive arg is unused);
-  // only an explicit /mute silences. Kept the function for backward compat
-  // with runtime-config payloads that still carry a mode field.
-  const behavior = localTelegramBehavior();
-  const suppressTelegram = muted || behavior === 'suppress';
-  if (suppressTelegram) {
-    log.throttled('tg-suppressed', 5 * 60 * 1000, () =>
-      log.info('telegram suppressed', { mode: cfg.mode, muted, muteSecRemaining: muteRemainingSec() })
-    );
-  }
 
   // ── HOLY AI ENGINE — score triggered setups before sending ──
   // Runs once per tick (regime is cached 30min, scores cached per setupId).
@@ -212,6 +208,7 @@ async function tick() {
       // shown on the card. No second hook here.
     }
   }
+  } // end alert-generation guard (results present)
 
   // === Follow-up tracker — fire milestone Telegrams (BE/TP1/TP2/SL/expiry) ===
   // Price the tracker DIRECTLY off the live feed (detector.getLivePrices), not
