@@ -195,27 +195,6 @@ async function buildSignalCard(r, ctx) {
 }
 
 /**
- * Build the Telegram inline_keyboard for a signal. One row of [Mark Live]
- * [Skip] for each account with a passing gate. callback_data format:
- *   pt:exec:<accountId>:<setupId>  ·  pt:skip:<setupId>
- * Handler in webui/bot.js.
- */
-function buildSignalKeyboard(r) {
-  if (!Array.isArray(r.paperDecisions) || !r.paperDecisions.length) return null;
-  const row = [];
-  for (const d of r.paperDecisions) {
-    if (!d.gateAllowed || d.contracts <= 0) continue;
-    row.push({
-      text: '✅ Mark Live',
-      callback_data: `pt:exec:${d.accountId}:${r.setupId}`,
-    });
-  }
-  if (!row.length) return null;
-  row.push({ text: '⏭ Skip', callback_data: `pt:skip:${r.setupId}` });
-  return [row];
-}
-
-/**
  * Main entry: send a detector result as a Telegram alert.
  * Only 'triggered' setups get the full card; others get a one-liner.
  */
@@ -231,32 +210,15 @@ export async function send(r, ctx = {}) {
   try { registerFollowUp(r); }
   catch (err) { log.warn('registerFollowUp threw', { err: err.message }); }
 
-  // Two-chat routing:
-  //   GROUP   (config.telegramChatId)       — signal card only, NO paper-
-  //                                            trader metadata, NO buttons.
-  //                                            Friends in this chat see clean
-  //                                            signals to execute themselves.
-  //   OWNER   (config.telegramOwnerChatId)  — full card WITH paper-trader
-  //                                            metadata AND inline buttons
-  //                                            (Execute/Skip). Only the owner
-  //                                            uses these.
-  // If owner chat id == group chat id, we send only ONCE (single combined
-  // card with metadata + buttons — backward compat for single-chat setups).
-  const ownerChat = config.telegramOwnerChatId;
+  // Signal cards go to the GROUP ONLY — paper trader is fully autonomous
+  // (every signal auto-opens a paper trade via paper_trader.onTriggered, and
+  // the follow-up tracker auto-closes it on TP/SL), so there are no manual
+  // Execute / Skip buttons and no need to dual-send to the owner DM. The
+  // paper-trader metadata stays in the card so the group can see what the
+  // bot decided. Operational banners (startup, daily report, session change)
+  // still go to the owner DM via the other send* helpers below.
   const groupChat = config.telegramChatId;
-  const sameChat = String(ownerChat) === String(groupChat);
-
-  // Build the BASE card without paper-trader meta (for group).
-  // r.paperDecisions is temporarily stripped during build, then restored.
-  const decisions = r.paperDecisions;
-  r.paperDecisions = null;
-  const groupCard = await buildSignalCard(r, ctx);
-  r.paperDecisions = decisions;
-  // Owner card includes the meta + keyboard.
-  const ownerCard = sameChat ? groupCard : await buildSignalCard(r, ctx);
-  let ownerKeyboard = null;
-  try { ownerKeyboard = buildSignalKeyboard(r); }
-  catch (err) { log.warn('buildSignalKeyboard threw', { err: err.message }); }
+  const card = await buildSignalCard(r, ctx);
 
   const cfg = getRuntimeConfig();
   const wantPhoto = cfg?.alertChartImages !== false;
@@ -266,36 +228,12 @@ export async function send(r, ctx = {}) {
     catch (err) { log.warn('chart image build threw', { err: err.message }); }
   }
 
-  // Send to group first. No metadata/keyboard. Never blocks owner send.
-  let groupOk = true;
-  if (sameChat) {
-    // Single-chat mode: ONE message with full card + keyboard.
-    if (photoUrl) {
-      groupOk = await postPhoto(photoUrl, ownerCard, ownerKeyboard, groupChat);
-      if (!groupOk) groupOk = await postRaw(ownerCard, ownerKeyboard, groupChat);
-    } else {
-      groupOk = await postRaw(ownerCard, ownerKeyboard, groupChat);
-    }
-    return groupOk;
-  }
-
+  let groupOk;
   if (photoUrl) {
-    groupOk = await postPhoto(photoUrl, groupCard, null, groupChat);
-    if (!groupOk) groupOk = await postRaw(groupCard, null, groupChat);
+    groupOk = await postPhoto(photoUrl, card, null, groupChat);
+    if (!groupOk) groupOk = await postRaw(card, null, groupChat);
   } else {
-    groupOk = await postRaw(groupCard, null, groupChat);
-  }
-
-  // Send to owner DM (best-effort — never causes the group send to be marked failed).
-  try {
-    if (photoUrl) {
-      const ok = await postPhoto(photoUrl, ownerCard, ownerKeyboard, ownerChat);
-      if (!ok) await postRaw(ownerCard, ownerKeyboard, ownerChat);
-    } else {
-      await postRaw(ownerCard, ownerKeyboard, ownerChat);
-    }
-  } catch (err) {
-    log.warn('owner-chat send threw', { err: err.message });
+    groupOk = await postRaw(card, null, groupChat);
   }
   return groupOk;
 }
