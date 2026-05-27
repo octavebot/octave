@@ -54,7 +54,11 @@ declare -A UNIT_FOR_PATH=(
   ["src/loop.js"]="octave-signal-engine"
   ["src/detector.js"]="octave-signal-engine"
   ["src/alerter.js"]="octave-signal-engine"
-  ["src/strategies/"]="octave-signal-engine"
+  # The registry (strategy list) is read by ALL THREE services — engine
+  # (detection), webui (/api/strategies → dashboard), bot (/strategies, /setups).
+  # Restart all three so adding/removing a strategy syncs everywhere, not just
+  # the engine (otherwise the dashboard + bot show a stale strategy list).
+  ["src/strategies/"]="octave-signal-engine octave-webui octave-telegram"
   # src/lib and src/cloud are imported by all three Node services (engine,
   # webui, bot), so any change in those dirs needs to restart all of them —
   # otherwise the shared on-disk state (e.g. tv_bars.json) and the in-memory
