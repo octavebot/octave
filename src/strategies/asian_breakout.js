@@ -8,7 +8,8 @@
 import { ema } from '../lib/indicators.js';
 import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
-import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade, STOP_PAD } from './_helpers.js';
+import { INSTRUMENT_DOLLARS_PER_POINT } from '../lib/risk_manager.js';
 
 export const meta = {
   id: 'ASIAN-BREAKOUT',
@@ -38,6 +39,25 @@ Asian range (20:00 prior NY → 02:00 NY) caps where the night algos sat. London
 ## Take profit
 - TP1: 1.1 x risk  ·  TP2: 1.5 x risk  ·  SL: 1.0 x risk
 `;
+
+// Cap the structural stop (Asian range mid) so the WIDENED dollar risk fits the
+// per-trade budget. The mid sits ~half the Asian range away, so on a wide
+// overnight range the raw stop balloons past the budget (→ 0 contracts → the
+// setup is carded but never traded). A per-instrument cap (via $/point) trims
+// each instrument by exactly enough to fit and is the only cap that fits gold's
+// budget without over-tightening nasdaq/sp (a uniform ATR cap can't do both).
+// Sub-budget setups are returned UNCHANGED, so the strategy's proven majority is
+// untouched — only the wide-range tail (which doesn't trade today anyway) moves.
+// budget=0 disables (raw mid). 0.98 margin guards float-floor so it sizes ≥1.
+const RISK_BUDGET_USD = Number(process.env.ASIAN_STOP_BUDGET_USD ?? 250);
+function cappedAsianStop(entry, asianMid, instrument) {
+  const dpp = INSTRUMENT_DOLLARS_PER_POINT[instrument];
+  if (!(RISK_BUDGET_USD > 0) || !dpp) return asianMid;
+  const dist = Math.abs(entry - asianMid);
+  const maxStructural = 0.98 * RISK_BUDGET_USD / (dpp * (1 + STOP_PAD));
+  if (dist <= maxStructural) return asianMid;
+  return entry + (asianMid >= entry ? 1 : -1) * maxStructural;
+}
 
 export function evaluate(ctx) {
   const out = [];
@@ -86,7 +106,7 @@ export function evaluate(ctx) {
   const margin = 0.12 * a15;
 
   if (trendUp && last.close > asianHi + margin) {
-    const entry = last.close, stop = asianMid, risk = entry - stop;
+    const entry = last.close, stop = cappedAsianStop(entry, asianMid, ctx.instrument), risk = entry - stop;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'LONG', 'asian-bo'),
       direction: 'LONG', timeframe: '15',
@@ -100,7 +120,7 @@ export function evaluate(ctx) {
       entry, stop, t1: entry + 1.2 * asianRange, t2: entry + 1.8 * asianRange,
     }));
   } else if (trendDown && last.close < asianLo - margin) {
-    const entry = last.close, stop = asianMid, risk = stop - entry;
+    const entry = last.close, stop = cappedAsianStop(entry, asianMid, ctx.instrument), risk = stop - entry;
     if (risk > 0) out.push(buildTriggered({
       strategy: meta.id, setupId: dayScopedId(meta.id, ctx.dateKey, 'SHORT', 'asian-bo'),
       direction: 'SHORT', timeframe: '15',
@@ -165,7 +185,7 @@ export function precheck(ctx) {
   let projection = null;
   if (haveAsian && direction) {
     const asianMidLocal = (asianHi + asianLo) / 2;
-    projection = projectTrade({ direction, entry: last.close, stop: asianMidLocal });
+    projection = projectTrade({ direction, entry: last.close, stop: cappedAsianStop(last.close, asianMidLocal, ctx.instrument) });
   }
   return {
     direction,

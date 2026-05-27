@@ -283,8 +283,12 @@ export async function runBacktest(opts = {}) {
     return { error: 'no Yahoo data', stats: {}, panesSummary: [], window: null };
   }
 
-  // Trim every pane to the last `days` days
-  const sinceUnix = Math.floor(Date.now() / 1000) - days * 86400;
+  // Trim every pane to the last `days` days. The reference "now" can be pinned
+  // via BT_NOW (unix seconds) so two runs use an IDENTICAL window — required for
+  // a reproducible A/B (otherwise the wall-clock window shift makes untouched
+  // strategies' trade sets drift between runs). Defaults to live wall-clock.
+  const nowSec = process.env.BT_NOW ? Number(process.env.BT_NOW) : Math.floor(Date.now() / 1000);
+  const sinceUnix = nowSec - days * 86400;
   const panesByTf = trimToWindow(panesByTfFull, sinceUnix);
   if (panesByTf.size === 0) {
     return { error: 'no panes after trim', stats: {}, panesSummary: [], window: null };
