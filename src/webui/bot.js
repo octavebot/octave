@@ -1760,8 +1760,11 @@ async function cmdMode(arg) {
     '',
     fmt('passive'),
     '',
-    'Switch: `/mode aggressive` · `/mode passive`',
-  ].join('\n'));
+    '_Tap to switch — applies on the next signal._',
+  ].join('\n'), { keyboard: [[
+    { text: (active === 'aggressive' ? '✅ AGGRESSIVE' : 'AGGRESSIVE'), callback_data: 'set:mode:aggressive' },
+    { text: (active === 'passive' ? '✅ PASSIVE' : 'PASSIVE'), callback_data: 'set:mode:passive' },
+  ]] });
 }
 
 async function cmdPaper() {
@@ -2198,13 +2201,17 @@ function buildBacktestView() {
 function buildSettingsView() {
   const cfg = loadConfig() || {};
   const gateThr = Math.round((Number(cfg.aiEngine?.threshold) || 0.55) * 100);
+  const mode = (cfg.mode === 'passive' || cfg.mode === 'aggressive') ? cfg.mode : 'aggressive';
+  const other = mode === 'aggressive' ? 'passive' : 'aggressive';
   const text = [
     header('⚙️', 'Settings'),
     '',
+    `Risk mode    · ${mode === 'aggressive' ? '🟢 AGGRESSIVE' : '🔵 PASSIVE'}`,
     `Chart images · ${cfg.alertChartImages !== false ? '🟢 ON' : '⚫ OFF'}`,
     `Signal gate  · min confidence ${gateThr}% (win-rate based)`,
   ].join('\n');
   const keyboard = [
+    [{ text: `🎚 Switch to ${other.toUpperCase()} mode`, callback_data: `set:mode:${other}` }],
     [{ text: cfg.alertChartImages !== false ? '⚫ Disable chart images' : '🟢 Enable chart images', callback_data: `set:charts:${cfg.alertChartImages !== false ? 'off' : 'on'}` }],
     [{ text: '🚨 System (restart/shutdown)', callback_data: 'view:system' }],
     [{ text: '« Back', callback_data: 'view:main' }],
@@ -2303,6 +2310,10 @@ async function handleCallback(cq) {
     if (kind === 'set') {
       const [what, val] = arg.split(':');
       if (what === 'charts') await updateConfig((c) => { c.alertChartImages = (val === 'on'); return c; });
+      else if (what === 'mode') {
+        if (val !== 'passive' && val !== 'aggressive') return ackCallback(cq.id, 'invalid mode');
+        await updateConfig((c) => { c.mode = val; return c; });
+      }
       else return ackCallback(cq.id, 'unknown setting');
       const v = buildSettingsView();
       await editMessage(chatId, messageId, v.text, { keyboard: v.keyboard });

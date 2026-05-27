@@ -144,6 +144,17 @@
   .dot.gray   { background: var(--text-faint); }
 
   /* Strategy toggles */
+  .mode-toggle { display: flex; gap: 10px; }
+  .mode-btn {
+    flex: 1; display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+    padding: 12px 14px; border-radius: 10px; cursor: pointer;
+    background: var(--card, #1a1d24); border: 1px solid var(--border); color: var(--text, #e6e6e6);
+    font-size: 14px; font-weight: 600; transition: all .12s;
+  }
+  .mode-btn:hover { border-color: #888; }
+  .mode-btn.active { border-color: #2ecc71; background: rgba(46,204,113,0.12); box-shadow: 0 0 0 1px #2ecc71 inset; }
+  .mode-btn.passive.active { border-color: #3aa0ff; background: rgba(58,160,255,0.12); box-shadow: 0 0 0 1px #3aa0ff inset; }
+  .mode-btn .mode-sub { font-size: 11px; font-weight: 400; color: var(--text-dim, #8a8f98); }
   .strategy {
     display: flex; align-items: center; justify-content: space-between;
     padding: 14px 4px;
@@ -362,6 +373,12 @@
     <div class="actions" style="margin-top:14px;">
       <button class="btn" onclick="restartService('all')">🔄 Restart All</button>
     </div>
+  </div>
+
+  <!-- RISK MODE -->
+  <div class="card">
+    <h2>Risk Mode</h2>
+    <div id="risk-mode" class="mode-toggle"></div>
   </div>
 
   <!-- STRATEGIES -->
@@ -584,6 +601,21 @@ function renderState(s) {
   const totalStrategies = totalBuiltIn + userStrategies.length;
   subEl.textContent = `${enabledCount}/${totalStrategies} strategies enabled`;
 
+  // Risk mode toggle
+  const rmEl = document.getElementById('risk-mode');
+  if (rmEl) {
+    const mode = (s.config?.mode === 'passive' || s.config?.mode === 'aggressive') ? s.config.mode : 'aggressive';
+    const defs = {
+      aggressive: { label: '🟢 Aggressive', sub: '$200/trade · up to 10c · run to 4R' },
+      passive:    { label: '🔵 Passive',    sub: '$120/trade · up to 3c · TP 1R/2R' },
+    };
+    rmEl.innerHTML = ['aggressive', 'passive'].map((m) =>
+      `<button class="mode-btn ${m} ${m === mode ? 'active' : ''}" data-mode="${m}">`
+      + `<span>${defs[m].label}${m === mode ? ' ✓' : ''}</span>`
+      + `<span class="mode-sub">${defs[m].sub}</span></button>`
+    ).join('');
+  }
+
   // Session
   document.getElementById('session-status').textContent =
     (s.activity.current_session || 'closed').toUpperCase().replace('_', ' ');
@@ -714,6 +746,16 @@ function renderState(s) {
 }
 
 document.addEventListener('click', async (e) => {
+  // Risk-mode switch
+  const mb = e.target.closest('.mode-btn[data-mode]');
+  if (mb) {
+    if (mb.classList.contains('active')) return;
+    const m = mb.dataset.mode;
+    document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b === mb));
+    try { await postConfig({ mode: m }); toast(`✓ Risk mode → ${m.toUpperCase()}`); }
+    catch (err) { toast('✗ Mode switch failed'); }
+    return;
+  }
   // Folder collapse toggle
   const fh = e.target.closest('[data-toggle-folder]');
   if (fh) {

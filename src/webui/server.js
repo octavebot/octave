@@ -75,9 +75,14 @@ function writeJsonAtomic(path, obj) {
 
 function loadConfig() {
   const raw = readJson(CONFIG_FILE, DEFAULTS);
+  // Spread raw FIRST so non-slim fields (mode, aiEngine gate, alertChartImages,
+  // mute) are preserved — both surfaced to /api/state and round-tripped through
+  // saveConfig (otherwise a dashboard config write would wipe them).
   return {
+    ...raw,
     version: raw.version ?? DEFAULTS.version,
     strategies: { ...DEFAULTS.strategies, ...(raw.strategies || {}) },
+    mode: (raw.mode === 'passive' || raw.mode === 'aggressive') ? raw.mode : 'aggressive',
     lastUpdated: raw.lastUpdated || 0,
   };
 }
@@ -282,6 +287,7 @@ async function saveConfig(updates) {
     }
   }
   if (updates.mute && typeof updates.mute === 'object') next.mute = updates.mute;
+  if (updates.mode === 'passive' || updates.mode === 'aggressive') next.mode = updates.mode;
   next.lastUpdated = Date.now();
   writeJsonAtomic(CONFIG_FILE, next);
   return next;
