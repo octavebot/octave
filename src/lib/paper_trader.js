@@ -19,6 +19,7 @@
 import { log } from '../logger.js';
 import * as accounts from './account_tracker.js';
 import { computeSize, checkGates, INSTRUMENT_DOLLARS_PER_POINT } from './risk_manager.js';
+import { getMode, getModeName } from './runtime_config.js';
 
 // One log line per executed paper trade — JSONL for /paper trades.
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -35,13 +36,12 @@ function logTrade(row) {
   } catch { /* never throw from paper logger */ }
 }
 
-// Read the risk-per-trade USD from runtime config; default $250 (0.5% of 50k).
-let _riskPerTradeUsd = 250;
-export function setRiskPerTrade(usd) {
-  const n = Number(usd);
-  if (isFinite(n) && n > 0 && n <= 2000) _riskPerTradeUsd = n;
-}
-export function getRiskPerTrade() { return _riskPerTradeUsd; }
+// Risk per trade is now MODE-driven (see risk_manager MODES + runtime_config).
+// getRiskPerTrade reports the active mode's budget so displays stay accurate.
+// setRiskPerTrade is retained as a no-op shim (legacy /risk callers) — risk is
+// changed by switching mode, not by an ad-hoc dollar override.
+export function setRiskPerTrade(_usd) { /* deprecated — use /mode */ }
+export function getRiskPerTrade() { return getMode().riskPerTrade; }
 
 /**
  * Called by the loop AFTER alerter.send for every triggered signal.
@@ -56,13 +56,14 @@ export function onTriggered(signal) {
   try {
     if (!signal || !signal.entryPlan) return decisions;
     accounts.maybeRollDay();
+    const m = getMode();   // active risk mode (passive|aggressive) — drives sizing + gates
     for (const accId of accounts.ACCOUNT_IDS) {
       const acc = accounts.get(accId);
       if (!acc?.enabled) continue;
-      // Sizing (target risk per trade)
-      const sizing = computeSize(signal, { riskUsd: _riskPerTradeUsd });
-      // Gates
-      const gate = checkGates(acc, signal, sizing);
+      // Sizing — risk budget + per-instrument contract cap from the active mode.
+      const sizing = computeSize(signal, { riskUsd: m.riskPerTrade, maxContracts: m.maxContracts });
+      // Gates — daily breaker + max-open from the active mode.
+      const gate = checkGates(acc, signal, sizing, { maxOpen: m.maxOpen, dailyBreaker: m.dailyBreaker });
       decisions.push({
         accountId: accId,
         contracts: sizing.contracts,

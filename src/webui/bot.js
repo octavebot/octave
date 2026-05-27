@@ -89,7 +89,7 @@ let ALLOWED_CHATS = new Set();
 const OWNER_ONLY = new Set([
   '/enable', '/disable', '/mute', '/unmute',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy',
-  '/backtest', '/risk', '/cleanup-group',
+  '/backtest', '/risk', '/mode', '/cleanup-group',
 ]);
 
 // Friends in the group chat can only invoke these commands. Anything else
@@ -1694,24 +1694,25 @@ async function cmdRisk(arg) {
   // /risk reset      → wipe back to fresh $50k
   if (parts.length === 0 || parts[0] === '' || parts[0] === 'status') {
     const a = at.get(ID);
+    const rc = await import('../lib/runtime_config.js');
+    const m = rc.getMode();
     return sendOwner([
       header('⚙️', 'Risk control'),
       '',
       `*${ID.toUpperCase()}*  ${a.enabled ? '🟢 active' : '⚫ disabled'} · paper · ${a.phase}`,
+      `Mode: *${m.label}* · $${m.riskPerTrade}/trade · up to ${m.maxContracts}c/instrument`,
       '',
       'Commands:',
+      bullet('`/mode` — view/switch passive ↔ aggressive (risk-per-trade lives here)'),
       bullet('`/risk on` · `/risk off` — enable/disable'),
       bullet('`/risk eval` · `/risk funded` — phase'),
-      bullet('`/risk per 250` — set risk-per-trade USD'),
       bullet('`/risk reset` — wipe back to fresh $50k'),
     ].join('\n'));
   }
   if (parts[0] === 'on')  { at.setEnabled(ID, true);  return sendOwner('🟢 enabled'); }
   if (parts[0] === 'off') { at.setEnabled(ID, false); return sendOwner('⚫ disabled'); }
-  if (parts[0] === 'per' && parts[1]) {
-    const pt = await import('../lib/paper_trader.js');
-    pt.setRiskPerTrade(Number(parts[1]));
-    return sendOwner(`risk per trade set to $${pt.getRiskPerTrade()}`);
+  if (parts[0] === 'per') {
+    return sendOwner('risk-per-trade is set by the active *mode* now — use `/mode passive` or `/mode aggressive`. See `/mode`.');
   }
   if (parts[0] === 'reset' || (parts[0] === 'reset' && parts[1] === ID)) {
     at.reset(ID);
@@ -1727,6 +1728,40 @@ async function cmdRisk(arg) {
     return cmdRisk(parts.slice(1).join(' '));
   }
   return sendOwner('unrecognized — try `/risk` with no args for help');
+}
+
+// /mode                  → show both modes + which is active
+// /mode passive          → switch to capital-preservation
+// /mode aggressive       → switch to push-the-target
+async function cmdMode(arg) {
+  const rc = await import('../lib/runtime_config.js');
+  const { MODES } = await import('../lib/risk_manager.js');
+  const want = (arg || '').toLowerCase().trim();
+  if (want === 'passive' || want === 'aggressive') {
+    rc.setMode(want);
+    const m = rc.getMode();
+    return sendOwner(`✅ Mode → *${m.label}*\n$${m.riskPerTrade}/trade · up to ${m.maxContracts}c/instrument · daily stop $${m.dailyBreaker} · ${m.maxOpen} open · TP2≤${m.tp2MaxR}R\n_Takes effect on the next signal (engine refreshes config each tick)._`);
+  }
+  const active = rc.getModeName();
+  const fmt = (key) => {
+    const m = MODES[key];
+    const star = key === active ? ' ◀ ACTIVE' : '';
+    return [
+      `*${m.label}*${star}`,
+      bullet(`$${m.riskPerTrade}/trade · up to ${m.maxContracts} micros/instrument`),
+      bullet(`daily stop $${m.dailyBreaker} · max ${m.maxOpen} open positions`),
+      bullet(`TP1 ${m.tp1R}R def (≤${m.tp1MaxR}R) · TP2 ${m.tp2R}R def (≤${m.tp2MaxR}R) · BE at +1R`),
+    ].join('\n');
+  };
+  return sendOwner([
+    header('🎚', 'Risk mode'),
+    '',
+    fmt('aggressive'),
+    '',
+    fmt('passive'),
+    '',
+    'Switch: `/mode aggressive` · `/mode passive`',
+  ].join('\n'));
 }
 
 async function cmdPaper() {
@@ -2388,7 +2423,7 @@ const COMMANDS = {
   '/backtest': cmdBacktest,
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
   '/note': cmdJournalNote, '/journal': cmdJournal,
-  '/account': cmdAccount, '/risk': cmdRisk, '/paper': cmdPaper,
+  '/account': cmdAccount, '/risk': cmdRisk, '/mode': cmdMode, '/paper': cmdPaper,
   '/dd': cmdDd, '/payout': cmdPayout,
   '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,

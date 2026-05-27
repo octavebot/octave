@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJsonSafe, backupJson } from './safe_json.js';
+import { MODES, DEFAULT_MODE } from './risk_manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,7 +27,7 @@ const DEFAULTS = Object.freeze({
   mute: { untilMs: 0, reason: null },
   alertChartImages: false,  // chart images disabled — text-only signal cards
   aiEngine: { enabled: true, threshold: 0.55 },
-  riskPerTradeUsd: 250,     // $ risked per trade — drives the contract-size line
+  mode: DEFAULT_MODE,       // 'passive' | 'aggressive' — risk/sizing/reward bundle (see MODES)
   lastUpdated: 0,
 });
 
@@ -46,9 +47,20 @@ export function load() {
       enabled: raw.aiEngine?.enabled !== false,
       threshold: Number(raw.aiEngine?.threshold) || 0.55,
     },
-    riskPerTradeUsd: Number(raw.riskPerTradeUsd) > 0 ? Number(raw.riskPerTradeUsd) : 250,
+    mode: (raw.mode === 'passive' || raw.mode === 'aggressive') ? raw.mode : DEFAULT_MODE,
     lastUpdated: raw.lastUpdated || 0,
   };
+}
+
+/** Active mode name ('passive'|'aggressive'). */
+export function getModeName() { return get().mode || DEFAULT_MODE; }
+/** Active mode's full param bundle (riskPerTrade, maxContracts, tp*, …). */
+export function getMode() { return MODES[getModeName()] || MODES[DEFAULT_MODE]; }
+/** Switch mode; persists to disk. Returns the new mode name, or null if invalid. */
+export function setMode(name) {
+  if (name !== 'passive' && name !== 'aggressive') return null;
+  save({ ...get(), mode: name });
+  return name;
 }
 
 /** Cached load. Call refresh() to re-read from disk. */

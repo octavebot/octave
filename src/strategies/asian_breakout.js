@@ -10,6 +10,7 @@ import { atr } from '../lib/structure.js';
 import { nyParts } from '../lib/time.js';
 import { buildTriggered, dayScopedId, qualityConfidence, projectTrade, STOP_PAD } from './_helpers.js';
 import { INSTRUMENT_DOLLARS_PER_POINT } from '../lib/risk_manager.js';
+import { getMode } from '../lib/runtime_config.js';
 
 export const meta = {
   id: 'ASIAN-BREAKOUT',
@@ -49,12 +50,14 @@ Asian range (20:00 prior NY → 02:00 NY) caps where the night algos sat. London
 // Sub-budget setups are returned UNCHANGED, so the strategy's proven majority is
 // untouched — only the wide-range tail (which doesn't trade today anyway) moves.
 // budget=0 disables (raw mid). 0.98 margin guards float-floor so it sizes ≥1.
-const RISK_BUDGET_USD = Number(process.env.ASIAN_STOP_BUDGET_USD ?? 250);
+// Budget = the active mode's per-trade risk (passive $120 / aggressive $200);
+// env ASIAN_STOP_BUDGET_USD overrides it for backtest A/B runs.
 function cappedAsianStop(entry, asianMid, instrument) {
+  const budget = Number(process.env.ASIAN_STOP_BUDGET_USD) || getMode().asianCapUsd || 0;
   const dpp = INSTRUMENT_DOLLARS_PER_POINT[instrument];
-  if (!(RISK_BUDGET_USD > 0) || !dpp) return asianMid;
+  if (!(budget > 0) || !dpp) return asianMid;
   const dist = Math.abs(entry - asianMid);
-  const maxStructural = 0.98 * RISK_BUDGET_USD / (dpp * (1 + STOP_PAD));
+  const maxStructural = 0.98 * budget / (dpp * (1 + STOP_PAD));
   if (dist <= maxStructural) return asianMid;
   return entry + (asianMid >= entry ? 1 : -1) * maxStructural;
 }

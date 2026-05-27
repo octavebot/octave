@@ -7,6 +7,7 @@
 
 import { atr, findSwings, detectSweep } from '../lib/structure.js';
 import { bollinger } from '../lib/indicators.js';
+import { getMode } from '../lib/runtime_config.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -165,17 +166,21 @@ export function buildTriggered({
   //   3. default 1.2R / 1.8R.
   // A supplied price is only honored if it sits on the correct side of entry
   // (a long's targets above, a short's below) — guards against a bad level.
+  // Reward profile is MODE-driven: aggressive lets winners run (TP2 to 4R),
+  // passive banks early (TP1 ~1R, TP2 capped 2R). Defaults + clamp caps come
+  // from the active mode; the floors stay fixed (they only catch broken targets).
+  const m = getMode();
   const fav = (price) => Number.isFinite(price) && sign * (price - entry) > 0;
-  const resolvedT1 = fav(t1) ? t1 : entry + sign * (t1Mult ?? TP1_R) * risk;
-  const resolvedT2 = fav(t2) ? t2 : entry + sign * (t2Mult ?? TP2_R) * risk;
+  const resolvedT1 = fav(t1) ? t1 : entry + sign * (t1Mult ?? m.tp1R) * risk;
+  const resolvedT2 = fav(t2) ? t2 : entry + sign * (t2Mult ?? m.tp2R) * risk;
   // Guard-rail every target into a tradeable RR band (see clampTargetR above).
-  let finalT1 = clampTargetR(entry, sign, risk, resolvedT1, TP1_MIN_R, TP1_MAX_R);
-  let finalT2 = clampTargetR(entry, sign, risk, resolvedT2, TP2_MIN_R, TP2_MAX_R);
+  let finalT1 = clampTargetR(entry, sign, risk, resolvedT1, TP1_MIN_R, m.tp1MaxR);
+  let finalT2 = clampTargetR(entry, sign, risk, resolvedT2, TP2_MIN_R, m.tp2MaxR);
   // TP2 must sit strictly beyond TP1 (a clamped structural level could otherwise
   // collide with or fall short of TP1).
   if (sign * (finalT2 - finalT1) <= 0) {
     const t1r = Math.abs(finalT1 - entry) / risk;
-    finalT2 = entry + sign * Math.min(TP2_MAX_R, t1r + 0.5) * risk;
+    finalT2 = entry + sign * Math.min(m.tp2MaxR, t1r + 0.5) * risk;
   }
   stop = widenedStop;
   return {
@@ -214,16 +219,18 @@ export function projectTrade({ direction, entry, stop, t1, t2, t1Mult, t2Mult })
   const risk = structuralRisk * (1 + STOP_PAD);
   const widenedStop = entry - sign * risk;
   // Mirror buildTriggered's target resolution: explicit price → R-mult → default.
+  // Mode-driven defaults + caps (must match buildTriggered so /setups agrees).
+  const m = getMode();
   const fav = (price) => Number.isFinite(price) && sign * (price - entry) > 0;
-  const rt1raw = fav(t1) ? t1 : entry + sign * (t1Mult ?? TP1_R) * risk;
-  const rt2raw = fav(t2) ? t2 : entry + sign * (t2Mult ?? TP2_R) * risk;
+  const rt1raw = fav(t1) ? t1 : entry + sign * (t1Mult ?? m.tp1R) * risk;
+  const rt2raw = fav(t2) ? t2 : entry + sign * (t2Mult ?? m.tp2R) * risk;
   // Mirror buildTriggered's RR guard-rails so /setups shows the same levels the
   // fired alert will use.
-  let rt1 = clampTargetR(entry, sign, risk, rt1raw, TP1_MIN_R, TP1_MAX_R);
-  let rt2 = clampTargetR(entry, sign, risk, rt2raw, TP2_MIN_R, TP2_MAX_R);
+  let rt1 = clampTargetR(entry, sign, risk, rt1raw, TP1_MIN_R, m.tp1MaxR);
+  let rt2 = clampTargetR(entry, sign, risk, rt2raw, TP2_MIN_R, m.tp2MaxR);
   if (sign * (rt2 - rt1) <= 0) {
     const t1r = Math.abs(rt1 - entry) / risk;
-    rt2 = entry + sign * Math.min(TP2_MAX_R, t1r + 0.5) * risk;
+    rt2 = entry + sign * Math.min(m.tp2MaxR, t1r + 0.5) * risk;
   }
   return {
     entry: round4(entry),

@@ -53,10 +53,39 @@ export const INSTRUMENT_DOLLARS_PER_POINT = Object.freeze({
 });
 
 /**
+ * Risk MODES — switchable bundles of every risk/sizing/reward knob. The active
+ * mode lives in runtime-config (`mode`) and is read by paper_trader (sizing +
+ * gates), _helpers (TP profile), and asian_breakout (stop-cap budget). Switch
+ * live with /mode — the engine refreshes config each tick.
+ *
+ *   PASSIVE     — capital preservation. Small size, low risk, banks profit
+ *                 early (achievable TPs), tight daily stop. Hard to blow.
+ *   AGGRESSIVE  — pushes the $3k target. Up to 10 micros/instrument, lets
+ *                 winners run to 4R. Bigger positions, wider daily stop.
+ *
+ * riskPerTrade = $ risk budget/trade; maxContracts caps size per instrument;
+ * dailyBreaker = eval-only daily stop; maxOpen caps concurrent positions;
+ * asianCapUsd = budget ASIAN-BREAKOUT caps its range-mid stop to (so it sizes
+ * ≥1); tp1R/tp2R are default reward multiples; tp1MaxR/tp2MaxR clamp structural
+ * targets into an achievable band.
+ */
+export const MODES = Object.freeze({
+  passive: Object.freeze({
+    label: 'PASSIVE', riskPerTrade: 120, maxContracts: 3, dailyBreaker: -350,
+    maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0,
+  }),
+  aggressive: Object.freeze({
+    label: 'AGGRESSIVE', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -500,
+    maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0,
+  }),
+});
+export const DEFAULT_MODE = 'aggressive';
+
+/**
  * Compute position size for a signal at a target dollar risk.
  *
  * @param {object} signal  detector result with entryPlan.{ entry, stop, risk }
- * @param {object} opts    { riskUsd, dollarPerPoint }
+ * @param {object} opts    { riskUsd, dollarPerPoint, maxContracts }
  * @returns {{ contracts, riskUsdActual, riskPoints, riskRR }}
  */
 export function computeSize(signal, opts = {}) {
@@ -64,20 +93,24 @@ export function computeSize(signal, opts = {}) {
   const dpp = Number(opts.dollarPerPoint)
     || INSTRUMENT_DOLLARS_PER_POINT[signal.instrument]
     || 1;
+  const maxContracts = Number(opts.maxContracts) > 0 ? Math.floor(opts.maxContracts) : Infinity;
   const ep = signal.entryPlan || {};
   const riskPoints = Math.abs((ep.entry ?? 0) - (ep.stop ?? 0));
   if (!riskPoints || !isFinite(riskPoints) || riskPoints <= 0) {
     return { contracts: 0, riskUsdActual: 0, riskPoints: 0, riskRR: 0, error: 'invalid risk' };
   }
   const dollarPerContract = riskPoints * dpp;
-  // Fractional contracts impossible — round DOWN so we never exceed target risk.
-  const contracts = Math.max(0, Math.floor(riskUsdTarget / dollarPerContract));
+  // Fractional contracts impossible — round DOWN so we never exceed target risk,
+  // then cap at the mode's per-instrument max (e.g. 10 micros in aggressive).
+  const byRisk = Math.max(0, Math.floor(riskUsdTarget / dollarPerContract));
+  const contracts = Math.min(byRisk, maxContracts);
   const riskUsdActual = contracts * dollarPerContract;
   return {
     contracts,
     riskUsdActual,
     riskPoints,
     dollarPerContract,
+    cappedByMax: byRisk > maxContracts,
     riskRR: riskUsdActual / Math.max(1, riskUsdTarget),
   };
 }
@@ -89,7 +122,11 @@ export function computeSize(signal, opts = {}) {
  * Hard reasons block the trade entirely. Soft reasons would block in eval
  * mode but be allowed in funded mode (e.g. consistency rule).
  */
-export function checkGates(account, signal, sizing) {
+export function checkGates(account, signal, sizing, opts = {}) {
+  // Mode-driven gate params (caller passes the active mode's values). Defaults
+  // preserve the original eval rules for any caller that doesn't pass them.
+  const maxOpen = Number(opts.maxOpen) > 0 ? opts.maxOpen : 3;
+  const dailyBreaker = Number.isFinite(opts.dailyBreaker) ? opts.dailyBreaker : EVAL_RULES.dailyCircuitBreaker;
   if (!sizing || sizing.contracts <= 0) {
     return { allowed: false, reason: 'sizing zero contracts', severity: 'hard' };
   }
@@ -109,10 +146,10 @@ export function checkGates(account, signal, sizing) {
   // Max open positions — correlation protection (gold/nasdaq/sp can correlate).
   // Applies in both eval and funded.
   const openCount = (account.openTrades || []).length;
-  if (openCount >= 3) {
+  if (openCount >= maxOpen) {
     return {
       allowed: false, severity: 'hard',
-      reason: `max open positions reached (${openCount}/3)`,
+      reason: `max open positions reached (${openCount}/${maxOpen})`,
     };
   }
   // Funded skips the eval-specific gates below.
@@ -123,16 +160,16 @@ export function checkGates(account, signal, sizing) {
   // for the day if it gets ugly so a bad regime can't blow the eval in one
   // session. Doesn't apply in funded (no buffer balance required).
   const dayPnl = account.dailyPnl || 0;
-  if (dayPnl <= EVAL_RULES.dailyCircuitBreaker) {
+  if (dayPnl <= dailyBreaker) {
     return {
       allowed: false, severity: 'hard',
-      reason: `daily circuit breaker hit: day P&L $${dayPnl.toFixed(0)} ≤ $${EVAL_RULES.dailyCircuitBreaker} (eval-mode safety)`,
+      reason: `daily circuit breaker hit: day P&L $${dayPnl.toFixed(0)} ≤ $${dailyBreaker} (eval-mode safety)`,
     };
   }
-  if ((dayPnl - sizing.riskUsdActual) < EVAL_RULES.dailyCircuitBreaker) {
+  if ((dayPnl - sizing.riskUsdActual) < dailyBreaker) {
     return {
       allowed: false, severity: 'hard',
-      reason: `would breach daily circuit breaker on a stop ($${(dayPnl - sizing.riskUsdActual).toFixed(0)} ≤ $${EVAL_RULES.dailyCircuitBreaker})`,
+      reason: `would breach daily circuit breaker on a stop ($${(dayPnl - sizing.riskUsdActual).toFixed(0)} ≤ $${dailyBreaker})`,
     };
   }
   // Consistency: single largest profitable day ≤ $1500 (50% of $3000 target).

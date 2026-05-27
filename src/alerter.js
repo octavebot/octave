@@ -11,7 +11,7 @@
 import { config } from './config.js';
 import { log } from './logger.js';
 import { buildAlertChartUrl } from './lib/chart_image.js';
-import { get as getRuntimeConfig } from './lib/runtime_config.js';
+import { get as getRuntimeConfig, getMode } from './lib/runtime_config.js';
 import { send as sendViaQueue, startDrain } from './lib/telegram_queue.js';
 import { register as registerFollowUp } from './lib/follow_up.js';
 import { INSTRUMENT_META } from './detector.js';
@@ -135,8 +135,11 @@ async function buildSignalCard(r, ctx) {
   const DOLLAR_PER_POINT = { gold: 10, nasdaq: 2, sp: 5 };
   const dpp = DOLLAR_PER_POINT[r.instrument] || 1;
   const perContract = risk * dpp;
-  const riskBudget = Number(cfg.riskPerTradeUsd) > 0 ? Number(cfg.riskPerTradeUsd) : 250;
-  const contracts = perContract > 0 ? Math.max(1, Math.floor(riskBudget / perContract)) : 0;
+  // Card sizing mirrors the active mode (risk budget + per-instrument cap) so it
+  // matches what the paper trader will actually open.
+  const _m = getMode();
+  const riskBudget = _m.riskPerTrade;
+  const contracts = perContract > 0 ? Math.min(_m.maxContracts, Math.max(1, Math.floor(riskBudget / perContract))) : 0;
   const sizeUsd = contracts * perContract;
 
   const lines = [];
