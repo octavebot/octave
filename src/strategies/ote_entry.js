@@ -9,7 +9,7 @@
 
 import { ema } from '../lib/indicators.js';
 import { atr, findSwings, oteZone } from '../lib/structure.js';
-import { buildTriggered, dayScopedId, qualityConfidence } from './_helpers.js';
+import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
   id: 'OTE-PULLBACK',
@@ -111,4 +111,55 @@ export function evaluate(ctx) {
   }
   for (const r of out) r.confirmations = ['H1 trend', 'OTE 62–79% retrace', 'Rejection in trend'];
   return out;
+}
+
+// Live diagnostics for /setups — mirrors evaluate() so the forming OTE setup
+// shows with the same would-be entry/stop/TP it will fire with.
+export function precheck(ctx) {
+  const tf = ctx.pane('15');
+  const tf60 = ctx.pane('60');
+  if (!tf?.bars || tf.bars.length < 60 || !tf60?.bars || tf60.bars.length < 55) return null;
+  const a = atr(tf.bars, 14);
+  if (!a) return null;
+  const e50arr = ema(tf60.bars, 50);
+  const e50 = e50arr[e50arr.length - 1];
+  const h1 = tf60.bars[tf60.bars.length - 1];
+  const trendUp = e50 != null && h1.close > e50;
+  const trendDown = e50 != null && h1.close < e50;
+  const { highs, lows } = findSwings(tf.bars, 3);
+  const last = tf.bars[tf.bars.length - 1];
+
+  let direction = null, legOk = false, inZone = false, rej = false, projection = null, z = null;
+  if (trendUp && highs.length && lows.length) {
+    direction = 'LONG';
+    const swH = highs[highs.length - 1];
+    const swL = [...lows].reverse().find((l) => l.idx < swH.idx);
+    if (swL) {
+      legOk = (swH.price - swL.price > 1.5 * a) && (tf.bars.length - 1 - swH.idx) <= 12;
+      z = oteZone(swL.price, swH.price, 'bullish');
+      inZone = last.low <= z.shallow && last.low >= z.deep - 0.2 * a;
+      rej = last.close > last.open && last.close > z.deep;
+      if (legOk) projection = projectTrade({ direction, entry: last.close, stop: swL.price - 0.2 * a });
+    }
+  } else if (trendDown && highs.length && lows.length) {
+    direction = 'SHORT';
+    const swL = lows[lows.length - 1];
+    const swH = [...highs].reverse().find((hh) => hh.idx < swL.idx);
+    if (swH) {
+      legOk = (swH.price - swL.price > 1.5 * a) && (tf.bars.length - 1 - swL.idx) <= 12;
+      z = oteZone(swL.price, swH.price, 'bearish');
+      inZone = last.high >= z.shallow && last.high <= z.deep + 0.2 * a;
+      rej = last.close < last.open && last.close < z.deep;
+      if (legOk) projection = projectTrade({ direction, entry: last.close, stop: swH.price + 0.2 * a });
+    }
+  }
+  return {
+    direction, projection,
+    conditions: [
+      { kind: 'gate', label: 'H1 50-EMA trend', met: trendUp || trendDown, value: e50 != null ? `H1 ${h1.close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${e50.toFixed(2)}` : 'no H1 data' },
+      { kind: 'gate', label: 'Fresh impulse leg (≥1.5×ATR, ≤12 bars)', met: legOk, value: z ? `OTE ${Math.min(z.shallow, z.deep).toFixed(2)}–${Math.max(z.shallow, z.deep).toFixed(2)}` : 'no qualifying leg' },
+      { kind: 'trigger', label: 'Price in OTE 62–79% zone', met: inZone, value: z ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)}` : '—' },
+      { kind: 'trigger', label: 'Rejection in trend direction', met: rej, value: rej ? 'confirmed' : 'not yet' },
+    ],
+  };
 }
