@@ -2250,7 +2250,7 @@ async function cmdMenu() {
 const OWNER_ONLY_CALLBACKS = new Set(['strat', 'mute', 'set', 'bt']);
 const OWNER_ONLY_ACTS = new Set(['restart', 'shutdown-confirm', 'shutdown-do']);
 
-async function handleCallback(cq) {
+export async function handleCallback(cq) {
   const chatId = cq.message?.chat?.id;
   if (!isAllowedChat(chatId)) return ackCallback(cq.id, 'unauthorized');
   replyChat = chatId;
