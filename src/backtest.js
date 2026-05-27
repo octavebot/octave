@@ -108,7 +108,7 @@ async function fetchAllPanes(targetDays = 0) {
   return map;
 }
 
-function trimToWindow(panesByTf, sinceUnix) {
+function trimToWindow(panesByTf, sinceUnix, endUnix = Infinity) {
   const out = new Map();
   for (const [k, p] of panesByTf) {
     const tf = k.split('|')[1];
@@ -116,7 +116,7 @@ function trimToWindow(panesByTf, sinceUnix) {
     // reference — they should never be cut by the anchor's lookback window.
     // Keep them full and let `buildCtxFromMaps` cap context size per call.
     if (tf === '1D' || tf === '60') { out.set(k, p); continue; }
-    const bars = p.bars.filter((b) => b.time >= sinceUnix);
+    const bars = p.bars.filter((b) => b.time >= sinceUnix && b.time < endUnix);
     if (bars.length >= 30) out.set(k, { ...p, bars });
   }
   return out;
@@ -288,8 +288,12 @@ export async function runBacktest(opts = {}) {
   // a reproducible A/B (otherwise the wall-clock window shift makes untouched
   // strategies' trade sets drift between runs). Defaults to live wall-clock.
   const nowSec = process.env.BT_NOW ? Number(process.env.BT_NOW) : Math.floor(Date.now() / 1000);
-  const sinceUnix = nowSec - days * 86400;
-  const panesByTf = trimToWindow(panesByTfFull, sinceUnix);
+  // BT_START / BT_END (unix secs) carve an arbitrary anchor window for
+  // train/test splits (HTF context panes stay full — they're auto-capped per
+  // anchor bar at lookup, so no lookahead). Default: last `days` to now.
+  const sinceUnix = process.env.BT_START ? Number(process.env.BT_START) : nowSec - days * 86400;
+  const endUnix = process.env.BT_END ? Number(process.env.BT_END) : Infinity;
+  const panesByTf = trimToWindow(panesByTfFull, sinceUnix, endUnix);
   if (panesByTf.size === 0) {
     return { error: 'no panes after trim', stats: {}, panesSummary: [], window: null };
   }

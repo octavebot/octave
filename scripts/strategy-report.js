@@ -29,7 +29,10 @@ const MAX_TRADES_PER_DAY = 4.0;
   // pre-filter. Filtering on confidence here would be circular: confidence is
   // derived from the win rate, so a low-WR strategy would self-suppress to
   // zero trades and never get measured.
-  const res = await runBacktest({ days, strategies: ids, confMin: 0, step: 3 });
+  // CONF_MIN env simulates the live confidence gate (aiEngine.threshold) so we
+  // can measure book winrate/profit at different gate levels. Default 0 = raw.
+  const confMin = Number(process.env.CONF_MIN) || 0;
+  const res = await runBacktest({ days, strategies: ids, confMin, step: 3 });
   if (res.error) {
     console.error('Backtest error:', res.error);
     process.exit(1);
