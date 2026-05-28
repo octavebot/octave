@@ -20,6 +20,12 @@ export const meta = {
   defaultEnabled: true,
 };
 
+// Pullback band tolerances. Widened 2026-05-28 (0.6→0.9 H1, 0.4→0.6 15m) after a
+// 2-window train/test: net +12.4R (TEST +12.9R / win 51→54%, TRAIN flat) — the
+// tighter bands were missing valid pullbacks. Env-overridable for future tuning.
+const PB_TOL = Number(process.env.BT_DAILY_PBTOL) || 0.9;   // × ATR(H1)
+const PROX_TOL = Number(process.env.BT_DAILY_PROX) || 0.6;  // × ATR(15m)
+
 export const playbook = `# Daily Trend · H1 EMA Pullback
 
 ## Concept
@@ -109,7 +115,7 @@ export function evaluate(ctx) {
   const h20last = h20[h20.length - 1];
   const aH1 = atr(tf60.bars, 14);
   if (h20last == null || !aH1) return out;
-  const tol = 0.6 * aH1;
+  const tol = PB_TOL * aH1;
   const recent5 = tf60.bars.slice(-5);
   const touched = recent5.some((b) => b.low - tol <= h20last && b.high + tol >= h20last);
   if (!touched) return out;
@@ -124,7 +130,7 @@ export function evaluate(ctx) {
   // The current 15m rejection bar must itself touch (within 0.4 × ATR(15m))
   // the H1 20-EMA — proves we're trading the pullback in real time, not a
   // bar that drifted away after the pullback ended.
-  const proximityTol = 0.4 * a15;
+  const proximityTol = PROX_TOL * a15;
   const lastTouches = last.low - proximityTol <= h20last && last.high + proximityTol >= h20last;
   if (!lastTouches) return out;
 
@@ -200,13 +206,13 @@ export function precheck(ctx) {
   const aH1 = atr(tf60.bars, 14);
   const a15 = atr(tf.bars, 14);
   if (h20last == null || !aH1 || !a15) return null;
-  const tol = 0.6 * aH1;
+  const tol = PB_TOL * aH1;
   const recent5 = tf60.bars.slice(-5);
   const h1Touched = recent5.some((b) => b.low - tol <= h20last && b.high + tol >= h20last);
 
   const last = tf.bars[tf.bars.length - 1];
   const prev = tf.bars[tf.bars.length - 2];
-  const proximityTol = 0.4 * a15;
+  const proximityTol = PROX_TOL * a15;
   const lastTouches = last.low - proximityTol <= h20last && last.high + proximityTol >= h20last;
 
   const rejBull = dailyUp && (isEngulfing(prev, last, 'bullish') || isPinBar(last, 'bullish')) && last.close > prev.high && last.close > last.open;
