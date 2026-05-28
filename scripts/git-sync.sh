@@ -102,21 +102,17 @@ done
 # restarted signal-engine via UNIT_FOR_PATH above). playbooks/ is gitignored, so
 # regenerating PDFs here never dirties the tree.
 #
-# Launched as a TRANSIENT systemd unit (not nohup&disown): this oneshot service's
-# cgroup is torn down the moment git-sync exits, which SIGKILLs any plain child
-# (disown doesn't escape the cgroup) — that's why deploy-time regen used to never
-# finish. A transient unit gets its own cgroup and outlives us. 90d (was 365d)
-# completes reliably in RAM; the fixed unit name also prevents two concurrent
-# regens (systemd-run no-ops if it's already running → no shared-cache corruption).
+# Triggered via the pre-installed octave-deploy-regen.service (Type=oneshot,
+# User=octave, EnvironmentFile=.env, runs strategy-report.js 90 + generate-playbooks).
+# It runs in its OWN cgroup so it survives git-sync's exit — a plain nohup&disown
+# child gets SIGKILLed when this oneshot service's cgroup is torn down (that's why
+# deploy regen never finished before), and `systemd-run` is NOT in octave's sudoers
+# (only `systemctl restart octave-*` is). `restart` re-runs it if a prior regen is
+# still going. Backgrounded (&) so we don't block ~10min — the StartUnit job is
+# queued in PID1 regardless of this client.
 if echo "$CHANGED" | grep -qE '^src/strategies/'; then
-  if [ -f /home/octave/.config/trading-alerts/.env ] && command -v systemd-run >/dev/null 2>&1; then
-    LOG "strategies changed — launching detached 90d backtest-stats + PDF regen (transient unit)"
-    systemd-run --quiet --collect --unit=octave-deploy-regen --nice=10 \
-      sudo -u octave bash -lc 'set -a; . /home/octave/.config/trading-alerts/.env; set +a; cd '"$REPO_DIR"'; node --max-old-space-size=420 scripts/strategy-report.js 90 && node scripts/generate-playbooks.js' \
-      || LOG "regen not launched (already running or systemd-run unavailable)"
-  else
-    LOG "strategies changed — regen skipped (no .env or systemd-run)"
-  fi
+  LOG "strategies changed — triggering octave-deploy-regen.service (90d stats + playbooks)"
+  sudo systemctl restart octave-deploy-regen.service >/dev/null 2>&1 &
 fi
 
 LOG "sync complete"
