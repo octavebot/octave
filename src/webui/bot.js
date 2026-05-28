@@ -1264,8 +1264,11 @@ async function cmdActiveSetups() {
       .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
 
     if (ranked.length) {
+      // Show every forming setup so the count in the header matches the rows
+      // listed below it (was capped at 6 while the header reported the full
+      // count — "Forming · 12" but only 6 rows).
       lines.push('', `*Forming · ${ranked.length}*`);
-      for (const r of ranked.slice(0, 6)) {
+      for (const r of ranked) {
         const inst = INST[r.instrument] || r.instrument;
         const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
         const stage = r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
@@ -1287,6 +1290,7 @@ async function cmdActiveSetups() {
       const inst = INST[String(a.setupId || '').split('|')[0]] || '?';
       lines.push(`\`${nyHHmm(a.time)}\` ${inst} · ${tgEscape(a.strategy)} · ${Math.round((a.confidence || 0) * 100)}%`);
     }
+    if (uniq.length > 8) lines.push(`_…+${uniq.length - 8} earlier_`);
   }
 
   if (!open.length && !precheckRows.length && !fired.length) {

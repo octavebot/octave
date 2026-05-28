@@ -21,7 +21,7 @@
  * src/state/follow-ups.json across restarts.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../logger.js';
@@ -45,7 +45,26 @@ function load() {
   return raw?.setups ? raw : { setups: {} };
 }
 
-const state = load();
+let state = load();
+let stateMtimeMs = (() => { try { return statSync(STATE_FILE).mtimeMs; } catch { return 0; } })();
+
+// follow-ups.json is WRITTEN only by the signal-engine (register/step via the
+// loop) but READ by the bot and webui (active() for /setups + the trade panel).
+// Those reader processes load state once at import and would otherwise serve a
+// frozen snapshot forever — a trade the engine has since closed would still show
+// as "Open · live" until the reader restarts (the "/setups shows a stale London
+// trade" bug). Re-read from disk whenever the file has changed under us, before
+// any read or mutation. (prune() also runs on a timer in EVERY importing process,
+// so without this a stale-state bot could clobber the engine's fresh writes.)
+function reloadIfStale() {
+  try {
+    const mt = statSync(STATE_FILE).mtimeMs;
+    if (mt > stateMtimeMs) {
+      state = load();
+      stateMtimeMs = mt;
+    }
+  } catch { /* file missing → keep in-memory state, save() will recreate it */ }
+}
 
 function save() {
   try {
@@ -53,6 +72,7 @@ function save() {
     writeFileSync(tmp, JSON.stringify(state, null, 2));
     renameSync(tmp, STATE_FILE);
     backupJson(STATE_FILE);   // last-known-good for corruption recovery
+    try { stateMtimeMs = statSync(STATE_FILE).mtimeMs; } catch {}
   } catch (err) {
     log.warn('follow-up state save failed', { err: err.message });
   }
@@ -66,6 +86,7 @@ function save() {
  */
 export function register(r) {
   if (!r || r.status !== 'triggered' || !r.entryPlan) return;
+  reloadIfStale();
   if (state.setups[r.setupId]) return;
   const ep = r.entryPlan;
   if (ep.entry == null || ep.stop == null) return;
@@ -106,6 +127,7 @@ export function register(r) {
  * @returns {Array<{setup: object, milestone: 'filled'|'invalidated'|'missed'|'unfilled'|'be'|'tp1'|'tp2'|'runner'|'sl'|'expired'}>}
  */
 export function step(priceOrPriceMap) {
+  reloadIfStale();
   const priceMap = (typeof priceOrPriceMap === 'object' && priceOrPriceMap)
     ? priceOrPriceMap
     : { gold: priceOrPriceMap };
@@ -252,6 +274,7 @@ export function step(priceOrPriceMap) {
 const STALE_OPEN_MS = 36 * 3600 * 1000;
 
 export function active() {
+  reloadIfStale();
   const now = Date.now();
   return Object.values(state.setups)
     .filter((s) => !s.closedAt && (now - (s.createdAt || 0)) < STALE_OPEN_MS)
@@ -260,6 +283,7 @@ export function active() {
 
 /** Drop closed setups >7d old and stale-open setups >36h old. */
 export function prune() {
+  reloadIfStale();
   const now = Date.now();
   const closedCutoff = now - 7 * 24 * 3600 * 1000;
   let removed = 0;
