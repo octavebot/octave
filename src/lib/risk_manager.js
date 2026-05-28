@@ -70,16 +70,19 @@ export const INSTRUMENT_DOLLARS_PER_POINT = Object.freeze({
  * targets into an achievable band.
  */
 export const MODES = Object.freeze({
-  // `gate` = min base confidence to send a signal. 0.65 on both modes — the
-  // validated quality filter (data: base conf <0.55 = net −R, ≥0.65 ≈ 61% book).
-  // Was briefly 0.50 on aggressive for the ≥2.5RR experiment; reverted with it.
+  // `gate` = min base confidence to send a signal. 0.55 on both modes — the
+  // calibrated boundary. A 2-window train/test (2026-05-28) showed 0.65 was
+  // OVER-filtering: it ~halved book profit (TRAIN 177→86R, TEST 300→195R) WITHOUT
+  // raising win rate (~56%/64% either way), by discarding profitable strategies
+  // (VWAP/EMA/ASIAN) whose win-rate-anchored confidence sits <0.65. 0.55 keeps the
+  // token floor (0.50-0.55 band is ~neutral) while letting the full +EV book trade.
   passive: Object.freeze({
     label: 'PASSIVE', riskPerTrade: 120, maxContracts: 3, dailyBreaker: -350,
-    maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0, gate: 0.65,
+    maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0, gate: 0.55,
   }),
   aggressive: Object.freeze({
     label: 'AGGRESSIVE', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -500,
-    maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0, gate: 0.65,
+    maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0, gate: 0.55,
   }),
 });
 export const DEFAULT_MODE = 'aggressive';
