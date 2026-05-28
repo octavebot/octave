@@ -1234,6 +1234,20 @@ async function cmdActiveSetups() {
   const precheckFresh = precheckSnap && (Date.now() - (precheckSnap.at || 0)) <= 180_000;
   const precheckRows = precheckFresh ? (precheckSnap.rows || []) : [];
 
+  // A precheck row can read "READY" while no NEW signal arrives: the setup
+  // already triggered today (dedup is day-scoped → each setup fires once) or is
+  // already an open trade. Map (strategy|instrument|direction) → status so READY
+  // doesn't imply an imminent alert when it has in fact already fired.
+  const takenKey = (strat, inst, dir) => `${strat}|${inst}|${dir}`;
+  const taken = new Map();
+  for (const a of fired) {
+    const parts = String(a.setupId || '').split('|');
+    const inst = parts[0];
+    const dir = parts.find((p) => p === 'LONG' || p === 'SHORT') || '';
+    taken.set(takenKey(a.strategy, inst, dir), `fired ${nyHHmm(a.time)}`);
+  }
+  for (const s of open) taken.set(takenKey(s.strategy, s.instrument, s.direction), 'open trade');
+
   const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
   const lines = [header('🎯', 'Setups')];
 
@@ -1271,7 +1285,9 @@ async function cmdActiveSetups() {
       for (const r of ranked) {
         const inst = INST[r.instrument] || r.instrument;
         const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
-        const stage = r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
+        const already = taken.get(takenKey(r.strategy, r.instrument, r.direction));
+        const stage = already ? `✅ ${already}`
+          : r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
         const proj = r.projection
           ? ` · E${r.projection.entry.toFixed(2)} SL${r.projection.stop.toFixed(2)} TP${r.projection.t2.toFixed(2)} (1:${r.projection.rr2.toFixed(1)}R)`
           : '';
@@ -1317,6 +1333,23 @@ async function cmdSetup(arg) {
     return send(`#${KEY_TO_NUM[key] || 'U'} *${tgEscape(key)}* · not running on any instrument right now. \`/strategies\` shows the enabled list.`);
   }
 
+  // A setup fires once per day (dedup is day-scoped), so a "READY" row whose
+  // setup already triggered today — or is already an open trade — will NOT send
+  // a fresh signal. Flag that so READY isn't read as "an alert is coming".
+  const takenKey = (inst, dir) => `${inst}|${dir}`;
+  const taken = new Map();
+  try {
+    const fu = await import('../lib/follow_up.js');
+    for (const s of fu.active()) if (s.strategy === key) taken.set(takenKey(s.instrument, s.direction), 'open trade');
+  } catch {}
+  const todayKey = nyDateKey(Date.now());
+  for (const a of readAlerts({ limit: 200 })) {
+    if (a.strategy !== key || a.status !== 'triggered' || a.telegram !== 'sent' || nyDateKey(a.time) !== todayKey) continue;
+    const parts = String(a.setupId || '').split('|');
+    const dir = parts.find((p) => p === 'LONG' || p === 'SHORT') || '';
+    if (!taken.has(takenKey(parts[0], dir))) taken.set(takenKey(parts[0], dir), `fired ${nyHHmm(a.time)}`);
+  }
+
   const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
   // Stage + closeness for each instrument row, same scoring as /setups.
   const rendered = rows.map((r) => {
@@ -1349,8 +1382,10 @@ async function cmdSetup(arg) {
   for (const r of rendered) {
     const inst = INST[r.instrument] || r.instrument;
     const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
+    const already = taken.get(takenKey(r.instrument, r.direction));
+    const alreadyNote = already ? ` · ✅ ${already}` : '';
     lines.push('');
-    lines.push(`${r.icon} *${inst}* · ${dir} · _${r.stage}_ · gates ${r.gMet}/${r.gates.length} · triggers ${r.tMet}/${r.tTot}`);
+    lines.push(`${r.icon} *${inst}* · ${dir} · _${r.stage}_${alreadyNote} · gates ${r.gMet}/${r.gates.length} · triggers ${r.tMet}/${r.tTot}`);
     if (r.projection) {
       const p = r.projection;
       lines.push(`   📐 \`E ${p.entry.toFixed(2)}\` · \`SL ${p.stop.toFixed(2)}\` · \`TP1 ${p.t1.toFixed(2)}\` (${p.rr1.toFixed(1)}R) · \`TP2 ${p.t2.toFixed(2)}\` (${p.rr2.toFixed(1)}R) · risk ${p.risk.toFixed(2)}`);
@@ -1388,6 +1423,12 @@ async function cmdSetup(arg) {
     } catch {}
   }
 
+  // Explain why a READY row may not alert: a setup fires once per day, so once
+  // it has triggered (or become an open trade) it stays "READY" on the chart but
+  // won't re-signal until the next session.
+  if (rendered.some((r) => r.stage === 'READY' && taken.get(takenKey(r.instrument, r.direction)))) {
+    lines.push('', '_✅ = this setup already fired today. Each setup alerts once per day, so it won\'t re-signal until the next session even while it still reads READY._');
+  }
   lines.push('', `_\`/playbook ${KEY_TO_NUM[key] || key}\` for the full ruleset · \`/setups\` for all strategies._`);
 
   if (chartUrl) {
