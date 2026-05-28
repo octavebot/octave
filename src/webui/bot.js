@@ -1259,7 +1259,8 @@ async function cmdActiveSetups() {
       const stage = Object.keys(s.milestonesFired || {}).filter((m) => m !== 'be').pop()?.toUpperCase()
         || (s.milestonesFired?.be ? 'BE' : 'live');
       const skipped = !paperOpenIds.has(s.setupId) ? ' · ⚠️ paper skipped' : '';
-      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* ${(s.instrument || '').toUpperCase()} · @${s.entry} · ${stage}${skipped}`);
+      const px = Number.isFinite(s.entry) ? Number(s.entry).toFixed(2) : s.entry;
+      lines.push(`${dir} *${tgEscape(s.strategy || '?')}* ${(s.instrument || '').toUpperCase()} · @${px} · ${stage}${skipped}`);
     }
   }
 

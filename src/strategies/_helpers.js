@@ -103,13 +103,11 @@ export function lastBearishRejection(bars) {
   return false;
 }
 
-// Uniform reward profile for every strategy. The strategy supplies entry +
-// a structural stop; we widen that stop by STOP_PAD × its distance so market
-// noise doesn't stop us out before the move plays. Targets are multiples of
-// the *widened* risk — so every winning trade banks at least 1.2R (TP1),
-// running to 1.8R (TP2).
-export const TP1_R = 1.2;
-export const TP2_R = 1.8;
+// Stop padding for every strategy: the strategy supplies entry + a structural
+// stop; we widen that stop by STOP_PAD × its distance so market noise doesn't
+// stop us out before the move plays. Reward targets are resolved per strategy
+// (RR_PROFILE in aggressive / mode tp1R-tp2R defaults in passive — see below),
+// as multiples of the WIDENED risk.
 export const STOP_PAD = 0.35;  // widen the structural stop by 35%
 
 // Reward guard-rails (in R, measured against the WIDENED risk). Every target —

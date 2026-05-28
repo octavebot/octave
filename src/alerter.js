@@ -3,7 +3,7 @@
  *
  * The triggered-setup card is a clean box-drawing layout designed for fast
  * execution on a live account: direction, instrument, entry zone, TP1/TP2,
- * SL, trade data, the strategy + its confirmations, and the Holy AI opinion.
+ * SL, trade data, and the strategy + its confirmations.
  *
  * Exports: send, sendFollowUp, sendStartup, sendSessionChange, sendDown.
  */
@@ -337,7 +337,7 @@ export async function sendStartup() {
     '',
     `📡  *Watching*   MGC1! · MNQ1! · MES1!`,
     `🎚  *Strategies*   ${enabled}/${total} active`,
-    `🤖  *Holy AI*   ${cfg.aiEngine?.enabled !== false ? 'on' : 'off'}`,
+    `🎛  *Mode*   ${(cfg.mode || 'aggressive').toUpperCase()}`,
     `${muteSec > 0 ? '🔕' : '🔔'}  *Alerts*   ${muteSec > 0 ? `muted ${Math.round(muteSec / 60)}m` : 'live'}`,
     '',
     '_Send /menu for the control panel._',
