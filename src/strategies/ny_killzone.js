@@ -173,13 +173,13 @@ export function precheck(ctx) {
   if (gap && a && direction) {
     const entry = (gap.top + gap.bottom) / 2;
     const stop = direction === 'LONG' ? gap.bottom - 0.5 * a : gap.top + 0.5 * a;
-    projection = projectTrade({ direction, entry, stop });
+    projection = projectTrade({ strategy: meta.id, direction, entry, stop });
   }
   return {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET, skips LONG at 09:00)', met: inWindow && !longH09Skip, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${longH09Skip ? ' (LONG×09 muted)' : ''}` },
+      { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET, skips LONG at 09:00)', met: inWindow && !longH09Skip, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${longH09Skip ? ' (LONG×09 muted)' : ''}` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',met: !!direction, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
       { kind: 'gate',    label: 'Tradable FVG present',         met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side}, size ${(gap.top - gap.bottom).toFixed(2)} / min ${minGap.toFixed(2)})` : 'no recent FVG' },
       { kind: 'trigger', label: 'Retrace into gap',             met: !!inRetrace, value: gap ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs gap ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)}` : 'no gap to retrace' },

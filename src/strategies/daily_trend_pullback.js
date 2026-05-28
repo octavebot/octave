@@ -216,9 +216,9 @@ export function precheck(ctx) {
   let projection = null;
   if (direction && a15) {
     if (direction === 'LONG') {
-      projection = projectTrade({ direction, entry: last.close, stop: last.low - 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
+      projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: last.low - 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
     } else {
-      projection = projectTrade({ direction, entry: last.close, stop: last.high + 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
+      projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: last.high + 0.4 * a15, t1Mult: 1.5, t2Mult: 3.0 });
     }
   }
   const np = nyParts(ctx.barTime);
@@ -227,7 +227,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Not chop (07:00–14:00 + 16:00–20:00 ET skip)', met: !inChop, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${inChop ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'Not chop (07:00–14:00 + 16:00–20:00 ET skip)', met: !inChop, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${inChop ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'Daily trend established',  met: !!direction && trendStrong, value: `D1 ${dlast.close.toFixed(2)} ${dailyUp ? '>' : dailyDown ? '<' : '≈'} EMA20 ${d20last.toFixed(2)} · sep ${trendStrength.toFixed(2)} (min ${(0.3 * aD).toFixed(2)})` },
       { kind: 'gate',    label: 'H1 pulled back to 20-EMA', met: h1Touched, value: `H1 EMA20 ${h20last.toFixed(2)} · tol ±${tol.toFixed(2)} · ${h1Touched ? 'touched in last 5 bars' : 'no touch in last 5 bars'}` },
       { kind: 'trigger', label: '15m bar at pullback now',  met: lastTouches, value: `15m ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs H1 EMA20 ${h20last.toFixed(2)} (tol ±${proximityTol.toFixed(2)})` },

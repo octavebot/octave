@@ -139,7 +139,7 @@ export function precheck(ctx) {
       z = oteZone(swL.price, swH.price, 'bullish');
       inZone = last.low <= z.shallow && last.low >= z.deep - 0.2 * a;
       rej = last.close > last.open && last.close > z.deep;
-      if (legOk) projection = projectTrade({ direction, entry: last.close, stop: swL.price - 0.2 * a });
+      if (legOk) projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: swL.price - 0.2 * a });
     }
   } else if (trendDown && highs.length && lows.length) {
     direction = 'SHORT';
@@ -150,7 +150,7 @@ export function precheck(ctx) {
       z = oteZone(swL.price, swH.price, 'bearish');
       inZone = last.high >= z.shallow && last.high <= z.deep + 0.2 * a;
       rej = last.close < last.open && last.close < z.deep;
-      if (legOk) projection = projectTrade({ direction, entry: last.close, stop: swH.price + 0.2 * a });
+      if (legOk) projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: swH.price + 0.2 * a });
     }
   }
   return {

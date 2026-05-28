@@ -138,18 +138,18 @@ export function precheck(ctx) {
     if (direction === 'SHORT') {
       const entry = (last.high + asianHi) / 2;
       const stop = last.high + 0.3 * a;
-      projection = projectTrade({ direction: 'SHORT', entry, stop, t1: entry - 1.3 * (stop - entry), t2: asianLo });
+      projection = projectTrade({ strategy: meta.id, direction: 'SHORT', entry, stop, t1: entry - 1.3 * (stop - entry), t2: asianLo });
     } else if (direction === 'LONG') {
       const entry = (last.low + asianLo) / 2;
       const stop = last.low - 0.3 * a;
-      projection = projectTrade({ direction: 'LONG', entry, stop, t1: entry + 1.3 * (entry - stop), t2: asianHi });
+      projection = projectTrade({ strategy: meta.id, direction: 'LONG', entry, stop, t1: entry + 1.3 * (entry - stop), t2: asianHi });
     }
   }
   return {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range built',                met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
       { kind: 'trigger', label: 'Sweep of Asian range',             met: swept, value: sweepHi ? `high ${asianHi.toFixed(2)} swept by ${(last.high - asianHi).toFixed(2)}` : sweepLo ? `low ${asianLo.toFixed(2)} swept by ${(asianLo - last.low).toFixed(2)}` : haveAsian ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)} inside` : '—' },
       { kind: 'trigger', label: 'Body closed back inside',          met: swept, value: haveAsian ? `close ${last.close.toFixed(2)} vs hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },

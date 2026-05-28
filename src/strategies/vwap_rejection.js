@@ -194,9 +194,9 @@ export function precheck(ctx) {
   let projection = null;
   if (direction && a) {
     if (direction === 'LONG') {
-      projection = projectTrade({ direction, entry: last.close, stop: last.low - 0.5 * a });
+      projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: last.low - 0.5 * a });
     } else if (direction === 'SHORT') {
-      projection = projectTrade({ direction, entry: last.close, stop: last.high + 0.5 * a });
+      projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: last.high + 0.5 * a });
     }
   }
   // D1 numbers for the macro-support readout — only relevant on longs but
@@ -213,7 +213,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',   met: !!direction, value: e50last != null ? `H1 ${h1.close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${e50last.toFixed(2)}` : 'no EMA yet' },
       { kind: 'gate',    label: 'D1 macro support (longs only)',    met: !trendUp || dailyUp, value: !trendUp ? 'n/a (short setup)' : d1Close != null && d1Ema20 != null ? `D1 ${d1Close.toFixed(2)} ${dailyUp ? '>' : '<'} EMA20 ${d1Ema20.toFixed(2)}` : 'no D1 data' },
       { kind: 'gate',    label: 'Tape alive (15m ATR ≥ 0.4×H1)',    met: !!tapeOk, value: a && a60 ? `ATR15 ${a.toFixed(2)} / ATR60 ${a60.toFixed(2)} (${ratio})` : '—' },

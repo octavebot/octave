@@ -188,13 +188,13 @@ export function precheck(ctx) {
   let projection = null;
   if (haveAsian && direction) {
     const asianMidLocal = (asianHi + asianLo) / 2;
-    projection = projectTrade({ direction, entry: last.close, stop: cappedAsianStop(last.close, asianMidLocal, ctx.instrument) });
+    projection = projectTrade({ strategy: meta.id, direction, entry: last.close, stop: cappedAsianStop(last.close, asianMidLocal, ctx.instrument) });
   }
   return {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET, skips 02 & 05)', met: inWindow, value: `${np.h}:${String(np.m||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET, skips 02 & 05)', met: inWindow, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
       { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
       { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `body ${body.toFixed(2)} / range ${range.toFixed(2)} = ${Math.round(body/range*100)}% (min ${Math.round(bodyMin*100)}%)` },

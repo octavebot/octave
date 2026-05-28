@@ -140,6 +140,56 @@ function clampTargetR(entry, sign, risk, price, minR, maxR) {
   return entry + sign * r * risk;
 }
 
+// ── Per-strategy RR reward profile ──────────────────────────────────────
+// User directive: every strategy targets the highest RR the data supports,
+// NEVER below 2.5RR. These TP1/TP2 multiples (off the widened risk) were chosen
+// by a 90d RR sweep and confirmed out-of-sample (train/test both halves
+// net-positive). They OVERRIDE each strategy's authored structural targets +
+// the mode defaults so the whole book runs one validated reward standard.
+//   3.0R strategies keep climbing in profit past 2.5R (trend/breakout);
+//   2.5R strategies peak at/just above the floor.
+const DEFAULT_RR = [2.5, 4.0]; // any strategy not listed still respects the 2.5RR floor
+const RR_PROFILE = {
+  'ASIAN-BREAKOUT': [3.0, 4.0],
+  'DAILY-TREND-PB': [3.0, 4.0],
+  'EMA-CROSS':      [3.0, 4.0],
+  'LONDON-SWEEP':   [2.5, 4.0],
+  'NY-FVG':         [2.5, 4.0],
+  'OTE-PULLBACK':   [2.5, 4.0],
+  'VWAP-REJ':       [2.5, 4.0],
+};
+
+// Resolve the TP1/TP2 R-multiples for a strategy. Precedence:
+//   1. Backtest sweep override (env BT_RR_MAP / BT_TP1_R / BT_TP2_R) — lets a
+//      single backtest run measure any RR config (same family as BT_NOW etc).
+//   2. The production RR_PROFILE above (DEFAULT_RR for unlisted strategies).
+function rrSweep(strategy) {
+  let t1 = null, t2 = null;
+  const map = process.env.BT_RR_MAP;
+  if (map && strategy) {
+    try { const e = JSON.parse(map)[strategy]; if (Array.isArray(e)) { t1 = e[0]; t2 = e[1]; } } catch { /* bad map → ignore */ }
+  }
+  const a = Number(process.env.BT_TP1_R), b = Number(process.env.BT_TP2_R);
+  if (t1 == null && a > 0) t1 = a;
+  if (t2 == null && b > 0) t2 = b;
+  if (strategy && (t1 == null || t2 == null)) {
+    const [p1, p2] = RR_PROFILE[strategy] || DEFAULT_RR;
+    if (t1 == null) t1 = p1;
+    if (t2 == null) t2 = p2;
+  }
+  return { t1R: t1 > 0 ? t1 : null, t2R: t2 > 0 ? t2 : null };
+}
+// Force the resolved R-multiples, discarding any structural price/per-call mult
+// the strategy supplied (the profile is the single reward standard).
+function applyRRSweep(strategy, t) {
+  const s = rrSweep(strategy);
+  if (s.t1R) { t.t1 = undefined; t.t1Mult = s.t1R; }
+  if (s.t2R) { t.t2 = undefined; t.t2Mult = s.t2R; }
+  return t;
+}
+// The resolved RR must not be clamped below itself by the mode cap.
+function sweepMaxR(baseMax, sweptR) { return sweptR ? Math.max(baseMax, sweptR) : baseMax; }
+
 /**
  * Build the standard triggered DetectorResult shape that the alerter expects.
  * Targets + the executed stop are derived from a noise-padded risk so the
@@ -152,6 +202,7 @@ export function buildTriggered({
   entry, stop, t1, t2, t1Mult, t2Mult,
 }) {
   const sign = direction === 'LONG' ? 1 : -1;
+  ({ t1, t2, t1Mult, t2Mult } = applyRRSweep(strategy, { t1, t2, t1Mult, t2Mult }));
   const structuralRisk = Math.abs(entry - stop);
   const risk = structuralRisk * (1 + STOP_PAD);
   const widenedStop = entry - sign * risk;
@@ -174,13 +225,14 @@ export function buildTriggered({
   const resolvedT1 = fav(t1) ? t1 : entry + sign * (t1Mult ?? m.tp1R) * risk;
   const resolvedT2 = fav(t2) ? t2 : entry + sign * (t2Mult ?? m.tp2R) * risk;
   // Guard-rail every target into a tradeable RR band (see clampTargetR above).
-  let finalT1 = clampTargetR(entry, sign, risk, resolvedT1, TP1_MIN_R, m.tp1MaxR);
-  let finalT2 = clampTargetR(entry, sign, risk, resolvedT2, TP2_MIN_R, m.tp2MaxR);
+  const _sw = rrSweep(strategy);
+  let finalT1 = clampTargetR(entry, sign, risk, resolvedT1, TP1_MIN_R, sweepMaxR(m.tp1MaxR, _sw.t1R));
+  let finalT2 = clampTargetR(entry, sign, risk, resolvedT2, TP2_MIN_R, sweepMaxR(m.tp2MaxR, _sw.t2R));
   // TP2 must sit strictly beyond TP1 (a clamped structural level could otherwise
   // collide with or fall short of TP1).
   if (sign * (finalT2 - finalT1) <= 0) {
     const t1r = Math.abs(finalT1 - entry) / risk;
-    finalT2 = entry + sign * Math.min(m.tp2MaxR, t1r + 0.5) * risk;
+    finalT2 = entry + sign * Math.min(sweepMaxR(m.tp2MaxR, _sw.t2R), t1r + 0.5) * risk;
   }
   stop = widenedStop;
   return {
@@ -211,9 +263,10 @@ export function clamp01(x) {
  * setups with their would-be entry/stop/TP/RR values. Mirrors buildTriggered()
  * math so the projection matches what the alert would actually fire with.
  */
-export function projectTrade({ direction, entry, stop, t1, t2, t1Mult, t2Mult }) {
+export function projectTrade({ direction, entry, stop, t1, t2, t1Mult, t2Mult, strategy }) {
   if (!Number.isFinite(entry) || !Number.isFinite(stop) || !direction) return null;
   const sign = direction === 'LONG' ? 1 : -1;
+  ({ t1, t2, t1Mult, t2Mult } = applyRRSweep(strategy, { t1, t2, t1Mult, t2Mult }));
   const structuralRisk = Math.abs(entry - stop);
   if (structuralRisk <= 0) return null;
   const risk = structuralRisk * (1 + STOP_PAD);
@@ -226,11 +279,12 @@ export function projectTrade({ direction, entry, stop, t1, t2, t1Mult, t2Mult })
   const rt2raw = fav(t2) ? t2 : entry + sign * (t2Mult ?? m.tp2R) * risk;
   // Mirror buildTriggered's RR guard-rails so /setups shows the same levels the
   // fired alert will use.
-  let rt1 = clampTargetR(entry, sign, risk, rt1raw, TP1_MIN_R, m.tp1MaxR);
-  let rt2 = clampTargetR(entry, sign, risk, rt2raw, TP2_MIN_R, m.tp2MaxR);
+  const _sw = rrSweep(strategy);
+  let rt1 = clampTargetR(entry, sign, risk, rt1raw, TP1_MIN_R, sweepMaxR(m.tp1MaxR, _sw.t1R));
+  let rt2 = clampTargetR(entry, sign, risk, rt2raw, TP2_MIN_R, sweepMaxR(m.tp2MaxR, _sw.t2R));
   if (sign * (rt2 - rt1) <= 0) {
     const t1r = Math.abs(rt1 - entry) / risk;
-    rt2 = entry + sign * Math.min(m.tp2MaxR, t1r + 0.5) * risk;
+    rt2 = entry + sign * Math.min(sweepMaxR(m.tp2MaxR, _sw.t2R), t1r + 0.5) * risk;
   }
   return {
     entry: round4(entry),

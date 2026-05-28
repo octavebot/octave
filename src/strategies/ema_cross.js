@@ -169,7 +169,7 @@ export function precheck(ctx) {
   if (direction && a15) {
     const entry = e9now;
     const stop = direction === 'LONG' ? entry - a15 : entry + a15;
-    projection = projectTrade({ direction, entry, stop, t2Mult: 2.0 });
+    projection = projectTrade({ strategy: meta.id, direction, entry, stop, t2Mult: 2.0 });
   }
   return {
     direction,
