@@ -95,20 +95,27 @@ done
 # Strategy code change → backtest-stats.json (registry ranking + dashboard
 # numbers) AND the per-strategy PDF playbooks are now stale. Kick off a single
 # backgrounded chain that:
-#   1. reruns strategy-report.js over a 365-day Databento window (the canonical
-#      window — large sample, stable ranking, least noise) → backtest-stats.json
+#   1. reruns strategy-report.js over a 90-day Databento window → backtest-stats.json
 #   2. regenerates the PDFs, which embed those fresh stats → playbooks/*.pdf
 # The registry watches backtest-stats.json's mtime, so the new ranking is picked
 # up on the next tick with NO extra restart (the strategies/ change already
-# restarted signal-engine via UNIT_FOR_PATH above). Bars are capped at 400 per
-# pane, so a 365-day run is CPU-bound, not memory-bound — the heap cap holds.
-# playbooks/ is gitignored, so regenerating PDFs here never dirties the tree.
+# restarted signal-engine via UNIT_FOR_PATH above). playbooks/ is gitignored, so
+# regenerating PDFs here never dirties the tree.
+#
+# Launched as a TRANSIENT systemd unit (not nohup&disown): this oneshot service's
+# cgroup is torn down the moment git-sync exits, which SIGKILLs any plain child
+# (disown doesn't escape the cgroup) — that's why deploy-time regen used to never
+# finish. A transient unit gets its own cgroup and outlives us. 90d (was 365d)
+# completes reliably in RAM; the fixed unit name also prevents two concurrent
+# regens (systemd-run no-ops if it's already running → no shared-cache corruption).
 if echo "$CHANGED" | grep -qE '^src/strategies/'; then
-  LOG "strategies changed — backgrounding 365d backtest-stats + PDF regen"
-  if [ -f /home/octave/.config/trading-alerts/.env ]; then
-    nohup sudo -u octave bash -c "set -a && . /home/octave/.config/trading-alerts/.env && set +a && cd $REPO_DIR && nice -n 10 node --max-old-space-size=420 scripts/strategy-report.js 365 && nice -n 10 node scripts/generate-playbooks.js" \
-      >>/home/octave/.octave-logs/auto-regen.log 2>&1 &
-    disown 2>/dev/null || true
+  if [ -f /home/octave/.config/trading-alerts/.env ] && command -v systemd-run >/dev/null 2>&1; then
+    LOG "strategies changed — launching detached 90d backtest-stats + PDF regen (transient unit)"
+    systemd-run --quiet --collect --unit=octave-deploy-regen --nice=10 \
+      sudo -u octave bash -lc 'set -a; . /home/octave/.config/trading-alerts/.env; set +a; cd '"$REPO_DIR"'; node --max-old-space-size=420 scripts/strategy-report.js 90 && node scripts/generate-playbooks.js' \
+      || LOG "regen not launched (already running or systemd-run unavailable)"
+  else
+    LOG "strategies changed — regen skipped (no .env or systemd-run)"
   fi
 fi
 
