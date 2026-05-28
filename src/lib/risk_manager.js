@@ -70,18 +70,16 @@ export const INSTRUMENT_DOLLARS_PER_POINT = Object.freeze({
  * targets into an achievable band.
  */
 export const MODES = Object.freeze({
-  // `gate` = min base confidence to send a signal. Per-mode because the reward
-  // profiles produce different win-rate regimes: passive (achievable targets,
-  // ~50-77% win) keeps the 0.65 quality filter; aggressive (≥2.5RR, ~40% win)
-  // must run ~0.50 (effectively off) or the win-rate-anchored confidence — which
-  // floors at 0.50 — would gate every signal and silence the bot.
+  // `gate` = min base confidence to send a signal. 0.65 on both modes — the
+  // validated quality filter (data: base conf <0.55 = net −R, ≥0.65 ≈ 61% book).
+  // Was briefly 0.50 on aggressive for the ≥2.5RR experiment; reverted with it.
   passive: Object.freeze({
     label: 'PASSIVE', riskPerTrade: 120, maxContracts: 3, dailyBreaker: -350,
     maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0, gate: 0.65,
   }),
   aggressive: Object.freeze({
     label: 'AGGRESSIVE', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -500,
-    maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0, gate: 0.50,
+    maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0, gate: 0.65,
   }),
 });
 export const DEFAULT_MODE = 'aggressive';

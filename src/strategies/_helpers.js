@@ -7,7 +7,7 @@
 
 import { atr, findSwings, detectSweep } from '../lib/structure.js';
 import { bollinger } from '../lib/indicators.js';
-import { getMode, getModeName } from '../lib/runtime_config.js';
+import { getMode } from '../lib/runtime_config.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -138,31 +138,14 @@ function clampTargetR(entry, sign, risk, price, minR, maxR) {
   return entry + sign * r * risk;
 }
 
-// ── Per-strategy RR reward profile (AGGRESSIVE mode only) ───────────────
-// User directive: AGGRESSIVE mode targets the highest RR the data supports,
-// NEVER below 2.5RR; PASSIVE mode keeps its old achievable-first profile
-// (mode tp1R/tp2R defaults + each strategy's structural targets, clamped to
-// passive's 1.5/2.0 band). These TP1/TP2 multiples (off the widened risk) were
-// chosen by a 90d RR sweep and confirmed out-of-sample (train/test both halves
-// net-positive). In aggressive they OVERRIDE each strategy's authored structural
-// targets + the mode defaults so the whole book runs one validated standard.
-//   3.0R strategies keep climbing in profit past 2.5R (trend/breakout);
-//   2.5R strategies peak at/just above the floor.
-const DEFAULT_RR = [2.5, 4.0]; // any strategy not listed still respects the 2.5RR floor
-const RR_PROFILE = {
-  'ASIAN-BREAKOUT': [3.0, 4.0],
-  'DAILY-TREND-PB': [3.0, 4.0],
-  'EMA-CROSS':      [3.0, 4.0],
-  'LONDON-SWEEP':   [2.5, 4.0],
-  'NY-FVG':         [2.5, 4.0],
-  'OTE-PULLBACK':   [2.5, 4.0],
-  'VWAP-REJ':       [2.5, 4.0],
-};
-
-// Resolve the TP1/TP2 R-multiples for a strategy. Precedence:
-//   1. Backtest sweep override (env BT_RR_MAP / BT_TP1_R / BT_TP2_R) — lets a
-//      single backtest run measure any RR config (same family as BT_NOW etc).
-//   2. The production RR_PROFILE above (DEFAULT_RR for unlisted strategies).
+// Backtest-only RR override. When BT_RR_MAP / BT_TP1_R / BT_TP2_R are set, force
+// uniform R-multiple targets for an RR sweep (mode-independent, same family as
+// the BT_NOW / BT_START hooks). NO-OP in production: live targets come from each
+// strategy's structural levels + the mode tp1R/tp2R defaults + the clamp band —
+// the validated higher-win-rate profile.
+//   NOTE: a uniform ≥2.5RR production profile was trialed 2026-05-28 and REVERTED
+//   — it dropped win rate to ~40% with negative live expectancy (big winners too
+//   rare to offset the −1R stops). Don't re-enable without re-validating win%+EV.
 function rrSweep(strategy) {
   let t1 = null, t2 = null;
   const map = process.env.BT_RR_MAP;
@@ -172,15 +155,6 @@ function rrSweep(strategy) {
   const a = Number(process.env.BT_TP1_R), b = Number(process.env.BT_TP2_R);
   if (t1 == null && a > 0) t1 = a;
   if (t2 == null && b > 0) t2 = b;
-  // Production RR_PROFILE applies in AGGRESSIVE mode only. In passive, leave
-  // t1/t2 null so buildTriggered keeps its original structural/mode-default
-  // resolution (the old achievable-first profile). Env override above is
-  // mode-independent so backtest sweeps always force the swept RR.
-  if (strategy && (t1 == null || t2 == null) && getModeName() === 'aggressive') {
-    const [p1, p2] = RR_PROFILE[strategy] || DEFAULT_RR;
-    if (t1 == null) t1 = p1;
-    if (t2 == null) t2 = p2;
-  }
   return { t1R: t1 > 0 ? t1 : null, t2R: t2 > 0 ? t2 : null };
 }
 // Force the resolved R-multiples, discarding any structural price/per-call mult
