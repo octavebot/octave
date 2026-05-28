@@ -7,7 +7,7 @@ import * as sessionTracker from './lib/session_tracker.js';
 import * as followUp from './lib/follow_up.js';
 import * as journal from './lib/trade_journal.js';
 import { appendTrade, sessionLabel } from './lib/trade_log.js';
-import { refresh as refreshConfig, get as getConfig, isMuted, muteRemainingSec } from './lib/runtime_config.js';
+import { refresh as refreshConfig, get as getConfig, getMode, isMuted, muteRemainingSec } from './lib/runtime_config.js';
 import { drainCorruptionEvents } from './lib/safe_json.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as paperTrader from './lib/paper_trader.js';
@@ -122,7 +122,11 @@ async function tick() {
   // conf <0.55 is net NEGATIVE (−6R) while ≥0.55 is +690R. The threshold lives
   // in runtime-config (aiEngine.threshold, default 0.55) — kept under that key
   // for config back-compat; it's a pure confidence gate, no AI/LLM involved.
-  const confThreshold = getConfig().aiEngine?.threshold ?? 0.55;
+  // Per-mode gate (risk_manager MODES) is authoritative: aggressive 0.50 (≈off,
+  // required by the ≥2.5RR low-win-rate regime), passive 0.65 (quality filter
+  // for its higher-win-rate profile). Falls back to aiEngine.threshold only if a
+  // mode somehow lacks a gate.
+  const confThreshold = getMode().gate ?? getConfig().aiEngine?.threshold ?? 0.55;
 
   for (const r of results) {
     const key = dedupKey(r);

@@ -7,7 +7,7 @@
 
 import { atr, findSwings, detectSweep } from '../lib/structure.js';
 import { bollinger } from '../lib/indicators.js';
-import { getMode } from '../lib/runtime_config.js';
+import { getMode, getModeName } from '../lib/runtime_config.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,12 +140,14 @@ function clampTargetR(entry, sign, risk, price, minR, maxR) {
   return entry + sign * r * risk;
 }
 
-// ── Per-strategy RR reward profile ──────────────────────────────────────
-// User directive: every strategy targets the highest RR the data supports,
-// NEVER below 2.5RR. These TP1/TP2 multiples (off the widened risk) were chosen
-// by a 90d RR sweep and confirmed out-of-sample (train/test both halves
-// net-positive). They OVERRIDE each strategy's authored structural targets +
-// the mode defaults so the whole book runs one validated reward standard.
+// ── Per-strategy RR reward profile (AGGRESSIVE mode only) ───────────────
+// User directive: AGGRESSIVE mode targets the highest RR the data supports,
+// NEVER below 2.5RR; PASSIVE mode keeps its old achievable-first profile
+// (mode tp1R/tp2R defaults + each strategy's structural targets, clamped to
+// passive's 1.5/2.0 band). These TP1/TP2 multiples (off the widened risk) were
+// chosen by a 90d RR sweep and confirmed out-of-sample (train/test both halves
+// net-positive). In aggressive they OVERRIDE each strategy's authored structural
+// targets + the mode defaults so the whole book runs one validated standard.
 //   3.0R strategies keep climbing in profit past 2.5R (trend/breakout);
 //   2.5R strategies peak at/just above the floor.
 const DEFAULT_RR = [2.5, 4.0]; // any strategy not listed still respects the 2.5RR floor
@@ -172,7 +174,11 @@ function rrSweep(strategy) {
   const a = Number(process.env.BT_TP1_R), b = Number(process.env.BT_TP2_R);
   if (t1 == null && a > 0) t1 = a;
   if (t2 == null && b > 0) t2 = b;
-  if (strategy && (t1 == null || t2 == null)) {
+  // Production RR_PROFILE applies in AGGRESSIVE mode only. In passive, leave
+  // t1/t2 null so buildTriggered keeps its original structural/mode-default
+  // resolution (the old achievable-first profile). Env override above is
+  // mode-independent so backtest sweeps always force the swept RR.
+  if (strategy && (t1 == null || t2 == null) && getModeName() === 'aggressive') {
     const [p1, p2] = RR_PROFILE[strategy] || DEFAULT_RR;
     if (t1 == null) t1 = p1;
     if (t2 == null) t2 = p2;
