@@ -274,6 +274,13 @@ export async function detect() {
   }
   if (panesByTf.size === 0) return [];
 
+  // Re-read runtime config on EVERY tick, before the short-circuit below. The
+  // bot writes /enable /disable to disk in another process; without this, a
+  // just-toggled strategy lingers in the precheck snapshot + bias vote (the
+  // short-circuit path re-publishes cached rows) for up to a full bar, so it
+  // keeps showing in /setups after the user disabled it.
+  refreshConfig();
+
   // Skip the work if no instrument has a new anchor bar since the last call.
   // Returns the cached result array so writeDetectSnapshot keeps the snapshot
   // fresh (with stable contents) and downstream behavior is identical.
@@ -285,17 +292,20 @@ export async function detect() {
     // so /bias reflects real-time direction instead of re-stamping a frozen
     // read. Falls back to the last bias if OANDA is unavailable.
     const biasPanes = await fetchBiasPanesSafe();
+    // Drop any strategy disabled since the last full compute — the cached rows
+    // predate the toggle. (Cached RESULTS are left intact so an open trade's
+    // follow-up tracking continues even if its strategy was just disabled.)
+    const livePrecheck = (_lastDetect.precheck || []).filter((r) => isStrategyEnabled(r.strategy));
     // Always merge over the main feed so a partial/empty OANDA result never
     // drops an instrument. panesByTf is in scope (fetched at the top of this
     // call) and always carries gold/nasdaq 15/60/1D.
-    const freshBias = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), _lastDetect.precheck);
+    const freshBias = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), livePrecheck);
     writeBiasSnapshot(freshBias);
-    writePrecheckSnapshot(_lastDetect.precheck);
+    writePrecheckSnapshot(livePrecheck);
     _lastDetect.bias = freshBias;
     return _lastDetect.results;
   }
 
-  refreshConfig();
   refreshForexFactory().catch(() => {});
   const blackout = checkBlackout(Date.now() / 1000, 30);
 
