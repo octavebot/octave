@@ -79,6 +79,21 @@ function dropFormingBar(pane, tfKey) {
   return pane;
 }
 
+// A live feed's latest RAW (forming) bar updates every tick, so it's <15min old
+// during trading. >30min old ⇒ the feed is FROZEN (TV bridge down, weekend, CME
+// 17:00-18:00 ET halt, or a stale Yahoo fallback) → the "last closed bar" is no
+// longer real-time, so strategies must NOT evaluate/fire on it. (getLivePrices
+// still reads these raw panes for follow-up TP/SL — but a frozen price can't hit
+// new levels anyway.)
+const MAX_DATA_AGE_SEC = 30 * 60;
+function dataAgeSec(panesByTf, instrument) {
+  for (const tf of ['15', '5', '60']) {
+    const p = panesByTf.get(`${instrument}|${tf}`);
+    if (p?.bars?.length) return Date.now() / 1000 - p.bars[p.bars.length - 1].time;
+  }
+  return Infinity;
+}
+
 function buildInstrumentCtx(instrument, panesByTf) {
   // Anchor on 15m of this instrument; fall back through 60/5/1/D.
   const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
@@ -278,6 +293,7 @@ export async function detect() {
   // First pass — collect precheck rows for the strategy-vote half of bias.
   // The bot's /setups reads these too, so the work is shared.
   for (const instrument of INSTRUMENTS) {
+    if (dataAgeSec(panesByTf, instrument) > MAX_DATA_AGE_SEC) continue; // stale feed → no forming display
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
     for (const s of registry) {
@@ -300,6 +316,12 @@ export async function detect() {
   const biasByInstrument = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), precheckRows);
 
   for (const instrument of INSTRUMENTS) {
+    const ageSec = dataAgeSec(panesByTf, instrument);
+    if (ageSec > MAX_DATA_AGE_SEC) {
+      log.throttled(`stale-${instrument}`, 300000, () =>
+        log.warn('stale feed — skipping strategy eval (not real-time)', { instrument, ageMin: Math.round(ageSec / 60) }));
+      continue;
+    }
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
 
