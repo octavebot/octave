@@ -642,7 +642,11 @@ const server = createServer(async (req, res) => {
       if (!existsSync(pdfPath)) return sendJson(res, 404, { error: 'no playbook' });
       res.statusCode = 200;
       res.setHeader('content-type', 'application/pdf');
-      res.setHeader('content-disposition', `attachment; filename="${pbMatch[1]}.pdf"`);
+      // inline so the dashboard PDF button opens the doc in a new tab
+      // (target="_blank") rather than forcing a download. Cache briefly —
+      // PDFs only regenerate when backtest stats refresh.
+      res.setHeader('content-disposition', `inline; filename="${pbMatch[1]}.pdf"`);
+      res.setHeader('cache-control', 'public, max-age=300');
       return res.end(readFileSync(pdfPath));
     }
 
@@ -762,31 +766,6 @@ const server = createServer(async (req, res) => {
       const [cmd, args] = restartCmd(target);
       spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
       return sendJson(res, 200, { ok: true, restarted: target });
-    }
-
-    // ─── Strategy playbook PDFs ─────────────────────────────────────────
-    // Built by scripts/generate-playbooks.js, one PDF per strategy under
-    // playbooks/. The dashboard's strategy folder renders a PDF button per
-    // strategy that links here. The route used to be undocumented and
-    // returned 404 — fixed by adding this handler.
-    if (req.method === 'GET' && url.pathname.startsWith('/api/playbook/')) {
-      const raw = url.pathname.slice('/api/playbook/'.length);
-      // Defensive id sanitization — accept the same charset user_strategies
-      // validate() allows (uppercase too, since built-ins use UPPERCASE-KEYS).
-      const key = decodeURIComponent(raw);
-      if (!/^[A-Za-z0-9_-]{2,40}$/.test(key)) return sendJson(res, 400, { error: 'bad playbook key' });
-      const pdfPath = join(__dirname, '..', '..', 'playbooks', `${key}.pdf`);
-      if (!existsSync(pdfPath)) return sendJson(res, 404, { error: `playbook ${key} not found` });
-      try {
-        const pdf = readFileSync(pdfPath);
-        res.statusCode = 200;
-        res.setHeader('content-type', 'application/pdf');
-        res.setHeader('content-disposition', `inline; filename="${key}.pdf"`);
-        res.setHeader('cache-control', 'public, max-age=300');
-        return res.end(pdf);
-      } catch (err) {
-        return sendJson(res, 500, { error: err.message });
-      }
     }
 
     if (req.method === 'GET' && url.pathname === '/api/icon') {
