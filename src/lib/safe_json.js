@@ -123,8 +123,18 @@ function maybeReclaimStale(lockPath) {
     const st = statSync(lockPath);
     const age = Date.now() - st.mtimeMs;
     if (age > LOCK_STALE_MS) { unlinkSync(lockPath); return true; }
-    const pid = Number(readFileSync(lockPath, 'utf8').trim());
-    if (Number.isFinite(pid) && pid > 0 && !pidAlive(pid)) { unlinkSync(lockPath); return true; }
+    const contents = readFileSync(lockPath, 'utf8').trim();
+    const pid = Number(contents);
+    // Legitimate acquirers write a valid integer PID via tryAcquire's
+    // writeFileSync. Anything else (empty file, garbage, NaN) is corrupt
+    // — reclaim immediately so we don't have to wait the full stale-age
+    // window. Tolerate a 200ms grace so we don't race with an in-flight
+    // tryAcquire that has openSync'd but not yet written the PID.
+    if (!Number.isFinite(pid) || pid <= 0) {
+      if (age > 200) { unlinkSync(lockPath); return true; }
+      return false; // give the writer a moment to complete
+    }
+    if (!pidAlive(pid)) { unlinkSync(lockPath); return true; }
   } catch { /* race with another reclaim — fine */ }
   return false;
 }
