@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { beat as heartbeat, startHeartbeat, readAllBeats, isStale } from '../lib/heartbeat.js';
 import { sessionLabel } from '../lib/trade_log.js';
 import { withFileLock } from '../lib/safe_json.js';
+import { MODES } from '../lib/risk_manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -87,10 +88,14 @@ let TOKEN = '', CHAT_ID = '', OWNER_ID = '';
 let ALLOWED_CHATS = new Set();
 
 // Commands that change state — restricted to the owner.
+// Includes the journal commands (/in /out /be /note) so friends in the group
+// can't pollute the owner's trade journal, and so the test-harness mutation
+// guard automatically covers them.
 const OWNER_ONLY = new Set([
   '/enable', '/disable', '/mute', '/unmute',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy',
   '/backtest', '/risk', '/mode', '/cleanup-group',
+  '/in', '/out', '/be', '/note',
 ]);
 
 // Friends in the group chat can only invoke these commands. Anything else
@@ -2333,8 +2338,14 @@ function buildBacktestView() {
 
 function buildSettingsView() {
   const cfg = loadConfig() || {};
-  const gateThr = Math.round((Number(cfg.aiEngine?.threshold) || 0.55) * 100);
   const mode = (cfg.mode === 'passive' || cfg.mode === 'aggressive') ? cfg.mode : 'aggressive';
+  // Read the authoritative per-mode gate (risk_manager MODES), not the legacy
+  // aiEngine.threshold fallback — the latter sits in runtime-config.json at
+  // its old default (0.55) while the live MODES.gate has been changed (0.45)
+  // and would show a stale value here otherwise. See loop.js confThreshold
+  // resolution: getMode().gate ?? aiEngine.threshold ?? 0.55.
+  const liveGate = MODES[mode]?.gate ?? Number(cfg.aiEngine?.threshold) ?? 0.55;
+  const gateThr = Math.round(liveGate * 100);
   const other = mode === 'aggressive' ? 'passive' : 'aggressive';
   const text = [
     header('⚙️', 'Settings'),
