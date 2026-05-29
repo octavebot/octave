@@ -128,6 +128,22 @@ async function tick() {
   // mode somehow lacks a gate.
   const confThreshold = getMode().gate ?? getConfig().aiEngine?.threshold ?? 0.55;
 
+  // Conflict guard — never issue a signal opposite to a position already open
+  // on the same instrument (user: "bot said sell AND buy the same instrument,
+  // different strategies"). First position wins: the opposite signal is skipped
+  // (no Telegram, no paper trade) and logged. Build the open-direction map from
+  // the follow-up tracker once up front; we also fold in positions sent earlier
+  // in THIS loop so two opposite signals on the same tick can't both go out.
+  const openDirByInst = new Map(); // instrument -> Set<'LONG'|'SHORT'>
+  try {
+    for (const s of (followUp.active() || [])) {
+      if (!s?.instrument || !s?.direction) continue;
+      if (!openDirByInst.has(s.instrument)) openDirByInst.set(s.instrument, new Set());
+      openDirByInst.get(s.instrument).add(s.direction);
+    }
+  } catch (err) { log.warn('conflict-guard: follow_up.active() threw', { err: err.message }); }
+  const oppositeOf = (d) => (d === 'LONG' ? 'SHORT' : d === 'SHORT' ? 'LONG' : null);
+
   for (const r of results) {
     const key = dedupKey(r);
     if (dedup.has(key)) continue;
@@ -137,9 +153,13 @@ async function tick() {
     // chart (visible via /history), they just don't ring the phone.
     const isTelegramWorthy = r.status === 'triggered';
 
+    // Opposite-direction position already open on this instrument? Skip.
+    const opp = oppositeOf(r.direction);
+    const conflict = isTelegramWorthy && !!opp && openDirByInst.get(r.instrument)?.has(opp);
+
     const baseConf = r.confidence ?? 0;
     const confGated = isTelegramWorthy && baseConf < confThreshold;
-    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !confGated;
+    const shouldSendTelegram = isTelegramWorthy && !suppressTelegram && !confGated && !conflict;
 
     // Mark BEFORE sending, then roll back on failure (avoids dup spam if send is slow)
     dedup.add(key, { strategy: r.strategy, status: r.status });
@@ -160,6 +180,11 @@ async function tick() {
         log.warn('alerter send threw', { err: err.message });
         ok = false;
       }
+    } else if (conflict) {
+      log.info('alert conflict-skipped', {
+        strategy: r.strategy, setupId: r.setupId, direction: r.direction,
+        reason: `opposite ${opp} already open on ${r.instrument}`,
+      });
     } else if (confGated) {
       log.info('alert conf-gated', {
         strategy: r.strategy, setupId: r.setupId,
@@ -170,8 +195,15 @@ async function tick() {
       dedup.remove(key);
       log.warn('telegram send failed — dedup rolled back', { key });
     } else {
+      // A signal we actually sent now occupies the instrument in its direction
+      // — fold it into the map so a later same-tick opposite signal is skipped.
+      if (shouldSendTelegram && r.direction) {
+        if (!openDirByInst.has(r.instrument)) openDirByInst.set(r.instrument, new Set());
+        openDirByInst.get(r.instrument).add(r.direction);
+      }
       const tgState = !isTelegramWorthy
         ? 'skipped (not triggered)'
+        : conflict ? `skipped (conflicts open ${opp})`
         : confGated ? 'gated (low confidence)'
         : suppressTelegram ? 'suppressed (muted)'
         : 'sent';
