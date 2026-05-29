@@ -61,17 +61,39 @@ function trimmed(pane) {
   return slim;
 }
 
+const TF_SEC = { '1': 60, '3': 180, '5': 300, '15': 900, '30': 1800, '60': 3600, '240': 14400, '1D': 86400, 'D': 86400, 'W': 604800 };
+// Drop a still-forming final bar so STRATEGY EVALUATION sees only CLOSED candles
+// — matching the backtest (yahoo/databento/oanda feeds already drop it, but the
+// live TV-bridge keeps the partial sub-daily bucket, so live used to evaluate the
+// in-progress bar → level-touch strategies over-fired and completed-bar-pattern
+// strategies under-fired vs the closed-bar backtest). A bar is forming if its
+// close time (open + TF duration) is still in the future. ONLY the detector ctx
+// uses this; getLivePrices()/follow-up TP-SL still read the raw panes (with the
+// live bar) so intrabar exits aren't delayed.
+function dropFormingBar(pane, tfKey) {
+  if (!pane?.bars?.length) return pane;
+  const sec = TF_SEC[tfKey];
+  if (!sec || pane.bars.length < 2) return pane;
+  const last = pane.bars[pane.bars.length - 1];
+  if (last.time + sec > Date.now() / 1000 + 1) return { ...pane, bars: pane.bars.slice(0, -1) };
+  return pane;
+}
+
 function buildInstrumentCtx(instrument, panesByTf) {
   // Anchor on 15m of this instrument; fall back through 60/5/1/D.
   const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
-  let anchor = null;
+  let anchor = null, anchorTf = null;
   for (const tf of candidates) {
     const p = panesByTf.get(`${instrument}|${tf}`);
-    if (p?.bars?.length) { anchor = p; break; }
+    if (p?.bars?.length) { anchor = p; anchorTf = tf; break; }
   }
   if (!anchor) return null;
 
-  const lastBar = anchor.bars[anchor.bars.length - 1];
+  // Anchor on the last CLOSED bar so barTime/lastClose/dateKey aren't the
+  // in-progress bar (fall back to the raw anchor only if dropping empties it).
+  const anchorClosed = dropFormingBar(anchor, anchorTf);
+  const closedBars = anchorClosed.bars.length ? anchorClosed : anchor;
+  const lastBar = closedBars.bars[closedBars.bars.length - 1];
   const np = nyParts(lastBar.time);
 
   const ctx = {
@@ -79,19 +101,19 @@ function buildInstrumentCtx(instrument, panesByTf) {
     ts: Date.now(),
     barTime: lastBar.time,
     lastClose: lastBar.close,
-    panes: [...panesByTf.values()].map(trimmed),
+    panes: [...panesByTf.entries()].map(([k, p]) => trimmed(dropFormingBar(p, k.split('|')[1]))),
     panesByTf,
     anchorSymbol: INSTRUMENT_META[instrument].symbol,
     anchorResolution: anchor.resolution,
     dateKey: np.dateKey,
     dataSource: 'cloud',
   };
-  // ctx.pane(tf) returns THIS instrument's pane at the requested TF, trimmed.
+  // ctx.pane(tf) returns THIS instrument's pane at the requested TF, trimmed and
+  // with the still-forming bar dropped (closed candles only, like the backtest).
   // ctx.paneFor(asset, tf) is the cross-asset equivalent (silver SMT, DXY, etc).
-  // Both return panes capped at MAX_PANE_BARS; ctx.panesByTf is the raw Map
-  // for any caller that genuinely needs full history.
-  ctx.pane = (tf) => trimmed(panesByTf.get(`${instrument}|${tf}`));
-  ctx.paneFor = (asset, tf) => trimmed(panesByTf.get(`${asset}|${tf}`));
+  // ctx.panesByTf is the RAW map (live bar intact) for callers that need it.
+  ctx.pane = (tf) => trimmed(dropFormingBar(panesByTf.get(`${instrument}|${tf}`), tf));
+  ctx.paneFor = (asset, tf) => trimmed(dropFormingBar(panesByTf.get(`${asset}|${tf}`), tf));
   return ctx;
 }
 
