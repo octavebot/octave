@@ -126,8 +126,19 @@ export function precheck(ctx) {
   const asianLo = haveAsian ? Math.min(...asianBars.map((b) => b.low)) : null;
   const last = tf.bars[tf.bars.length - 1];
 
-  const sweepHi = haveAsian && last.high > asianHi && last.close < asianHi;
-  const sweepLo = haveAsian && last.low < asianLo && last.close > asianLo;
+  // Two-stage: the WICK must reach beyond the Asian range, and SEPARATELY
+  // the BODY must close back inside. Originally both triggers reported the
+  // same combined `swept` boolean, so the user saw either 0/2 or 2/2 — never
+  // the in-between state where the wick has swept but the close hasn't yet
+  // come back inside (which is "near" → wait for the rejection bar to close).
+  const wickHi = haveAsian && last.high > asianHi;
+  const wickLo = haveAsian && last.low  < asianLo;
+  const wickBeyond = wickHi || wickLo;
+  const closedBackHi = wickHi && last.close < asianHi;
+  const closedBackLo = wickLo && last.close > asianLo;
+  const closedBack = closedBackHi || closedBackLo;
+  const sweepHi = closedBackHi;
+  const sweepLo = closedBackLo;
   const swept = sweepHi || sweepLo;
   const direction = sweepHi ? 'SHORT' : sweepLo ? 'LONG' : null;
 
@@ -151,8 +162,8 @@ export function precheck(ctx) {
     conditions: [
       { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range built',                met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
-      { kind: 'trigger', label: 'Sweep of Asian range',             met: swept, value: sweepHi ? `high ${asianHi.toFixed(2)} swept by ${(last.high - asianHi).toFixed(2)}` : sweepLo ? `low ${asianLo.toFixed(2)} swept by ${(asianLo - last.low).toFixed(2)}` : haveAsian ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)} inside` : '—' },
-      { kind: 'trigger', label: 'Body closed back inside',          met: swept, value: haveAsian ? `close ${last.close.toFixed(2)} vs hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)}` : '—' },
+      { kind: 'trigger', label: 'Wick swept Asian range',           met: wickBeyond, value: wickHi ? `high ${asianHi.toFixed(2)} pierced by ${(last.high - asianHi).toFixed(2)}` : wickLo ? `low ${asianLo.toFixed(2)} pierced by ${(asianLo - last.low).toFixed(2)}` : haveAsian ? `last wick ${last.low.toFixed(2)}–${last.high.toFixed(2)} inside` : '—' },
+      { kind: 'trigger', label: 'Body closed back inside',          met: closedBack, value: !wickBeyond ? 'no sweep yet' : closedBackHi ? `close ${last.close.toFixed(2)} < hi ${asianHi.toFixed(2)}` : closedBackLo ? `close ${last.close.toFixed(2)} > lo ${asianLo.toFixed(2)}` : `close ${last.close.toFixed(2)} hasn't reclaimed range` },
     ],
   };
 }

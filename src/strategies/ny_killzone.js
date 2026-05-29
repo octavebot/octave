@@ -157,9 +157,15 @@ export function precheck(ctx) {
   const longH09Skip = direction === 'LONG' && np.h === 9;
   if (longH09Skip) direction = null;
 
+  // Couple gap-side to direction so precheck matches evaluate exactly: the
+  // LONG branch in evaluate only fires on a bullish FVG, SHORT only on a
+  // bearish FVG. Without this coupling, trendUp + bearish FVG would read
+  // READY in /setup ("retrace into gap" met because the bearish path's
+  // condition was checked unconditionally) while evaluate's LONG branch
+  // refused to fire — the user's "ready but never gave signal" report.
   const inRetrace = gap && (
-    (gap.side === 'bullish' && last.low <= gap.top && last.low >= gap.bottom) ||
-    (gap.side === 'bearish' && last.high >= gap.bottom && last.high <= gap.top)
+    (direction === 'LONG'  && gap.side === 'bullish' && last.low  <= gap.top    && last.low  >= gap.bottom) ||
+    (direction === 'SHORT' && gap.side === 'bearish' && last.high >= gap.bottom && last.high <= gap.top)
   );
 
   let h1Close = null, h1Ema50 = null;
