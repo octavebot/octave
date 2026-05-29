@@ -70,17 +70,20 @@ export const INSTRUMENT_DOLLARS_PER_POINT = Object.freeze({
  * targets into an achievable band.
  */
 export const MODES = Object.freeze({
-  // `gate` = min base confidence to send a signal. 0.45 on both modes — user
-  // explicitly opted into delivering every triggered setup including the lower-
-  // confidence strategies (OTE-PULLBACK at 0.48 winrate + ASIAN-BREAKOUT at
-  // 0.475 winrate would never deliver at the prior 0.55 gate). 0.45 trades a
-  // ~2-3× signal-rate increase for the lower-winrate strategies' contribution
-  // to total book profit — book win rate stays ~60% across gates ≤0.65 per the
-  // 2026-05-28 train/test sweep, so the gate is a frequency/profit lever not a
-  // win-rate one.
+  // `gate` = min base confidence to send a signal.
+  // PASSIVE → 0.60 (2026-05-29): with the weak-strategy Pareto filters in place,
+  //   a 180d Databento train/test sweep showed 0.60 is the balanced + lowest-
+  //   drawdown point — book win 60.1%/67.9% (old/new 90d half), book maxDD
+  //   8.0/7.8 R, vs 57.3%/61.2% & 10.1/14.5 ungated. It trims ~15% of total
+  //   profit to nearly halve drawdown — the right trade while the eval account
+  //   sits near its trailing MLL. (0.55 keeps ~30R more profit at +3.6R DD;
+  //   0.65 lifts win further but raises old-half DD and costs more profit.)
+  // AGGRESSIVE → 0.45 (unchanged): max frequency/profit for recovery sizing;
+  //   re-validate a passive-style gate here before relying on it (the 2.5/4.0R
+  //   reward clamp gives aggressive a different win/RR profile than passive).
   passive: Object.freeze({
     label: 'PASSIVE', riskPerTrade: 120, maxContracts: 3, dailyBreaker: -350,
-    maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0, gate: 0.45,
+    maxOpen: 2, asianCapUsd: 120, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.0, gate: 0.60,
   }),
   aggressive: Object.freeze({
     label: 'AGGRESSIVE', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -500,
