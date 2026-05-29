@@ -1276,11 +1276,20 @@ async function cmdActiveSetups() {
     return `fired ${t}`;
   };
   const taken = new Map();
+  // Direction-agnostic fired map (strategy|instrument → "fired SHORT 02:30").
+  // A forming row can be DIRECTIONLESS (e.g. LONDON-SWEEP before a sweep picks a
+  // side shows ⚪/null), so the direction-keyed `taken` above misses it and the
+  // row renders as a bare "forming" even though that strategy already fired on
+  // the instrument today — the user's "London signals sent but not registering
+  // in /setups" report. This map lets the forming render annotate such rows.
+  const takenBySI = new Map();
   for (const a of triggeredToday) {
     const parts = String(a.setupId || '').split('|');
     const inst = parts[0];
     const dir = parts.find((p) => p === 'LONG' || p === 'SHORT') || '';
     taken.set(takenKey(a.strategy, inst, dir), dispositionLabel(a.telegram, a.time));
+    const dirWord = dir ? `${dir} ` : '';
+    takenBySI.set(`${a.strategy}|${inst}`, `${dispositionLabel(a.telegram, a.time).replace('fired ', `fired ${dirWord}`).replace('gated ', `gated ${dirWord}`)}`);
   }
   for (const s of open) taken.set(takenKey(s.strategy, s.instrument, s.direction), 'open trade');
 
@@ -1337,7 +1346,15 @@ async function cmdActiveSetups() {
         const proj = r.projection
           ? ` · E${r.projection.entry.toFixed(2)} SL${r.projection.stop.toFixed(2)} TP${r.projection.t2.toFixed(2)} (1:${r.projection.rr2.toFixed(1)}R)`
           : '';
-        lines.push(`${dir} *${tgEscape(r.strategy)}* ${inst} · ${stage}${proj}`);
+        // If this strategy already fired on this instrument today (in EITHER
+        // direction), annotate the row. A directionless forming row (⚪) would
+        // otherwise look like the signal "never happened" even though the user
+        // already got it — it's still forming the OTHER side (day-dedup is
+        // per-setupId, so e.g. an Asian-high SHORT having fired doesn't block a
+        // later Asian-low LONG).
+        const firedNote = takenBySI.get(`${r.strategy}|${r.instrument}`);
+        const note = firedNote ? ` · ✅ ${firedNote} today` : '';
+        lines.push(`${dir} *${tgEscape(r.strategy)}* ${inst} · ${stage}${proj}${note}`);
       }
     }
 
