@@ -195,6 +195,23 @@ async function buildSignalCard(r, ctx) {
 }
 
 /**
+ * True if the setupId looks like a test/synthetic signal (the harnesses use
+ * `test-…`, `smoke-…`, `e2e-…`, or `…|test|…`). Real detector setupIds embed
+ * a strategy-specific marker like `fvg-<unix>` or `asian-lo` — never these.
+ *
+ * Why: registering a synthetic signal into the live follow-up tracker makes
+ * the engine think a real trade is open — it then fires "filled / BE / TP /
+ * SL" pings to the user when the live price crosses the synthetic entry/stop
+ * (this happened once on 2026-05-29: two phantom "limit filled" messages
+ * landed in the group from an e2e test). Detect + skip BOTH the registration
+ * and the Telegram post so synthetic calls are inert end-to-end.
+ */
+function looksLikeTestSetup(setupId) {
+  if (!setupId) return false;
+  return /(?:^|\|)(?:test|smoke|e2e)(?:-|\|)/i.test(String(setupId));
+}
+
+/**
  * Main entry: send a detector result as a Telegram alert.
  * Only 'triggered' setups get the full card; others get a one-liner.
  */
@@ -204,6 +221,12 @@ export async function send(r, ctx = {}) {
     // triggered) but keep a minimal fallback.
     const name = await strategyName(r.strategy);
     return postRaw(`👀 *${tgEscape(name)}* — ${r.status}\n${tgEscape(r.setupName || '')}`);
+  }
+
+  // Test-setup guard — see looksLikeTestSetup() comment.
+  if (looksLikeTestSetup(r.setupId)) {
+    log.warn('alerter.send: refusing test setupId', { setupId: r.setupId });
+    return false;
   }
 
   // Register for follow-up milestone pings (BE/TP1/TP2/SL).
