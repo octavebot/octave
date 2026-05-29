@@ -9,6 +9,7 @@
 
 import { ema } from '../lib/indicators.js';
 import { atr, findSwings, oteZone } from '../lib/structure.js';
+import { nyParts } from '../lib/time.js';
 import { buildTriggered, dayScopedId, qualityConfidence, projectTrade } from './_helpers.js';
 
 export const meta = {
@@ -51,6 +52,13 @@ export function evaluate(ctx) {
   if (!tf60?.bars || tf60.bars.length < 55) return out;
   const a = atr(tf.bars, 14);
   if (!a) return out;
+  // Skip the dead overnight Asia hours 01:00 & 05:00 ET. OTE trades any hour,
+  // but those two bled in BOTH 90d Databento halves (hr1 40%/20% win, −3R/−9R;
+  // hr5 42%/41%, −2R/−3R). Trimming them lifts win +1.9/+4.2pp, sumR +5/+12R,
+  // and cuts the per-half drawdown −2R/−2R (train/test validated; low-liquidity
+  // hours where the impulse/retrace structure is thin).
+  const np = nyParts(ctx.barTime);
+  if (np.h === 1 || np.h === 5) return out;
   const e50 = ema(tf60.bars, 50);
   const e50last = e50[e50.length - 1];
   const h1 = tf60.bars[tf60.bars.length - 1];
@@ -121,6 +129,10 @@ export function precheck(ctx) {
   if (!tf?.bars || tf.bars.length < 60 || !tf60?.bars || tf60.bars.length < 55) return null;
   const a = atr(tf.bars, 14);
   if (!a) return null;
+  // Hours 01:00 & 05:00 ET are excluded from this strategy (see evaluate) —
+  // never show it forming there.
+  const npGate = nyParts(ctx.barTime);
+  if (npGate.h === 1 || npGate.h === 5) return null;
   const e50arr = ema(tf60.bars, 50);
   const e50 = e50arr[e50arr.length - 1];
   const h1 = tf60.bars[tf60.bars.length - 1];

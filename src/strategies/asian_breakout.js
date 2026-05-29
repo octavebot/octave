@@ -66,6 +66,13 @@ export function evaluate(ctx) {
   const out = [];
   const tf = ctx.pane('15');
   if (!tf?.bars || tf.bars.length < 40) return out;
+  // Gold is structurally hostile to this breakout: it fakes range breaks far
+  // more than the indices, so its Asian-breakout setups ran 22%/34% win (−10.5R
+  // / −6.5R) across two non-overlapping 90d Databento halves — a loser in BOTH.
+  // The existing gold-specific 0.78 body filter (below) wasn't enough. Dropping
+  // gold lifts win +5.7/+3.0pp AND sumR +10.5/+6.5 AND cuts the bad half's
+  // drawdown 19R→11R (train/test validated). nasdaq + sp carry the edge.
+  if (ctx.instrument === 'gold') return out;
   const np = nyParts(ctx.barTime);
   // Breakout window 02:00–10:00 ET, minus the 02:00 & 05:00 hours — a 1-year
   // Databento train/test split (2026-05) showed those two hours are the only
@@ -145,6 +152,8 @@ export function precheck(ctx) {
   const tf = ctx.pane('15');
   const tf60 = ctx.pane('60');
   if (!tf?.bars || tf.bars.length < 40) return null;
+  // Gold is excluded from this strategy (see evaluate) — never show it forming.
+  if (ctx.instrument === 'gold') return null;
   const np = nyParts(ctx.barTime);
   // Window shown as met when EITHER the wall clock OR the last-closed bar is
   // in the breakout window — see the detailed comment in london_killzone.js

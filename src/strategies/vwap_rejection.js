@@ -63,6 +63,10 @@ export function evaluate(ctx) {
   // defending it. Drop the whole window rather than half-fix it.
   const np = nyParts(ctx.barTime);
   if (np.h >= 12 && np.h < 16) return out;
+  // Also skip 08:00 ET — the pre-cash-open hour ran 45%/40% win (−0.8R/−2.0R)
+  // in BOTH 90d Databento halves: VWAP isn't yet defended before the 09:30
+  // cash open. Dropping it lifts win +1.8/+3.1pp, sumR +0.8/+2.0R, DD −1.8/0R.
+  if (np.h === 8) return out;
 
   // Asymmetric D1 filter — applied to LONGS only. 68d tune split (2026-03
   // → 2026-05) showed structural long-side weakness: 52%/45% (train/test)
@@ -155,7 +159,7 @@ export function precheck(ctx) {
   if (!tf?.bars || tf.bars.length < 30) return null;
   if (!tf60?.bars || tf60.bars.length < 55) return null;
   const np = nyParts(ctx.barTime);
-  const skipPM = np.h >= 12 && np.h < 16;
+  const skipPM = (np.h >= 12 && np.h < 16) || np.h === 8;
 
   let dailyUp = false;
   if (dPane?.bars && dPane.bars.length >= 25) {
@@ -213,7 +217,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET skip)',  met: !skipPM, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
+      { kind: 'gate',    label: 'Not NY-PM (12:00–16:00 ET) or 08:00 ET',  met: !skipPM, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${skipPM ? ' (skip)' : ''}` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',   met: !!direction, value: e50last != null ? `H1 ${h1.close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${e50last.toFixed(2)}` : 'no EMA yet' },
       { kind: 'gate',    label: 'D1 macro support (longs only)',    met: !trendUp || dailyUp, value: !trendUp ? 'n/a (short setup)' : d1Close != null && d1Ema20 != null ? `D1 ${d1Close.toFixed(2)} ${dailyUp ? '>' : '<'} EMA20 ${d1Ema20.toFixed(2)}` : 'no D1 data' },
       { kind: 'gate',    label: 'Tape alive (15m ATR ≥ 0.4×H1)',    met: !!tapeOk, value: a && a60 ? `ATR15 ${a.toFixed(2)} / ATR60 ${a60.toFixed(2)} (${ratio})` : '—' },
