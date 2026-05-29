@@ -400,6 +400,7 @@ function adminAuthOk(req, url) {
 // it already has stronger HMAC auth.
 const ADMIN_ROUTES = new Set([
   '/api/config',
+  '/api/restart',
   '/api/user-strategies',
   '/api/user-strategies/upload',
   '/api/fix',
@@ -674,7 +675,12 @@ const server = createServer(async (req, res) => {
         // Stop each octave-* systemd unit. Bot last so this response can
         // still come back before its own service dies.
         const units = ['octave-signal-engine', 'octave-watchdog', 'octave-tunnel', 'octave-tunnel-watcher', 'octave-webui', 'octave-telegram'];
-        for (const u of units) spawn('systemctl', ['stop', u], { detached: true, stdio: 'ignore' }).unref();
+        // sudoers as currently configured only allows `restart` (not `stop`).
+        // The spawn will fail silently unless the operator extends sudoers with
+        // `/bin/systemctl stop octave-*`. We prefer best-effort attempt + clear
+        // hint over removing the endpoint, since some operators may have a
+        // looser sudoers and still want this to work.
+        for (const u of units) spawn('sudo', ['systemctl', 'stop', u], { detached: true, stdio: 'ignore' }).unref();
         return sendJson(res, 200, { ok: true, stopped: units });
       }
       // Mac dev — local Octave.app launcher.
@@ -734,8 +740,14 @@ const server = createServer(async (req, res) => {
       const map = isLinux ? LINUX_UNITS : MAC_LABELS;
       const service = String(body?.service || '');
       const { spawn } = await import('node:child_process');
+      // On Linux the webui runs as the `octave` user, which has no permission
+      // to restart systemd units directly — octave's sudoers only permits
+      // `sudo systemctl restart octave-*`. Without the sudo prefix, the spawn
+      // exits silently with permission-denied and the API used to return ok:true
+      // optimistically (no actual restart). Same fix applied to /api/shutdown +
+      // bot.js restartUnit (Telegram /restart command).
       const restartCmd = (target) => {
-        if (isLinux) return ['systemctl', ['restart', target]];
+        if (isLinux) return ['sudo', ['systemctl', 'restart', target]];
         return ['/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${target}`]];
       };
       if (service === 'all') {

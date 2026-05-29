@@ -1711,7 +1711,11 @@ const SERVICE_LABELS = {
 
 function restartUnit(unit) {
   if (process.platform === 'linux') {
-    spawn('systemctl', ['restart', unit.linux], { detached: true, stdio: 'ignore' }).unref();
+    // sudo prefix required: the bot runs as `octave`, whose sudoers only
+    // permits `sudo systemctl <verb> octave-*`. Without sudo the spawn exits
+    // silently with permission-denied and the Telegram /restart command
+    // reports success while nothing actually restarted.
+    spawn('sudo', ['systemctl', 'restart', unit.linux], { detached: true, stdio: 'ignore' }).unref();
   } else {
     spawn('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${unit.mac}`], { detached: true, stdio: 'ignore' }).unref();
   }
