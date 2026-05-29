@@ -159,6 +159,15 @@ export function precheck(ctx) {
   const sweepLo = closedBackLo;
   const swept = sweepHi || sweepLo;
   const direction = sweepHi ? 'SHORT' : sweepLo ? 'LONG' : null;
+  // Incipient lean — which side the wick is currently testing, set as soon as
+  // the wick pierces the Asian range (before the body closes back inside, while
+  // `direction` is still null). /setups uses this to drop a forming row that is
+  // re-forming a side which ALREADY fired today: that exact setupId is dedup-
+  // blocked for 6h so it cannot re-signal, yet without the lean it lingered as
+  // a directionless "forming" row (the "London forming even though it already
+  // gave that signal" report). `direction` stays full-trigger-only so the bias
+  // vote (tallyStrategyVote) and the projection below are unchanged.
+  const lean = wickHi ? 'SHORT' : wickLo ? 'LONG' : null;
 
   // Project what the trade would look like right now.
   const a = atr(tf.bars, 14);
@@ -176,6 +185,7 @@ export function precheck(ctx) {
   }
   return {
     direction,
+    lean,
     projection,
     conditions: [
       { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${nowNp.h}:${String(nowNp.min||0).padStart(2,'0')} ET` },

@@ -1334,14 +1334,22 @@ async function cmdActiveSetups() {
     // FORMING — gates met, genuinely building toward a signal, not yet fired
     // today (direction-aware: a strategy that fired LONG can still form a SHORT)
     // and not already an open trade.
+    // `direction || lean`: LONDON-SWEEP's forming rows stay directionless until
+    // the body closes back inside the Asian range, but the wick already reveals
+    // which side it's testing. Without the lean, a row re-forming the side that
+    // ALREADY fired today (dedup-blocked for 6h, can't re-signal) wasn't matched
+    // by `taken` and lingered under "Forming" as if a new signal were coming —
+    // the user's "London forming even though it already gave that signal" report.
+    // Other strategies don't set `lean` (it's undefined) so they're unaffected.
     const forming = scored
-      .filter((r) => r.gatesOk && !taken.has(takenKey(r.strategy, r.instrument, r.direction)))
+      .filter((r) => r.gatesOk && !taken.has(takenKey(r.strategy, r.instrument, r.direction || r.lean)))
       .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
     if (forming.length) {
       lines.push('', `*Forming · ${forming.length}*`);
       for (const r of forming) {
         const inst = INST[r.instrument] || r.instrument;
-        const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
+        const effDir = r.direction || r.lean;
+        const dir = effDir === 'LONG' ? '🟢' : effDir === 'SHORT' ? '🔴' : '⚪';
         const stage = r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
         const proj = r.projection
           ? ` · E${r.projection.entry.toFixed(2)} SL${r.projection.stop.toFixed(2)} TP${r.projection.t2.toFixed(2)} (1:${r.projection.rr2.toFixed(1)}R)`
@@ -1492,8 +1500,11 @@ async function cmdSetup(arg) {
   // sees exactly what's met and what's blocking, per instrument.
   for (const r of rendered) {
     const inst = INST[r.instrument] || r.instrument;
-    const dir = r.direction === 'LONG' ? '🟢 LONG' : r.direction === 'SHORT' ? '🔴 SHORT' : '⚪ —';
-    const already = taken.get(takenKey(r.instrument, r.direction));
+    // direction || lean — see /setups: London leans before its body closes back
+    // inside, so match the already-fired marker on the lean too.
+    const effDir = r.direction || r.lean;
+    const dir = effDir === 'LONG' ? '🟢 LONG' : effDir === 'SHORT' ? '🔴 SHORT' : '⚪ —';
+    const already = taken.get(takenKey(r.instrument, effDir));
     const alreadyNote = already ? ` · ✅ ${already}` : '';
     lines.push('');
     lines.push(`${r.icon} *${inst}* · ${dir} · _${r.stage}_${alreadyNote} · gates ${r.gMet}/${r.gates.length} · triggers ${r.tMet}/${r.tTot}`);
@@ -1537,7 +1548,7 @@ async function cmdSetup(arg) {
   // Explain why a READY row may not alert: a setup fires once per day, so once
   // it has triggered (delivered OR gated OR muted) it stays "READY" on the
   // chart but won't re-signal until the next session.
-  if (rendered.some((r) => r.stage === 'READY' && taken.get(takenKey(r.instrument, r.direction)))) {
+  if (rendered.some((r) => r.stage === 'READY' && taken.get(takenKey(r.instrument, r.direction || r.lean)))) {
     lines.push('', '_✅ = this setup already triggered today (whether delivered, confidence-gated, or muted). Each setup alerts once per day, so it won\'t re-signal until the next session even while it still reads READY._');
   }
   lines.push('', `_\`/playbook ${KEY_TO_NUM[key] || key}\` for the full ruleset · \`/setups\` for all strategies._`);
