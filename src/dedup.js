@@ -6,7 +6,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STATE_FILE = join(__dirname, 'state', 'dedup.json');
 const TMP_FILE = STATE_FILE + '.tmp';
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+// Dedup window. setupIds are day-scoped (embed the NY dateKey + direction +
+// a per-fire discriminator), so a setup should fire at most once per day. The
+// old 6h TTL broke that for ALL-DAY strategies (OTE-PULLBACK has no session
+// window; ASIAN's window is 8h): a setup that fired in the morning was pruned
+// after 6h, so the SAME setupId could re-fire >6h later, opening a second paper
+// position that follow_up never re-armed (it had a closed record for that id)
+// → an untracked "orphan" position that never hit TP/SL. A 24h TTL makes
+// "once per day per setupId" true — matching the backtest (which dedups once
+// per setupId) and eliminating the orphan/over-trading class. NY-FVG is
+// unaffected (its setupIds embed the gap bar time, so each gap is unique).
+const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 
 function loadState() {
   if (!existsSync(STATE_FILE)) {
@@ -27,7 +37,7 @@ prune();
 setInterval(prune, 60 * 60 * 1000).unref();
 
 function prune() {
-  const cutoff = Date.now() - SIX_HOURS_MS;
+  const cutoff = Date.now() - DEDUP_TTL_MS;
   let removed = 0;
   for (const [k, v] of Object.entries(state.entries)) {
     if (!v || (v.firedAt || 0) < cutoff) {

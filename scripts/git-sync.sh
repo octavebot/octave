@@ -54,6 +54,7 @@ declare -A UNIT_FOR_PATH=(
   ["src/loop.js"]="octave-signal-engine"
   ["src/detector.js"]="octave-signal-engine"
   ["src/alerter.js"]="octave-signal-engine"
+  ["src/dedup.js"]="octave-signal-engine"
   # The registry (strategy list) is read by ALL THREE services — engine
   # (detection), webui (/api/strategies → dashboard), bot (/strategies, /setups).
   # Restart all three so adding/removing a strategy syncs everywhere, not just
