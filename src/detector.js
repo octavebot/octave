@@ -94,6 +94,20 @@ function dataAgeSec(panesByTf, instrument) {
   return Infinity;
 }
 
+// TV-ONLY strategy detection (user directive): only evaluate/fire when this
+// instrument's 15m pane is sourced from the real-time TradingView bridge AND
+// fresh. If the bridge drops, fetchAllPanes falls back to Yahoo (source 'yahoo')
+// — we DO NOT trade on that delayed feed; the instrument goes silent until TV is
+// back. (Yahoo deep history under the TV tail is fine — it's old closed bars for
+// EMA/ATR, not the trigger bar.) Returns {ok, reason} for a throttled log.
+function liveFeedOk(panesByTf, instrument) {
+  const src = panesByTf.get(`${instrument}|15`)?.source || '';
+  if (!src.startsWith('tradingview')) return { ok: false, reason: `not TV-sourced (${src || 'none'})` };
+  const age = dataAgeSec(panesByTf, instrument);
+  if (age > MAX_DATA_AGE_SEC) return { ok: false, reason: `stale ${Math.round(age / 60)}min` };
+  return { ok: true };
+}
+
 function buildInstrumentCtx(instrument, panesByTf) {
   // Anchor on 15m of this instrument; fall back through 60/5/1/D.
   const candidates = ['15', '60', '5', '1', '240', '1D', 'D'];
@@ -293,7 +307,7 @@ export async function detect() {
   // First pass — collect precheck rows for the strategy-vote half of bias.
   // The bot's /setups reads these too, so the work is shared.
   for (const instrument of INSTRUMENTS) {
-    if (dataAgeSec(panesByTf, instrument) > MAX_DATA_AGE_SEC) continue; // stale feed → no forming display
+    if (!liveFeedOk(panesByTf, instrument).ok) continue; // TV-only + fresh → else no forming display
     const ctx = buildInstrumentCtx(instrument, panesByTf);
     if (!ctx) continue;
     for (const s of registry) {
@@ -316,10 +330,10 @@ export async function detect() {
   const biasByInstrument = computeBiasSnapshot(mergedBiasPanes(panesByTf, biasPanes), precheckRows);
 
   for (const instrument of INSTRUMENTS) {
-    const ageSec = dataAgeSec(panesByTf, instrument);
-    if (ageSec > MAX_DATA_AGE_SEC) {
-      log.throttled(`stale-${instrument}`, 300000, () =>
-        log.warn('stale feed — skipping strategy eval (not real-time)', { instrument, ageMin: Math.round(ageSec / 60) }));
+    const feed = liveFeedOk(panesByTf, instrument);
+    if (!feed.ok) {
+      log.throttled(`feed-${instrument}`, 300000, () =>
+        log.warn('skipping strategy eval — not real-time TV data', { instrument, reason: feed.reason }));
       continue;
     }
     const ctx = buildInstrumentCtx(instrument, panesByTf);
