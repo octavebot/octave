@@ -11,6 +11,7 @@ import { refresh as refreshConfig, get as getConfig, getMode, isMuted, muteRemai
 import { drainCorruptionEvents } from './lib/safe_json.js';
 import { beat as heartbeat } from './lib/heartbeat.js';
 import * as paperTrader from './lib/paper_trader.js';
+import { winRateFor } from './strategies/_helpers.js';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +65,34 @@ function dedupKey(result) {
   // Dropping barTime: each lifecycle transition fires once per setup, not
   // once per 15m bar. The 6h dedup TTL still cleans up stale entries.
   return `${result.setupId}:${result.status}`;
+}
+
+/**
+ * Close an open position because a higher-win-rate opposite signal took over
+ * the instrument (conflict guard, higher-WR-wins policy). Settles the paper
+ * position at the current price, marks the follow-up tracker closed, journals
+ * the exit, and pings Telegram. `openSetup` is the follow-up setup object being
+ * closed; `byResult` is the winning new signal (same instrument).
+ */
+async function closeConflictingPosition(openSetup, byResult) {
+  const exitPrice = byResult?.lastClose ?? openSetup?.entry ?? null;
+  // 1. Settle the paper position at market — onMilestone's default branch
+  //    marks-to-market at the given exit price for non-tp/sl milestones.
+  try { paperTrader.onMilestone(openSetup, 'conflict', exitPrice); }
+  catch (err) { log.warn('conflict: paper close threw', { setupId: openSetup?.setupId, err: err.message }); }
+  // 2. Mark the follow-up tracker closed so it leaves active() + stops pinging.
+  try { followUp.closeForConflict(openSetup.setupId); }
+  catch (err) { log.warn('conflict: follow-up close threw', { setupId: openSetup?.setupId, err: err.message }); }
+  // 3. Journal the conflict exit (single 'out' row, auto).
+  try { journal.log({ action: 'out', setupId: openSetup.setupId, reason: 'conflict', price: exitPrice, auto: true }); }
+  catch (err) { log.warn('conflict: journal threw', { err: err.message }); }
+  // 4. Tell the user which trade was closed and why.
+  try {
+    const note = `Closing this ${openSetup.direction} (${openSetup.strategy}) on ${String(openSetup.instrument).toUpperCase()} — `
+      + `${byResult.strategy} fired the opposite direction with a higher win rate.`;
+    await alerter.sendFollowUp({ setup: openSetup, milestone: 'conflict', currentPrice: exitPrice, note });
+  } catch (err) { log.warn('conflict: telegram notify threw', { err: err.message }); }
+  log.info('conflict close', { closed: openSetup.setupId, takenBy: `${byResult.strategy} ${byResult.direction}` });
 }
 
 async function tick() {
@@ -128,18 +157,23 @@ async function tick() {
   // mode somehow lacks a gate.
   const confThreshold = getMode().gate ?? getConfig().aiEngine?.threshold ?? 0.55;
 
-  // Conflict guard — never issue a signal opposite to a position already open
-  // on the same instrument (user: "bot said sell AND buy the same instrument,
-  // different strategies"). First position wins: the opposite signal is skipped
-  // (no Telegram, no paper trade) and logged. Build the open-direction map from
-  // the follow-up tracker once up front; we also fold in positions sent earlier
-  // in THIS loop so two opposite signals on the same tick can't both go out.
-  const openDirByInst = new Map(); // instrument -> Set<'LONG'|'SHORT'>
+  // Conflict guard — never hold opposite directions on the same instrument
+  // (user: "bot said sell AND buy the same instrument, different strategies").
+  // Resolution = HIGHER WIN-RATE STRATEGY WINS (win rates from the same
+  // backtest-cache the confidence gate uses, via winRateFor):
+  //   - new signal opposite to an open position, new WR  > open WR  → close the
+  //     open lower-WR position(s) at market and take the new signal.
+  //   - new signal opposite to an open position, new WR <= open WR  → skip new.
+  // Positions opened earlier in THIS loop are folded in so two opposite signals
+  // on one tick resolve by WR too (higher sends, lower skips).
+  const openByInst = new Map(); // instrument -> [{ direction, strategy, wr, setup }]
+  const addOpen = (inst, direction, strategy, setup) => {
+    if (!openByInst.has(inst)) openByInst.set(inst, []);
+    openByInst.get(inst).push({ direction, strategy, wr: winRateFor(strategy), setup });
+  };
   try {
     for (const s of (followUp.active() || [])) {
-      if (!s?.instrument || !s?.direction) continue;
-      if (!openDirByInst.has(s.instrument)) openDirByInst.set(s.instrument, new Set());
-      openDirByInst.get(s.instrument).add(s.direction);
+      if (s?.instrument && s?.direction) addOpen(s.instrument, s.direction, s.strategy, s);
     }
   } catch (err) { log.warn('conflict-guard: follow_up.active() threw', { err: err.message }); }
   const oppositeOf = (d) => (d === 'LONG' ? 'SHORT' : d === 'SHORT' ? 'LONG' : null);
@@ -153,9 +187,24 @@ async function tick() {
     // chart (visible via /history), they just don't ring the phone.
     const isTelegramWorthy = r.status === 'triggered';
 
-    // Opposite-direction position already open on this instrument? Skip.
+    // Opposite-direction position open on this instrument? Resolve by win rate.
     const opp = oppositeOf(r.direction);
-    const conflict = isTelegramWorthy && !!opp && openDirByInst.get(r.instrument)?.has(opp);
+    let conflict = false;
+    const opposed = (isTelegramWorthy && opp) ? (openByInst.get(r.instrument) || []).filter((p) => p.direction === opp) : [];
+    if (opposed.length) {
+      const newWr = winRateFor(r.strategy);
+      const topOpenWr = Math.max(...opposed.map((p) => p.wr));
+      if (newWr > topOpenWr) {
+        // New signal is the stronger strategy → close every opposed position.
+        for (const p of opposed) {
+          try { await closeConflictingPosition(p.setup, r); }
+          catch (err) { log.warn('conflict close threw', { setupId: p.setup?.setupId, err: err.message }); }
+        }
+        openByInst.set(r.instrument, (openByInst.get(r.instrument) || []).filter((p) => p.direction !== opp));
+      } else {
+        conflict = true; // open position is the stronger (or equal) strategy → skip new
+      }
+    }
 
     const baseConf = r.confidence ?? 0;
     const confGated = isTelegramWorthy && baseConf < confThreshold;
@@ -183,7 +232,7 @@ async function tick() {
     } else if (conflict) {
       log.info('alert conflict-skipped', {
         strategy: r.strategy, setupId: r.setupId, direction: r.direction,
-        reason: `opposite ${opp} already open on ${r.instrument}`,
+        reason: `opposite ${opp} open on ${r.instrument} with higher/equal win rate`,
       });
     } else if (confGated) {
       log.info('alert conf-gated', {
@@ -196,11 +245,9 @@ async function tick() {
       log.warn('telegram send failed — dedup rolled back', { key });
     } else {
       // A signal we actually sent now occupies the instrument in its direction
-      // — fold it into the map so a later same-tick opposite signal is skipped.
-      if (shouldSendTelegram && r.direction) {
-        if (!openDirByInst.has(r.instrument)) openDirByInst.set(r.instrument, new Set());
-        openDirByInst.get(r.instrument).add(r.direction);
-      }
+      // — fold it into the map so a later same-tick opposite signal resolves
+      // against it by win rate too.
+      if (shouldSendTelegram && r.direction) addOpen(r.instrument, r.direction, r.strategy, r);
       const tgState = !isTelegramWorthy
         ? 'skipped (not triggered)'
         : conflict ? `skipped (conflicts open ${opp})`

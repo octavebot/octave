@@ -281,6 +281,23 @@ export function active() {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
+/**
+ * Force-close a tracked setup because a higher-win-rate opposite signal took
+ * over the instrument (see loop.js conflict guard). Marks it closed so it
+ * leaves active() and stops generating TP/SL pings. Returns the closed setup
+ * (a copy) or null if it wasn't open. The paper position + journal + Telegram
+ * are settled by the caller — this only updates the tracker's own state.
+ */
+export function closeForConflict(setupId) {
+  reloadIfStale();
+  const s = state.setups[setupId];
+  if (!s || s.closedAt) return null;
+  s.closedAt = Date.now();
+  s.closedReason = 'conflict';
+  save();
+  return { ...s };
+}
+
 /** Drop closed setups >7d old and stale-open setups >36h old. */
 export function prune() {
   reloadIfStale();

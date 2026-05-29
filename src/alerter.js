@@ -263,7 +263,7 @@ export async function send(r, ctx = {}) {
 
 // ─── Follow-up milestone alerts ──────────────────────────────────────────
 
-export async function sendFollowUp({ setup, milestone, currentPrice }) {
+export async function sendFollowUp({ setup, milestone, currentPrice, note }) {
   const fmt = (v) => fmtPrice(v);
   const dir = setup.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
   // Identify WHICH trade this follow-up is about. With gold + nasdaq and
@@ -323,6 +323,10 @@ export async function sendFollowUp({ setup, milestone, currentPrice }) {
     case 'expired':
       head = '⏳ *SETUP EXPIRED*';
       body = `No TP2/SL hit within the window. Close any remainder manually.`;
+      break;
+    case 'conflict':
+      head = '🔄 *CLOSED — HIGHER-WIN-RATE SIGNAL TOOK OVER*';
+      body = note || `A higher-win-rate strategy fired the opposite direction on this instrument. Closing this position to take the stronger signal.`;
       break;
     default:
       return;

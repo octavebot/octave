@@ -298,8 +298,10 @@ const DEFAULT_WIN_RATES = {
 };
 let _winRates = { rates: null, at: 0 };
 
-/** Live per-strategy win rates from the nightly backtest cache (10-min TTL). */
-function winRateFor(strategyId) {
+/** Live per-strategy win rates from the nightly backtest cache (10-min TTL).
+ * Exported so the loop's conflict guard can rank competing strategies by the
+ * same backtested win rate the confidence gate uses. */
+export function winRateFor(strategyId) {
   const now = Date.now();
   if (!_winRates.rates || now - _winRates.at > 600_000) {
     let rates = {};
