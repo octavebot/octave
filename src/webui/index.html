@@ -518,12 +518,6 @@ function saveCollapseState(state) {
   catch {}
 }
 
-const MODE_DESC = {
-  auto:  'Cloud is primary when alive; local takes over on Mac when cloud is stale (recommended).',
-  cloud: 'Only cloud sends Telegram. Local stays silent (still draws on TradingView).',
-  local: 'Only local sends Telegram. Cloud tick exits early. Mac must stay on.',
-};
-
 function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
