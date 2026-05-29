@@ -129,7 +129,17 @@ export function precheck(ctx) {
   const tf60 = ctx.pane('60');
   if (!tf?.bars || tf.bars.length < 30) return null;
   const np = nyParts(ctx.barTime);
-  const inWindow = np.h >= 7 && np.h < 10;
+  // Window shown as met when EITHER the wall clock OR the last-closed bar is in
+  // the killzone — fixes the ≤15-min session-start lag (see london_killzone.js
+  // precheck comment). UNLIKE london/asian, NY-FVG's retrace trigger CAN fire
+  // on a pre-session closed bar, so we must guard the trigger on inWindowBar
+  // (the barTime window evaluate() actually uses) — otherwise a retrace on the
+  // 06:45 bar at 07:05 wall would show READY while evaluate() refuses (false
+  // READY, the bug fixed in the pass-10 audit). Live-only; evaluate unchanged.
+  const nowNp = nyParts((ctx.ts || Date.now()) / 1000);
+  const inWindowBar = np.h >= 7 && np.h < 10;
+  const inWindowNow = nowNp.h >= 7 && nowNp.h < 10;
+  const inWindow = inWindowNow || inWindowBar;
 
   const gaps = findFVGs(tf.bars, 50) || [];
   const recent = gaps.filter((g) => g.idx >= tf.bars.length - 9);
@@ -163,7 +173,11 @@ export function precheck(ctx) {
   // READY in /setup ("retrace into gap" met because the bearish path's
   // condition was checked unconditionally) while evaluate's LONG branch
   // refused to fire — the user's "ready but never gave signal" report.
-  const inRetrace = gap && (
+  // `inWindowBar` guard: the retrace trigger may only show as met when the
+  // last CLOSED bar is itself in the killzone — i.e. exactly when evaluate()
+  // would act. This prevents a pre-session bar (e.g. 06:45 at 07:05 wall) from
+  // showing the trigger as READY when evaluate() would early-return.
+  const inRetrace = inWindowBar && gap && (
     (direction === 'LONG'  && gap.side === 'bullish' && last.low  <= gap.top    && last.low  >= gap.bottom) ||
     (direction === 'SHORT' && gap.side === 'bearish' && last.high >= gap.bottom && last.high <= gap.top)
   );
@@ -185,7 +199,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET, skips LONG at 09:00)', met: inWindow && !longH09Skip, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET${longH09Skip ? ' (LONG×09 muted)' : ''}` },
+      { kind: 'gate',    label: 'NY killzone (07:00–10:00 ET, skips LONG at 09:00)', met: inWindow && !longH09Skip, value: `${nowNp.h}:${String(nowNp.min||0).padStart(2,'0')} ET${longH09Skip ? ' (LONG×09 muted)' : ''}` },
       { kind: 'gate',    label: 'H1 trend (vs 50-EMA, w/ slope)',met: !!direction, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
       { kind: 'gate',    label: 'Tradable FVG present',         met: gapSizeOk, value: gap ? `${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)} (${gap.side}, size ${(gap.top - gap.bottom).toFixed(2)} / min ${minGap.toFixed(2)})` : 'no recent FVG' },
       { kind: 'trigger', label: 'Retrace into gap',             met: !!inRetrace, value: gap ? `last ${last.low.toFixed(2)}–${last.high.toFixed(2)} vs gap ${gap.bottom.toFixed(2)}–${gap.top.toFixed(2)}` : 'no gap to retrace' },

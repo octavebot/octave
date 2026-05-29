@@ -146,7 +146,16 @@ export function precheck(ctx) {
   const tf60 = ctx.pane('60');
   if (!tf?.bars || tf.bars.length < 40) return null;
   const np = nyParts(ctx.barTime);
-  const inWindow = np.h >= 2 && np.h < 10 && np.h !== 2 && np.h !== 5;
+  // Window shown as met when EITHER the wall clock OR the last-closed bar is
+  // in the breakout window — see the detailed comment in london_killzone.js
+  // precheck (fixes the ≤15-min session-start lag where the last closed bar's
+  // open hour reads pre-window). Live-only; evaluate() keeps barTime semantics
+  // for backtest determinism. The breakout trigger can't fire on a pre-window
+  // bar (a bar inside the Asian range can't close beyond it), so no separate
+  // trigger guard is needed to prevent a false READY.
+  const nowNp = nyParts((ctx.ts || Date.now()) / 1000);
+  const winOk = (h) => h >= 2 && h < 10 && h !== 2 && h !== 5;
+  const inWindow = winOk(nowNp.h) || winOk(np.h);
 
   const asianBars = tf.bars.filter((b) => {
     const p = nyParts(b.time);
@@ -174,8 +183,14 @@ export function precheck(ctx) {
     if (e50last != null) { trendUp = h1.close > e50last; trendDown = h1.close < e50last; }
   }
   const margin = 0.12 * (a15 || 1);
-  const brokeUp = haveAsian && trendUp && last.close > asianHi + margin;
-  const brokeDown = haveAsian && trendDown && last.close < asianLo - margin;
+  // inWindowBar = the barTime window evaluate() actually gates on. A post-
+  // Asian-range bar at the h=2 boundary (e.g. 02:45 bar at 03:05 wall) CAN
+  // close beyond the range, but evaluate() excludes h=2 — so guard the
+  // breakout trigger on inWindowBar to avoid a false READY there (mirrors the
+  // NY-FVG guard).
+  const inWindowBar = winOk(np.h);
+  const brokeUp = inWindowBar && haveAsian && trendUp && last.close > asianHi + margin;
+  const brokeDown = inWindowBar && haveAsian && trendDown && last.close < asianLo - margin;
   const direction = brokeUp ? 'LONG' : brokeDown ? 'SHORT' : (trendUp ? 'LONG' : trendDown ? 'SHORT' : null);
 
   let h1Close = null, h1Ema50 = null;
@@ -194,7 +209,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET, skips 02 & 05)', met: inWindow, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'Breakout window (02:00–10:00 ET, skips 02 & 05)', met: inWindow, value: `${nowNp.h}:${String(nowNp.min||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range defined',              met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
       { kind: 'gate',    label: 'H1 trend aligned',                 met: trendUp || trendDown, value: h1Close != null && h1Ema50 != null ? `H1 ${h1Close.toFixed(2)} ${trendUp ? '>' : trendDown ? '<' : '≈'} EMA50 ${h1Ema50.toFixed(2)}` : 'no H1 data' },
       { kind: 'trigger', label: 'Wide-body breakout bar',           met: bodyOk, value: `body ${body.toFixed(2)} / range ${range.toFixed(2)} = ${Math.round(body/range*100)}% (min ${Math.round(bodyMin*100)}%)` },

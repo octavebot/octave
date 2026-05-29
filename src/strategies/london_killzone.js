@@ -112,7 +112,25 @@ export function precheck(ctx) {
   const tf = ctx.pane('15');
   if (!tf?.bars || tf.bars.length < 60) return null;
   const np = nyParts(ctx.barTime);
-  const inWindow = np.h >= 2 && np.h < 5;
+  // Killzone membership is partly a WALL-CLOCK question ("are we in the London
+  // session right now?"). The detector evaluates the last CLOSED 15m bar, so
+  // at e.g. 02:08 ET the newest closed bar opened at 01:45 → nyParts(barTime).h
+  // === 1, which read as "outside the killzone" for the first 15 min of every
+  // session even though we ARE in London (the user's "still says waiting
+  // killzone even though we're in London" report). Show the gate as met when
+  // EITHER the wall clock OR the last-closed bar is in the window:
+  //   - session start (02:05 wall / 01:45 bar): inWindowNow covers it
+  //   - session end   (05:05 wall / 04:45 bar): inWindowBar covers it (the
+  //     04:45 bar closed at 05:00 and evaluate() can still fire on it)
+  // Live-only: precheck is never called in backtest (see detector.js);
+  // evaluate() keeps its barTime-only window so the backtest stays
+  // deterministic. London's sweep trigger can't fire on a pre-session bar (the
+  // last pre-02:00 bar is part of the Asian range, so last.high ≤ asianHi),
+  // so no false-READY is possible here without a separate trigger guard.
+  const nowNp = nyParts((ctx.ts || Date.now()) / 1000);
+  const inWindowBar = np.h >= 2 && np.h < 5;
+  const inWindowNow = nowNp.h >= 2 && nowNp.h < 5;
+  const inWindow = inWindowNow || inWindowBar;
 
   const asianBars = tf.bars.filter((b) => {
     const p = nyParts(b.time);
@@ -160,7 +178,7 @@ export function precheck(ctx) {
     direction,
     projection,
     conditions: [
-      { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${np.h}:${String(np.min||0).padStart(2,'0')} ET` },
+      { kind: 'gate',    label: 'London killzone (02:00–05:00 ET)', met: inWindow, value: `${nowNp.h}:${String(nowNp.min||0).padStart(2,'0')} ET` },
       { kind: 'gate',    label: 'Asian range built',                met: haveAsian, value: haveAsian ? `hi ${asianHi.toFixed(2)} / lo ${asianLo.toFixed(2)} · ${asianBars.length} bars` : `only ${asianBars.length} bars (need 5)` },
       { kind: 'trigger', label: 'Wick swept Asian range',           met: wickBeyond, value: wickHi ? `high ${asianHi.toFixed(2)} pierced by ${(last.high - asianHi).toFixed(2)}` : wickLo ? `low ${asianLo.toFixed(2)} pierced by ${(asianLo - last.low).toFixed(2)}` : haveAsian ? `last wick ${last.low.toFixed(2)}–${last.high.toFixed(2)} inside` : '—' },
       { kind: 'trigger', label: 'Body closed back inside',          met: closedBack, value: !wickBeyond ? 'no sweep yet' : closedBackHi ? `close ${last.close.toFixed(2)} < hi ${asianHi.toFixed(2)}` : closedBackLo ? `close ${last.close.toFixed(2)} > lo ${asianLo.toFixed(2)}` : `close ${last.close.toFixed(2)} hasn't reclaimed range` },
