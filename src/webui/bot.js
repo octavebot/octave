@@ -2649,6 +2649,15 @@ export async function handleUpdate(update) {
     return send('🔒 *Owner only.* This command changes settings for everyone — ask the admin.');
   }
 
+  // Test-harness guard: refuse to actually mutate state when the bot was
+  // started via initForTest() rather than start(). See the IS_TEST_HARNESS
+  // comment above initForTest() for context (an audit pass leaked a /mute
+  // into the live bot, suppressing a real signal). Read commands pass through.
+  if (IS_TEST_HARNESS && OWNER_ONLY.has(cmd)) {
+    console.warn(`[bot] test-harness refusing OWNER_ONLY ${cmd} (would mutate live state)`);
+    return send(`🧪 _test-harness mode: refusing \`${cmd}\` (would mutate live runtime config). Use the real bot to issue this command._`);
+  }
+
   // Group chat allowlist — if the command isn't in GROUP_ALLOWED_COMMANDS
   // and the source IS the group, redirect the reply to the owner DM.
   // Friends in the group never see private/admin output.
@@ -2717,9 +2726,19 @@ async function pollLoop() {
 // Initialize creds + strategy maps WITHOUT starting the poll loop. Lets a test
 // harness drive handleUpdate through the real code path (same as start() minus
 // polling), so commands can be exercised exactly as a user would.
+//
+// IS_TEST_HARNESS is flipped here and checked in handleUpdate before dispatching
+// any OWNER_ONLY (state-mutating) command. Without this guard, a test that
+// includes /mute, /enable, /restart, etc. in its command-coverage sweep leaks
+// real mutations into the live runtime — an earlier audit pass briefly muted
+// the live bot via /mute (1m default), which then suppressed a real signal.
+// The flag is module-scoped so it only affects the same process that called
+// initForTest; the real systemd-started bot never hits this code path.
+let IS_TEST_HARNESS = false;
 export async function initForTest() {
   if (!loadCreds()) throw new Error('loadCreds failed — env not found');
   await loadStrategies();
+  IS_TEST_HARNESS = true;
   return { CHAT_ID, OWNER_ID };
 }
 
