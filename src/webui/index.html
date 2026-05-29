@@ -454,6 +454,35 @@
 </div>
 
 <script>
+// ── Admin auth ───────────────────────────────────────────────────────────
+// Mutating endpoints (/api/config, /api/restart, /api/shutdown, etc.) require
+// OCTAVE_ADMIN_TOKEN when set in the VPS .env. We store it in localStorage
+// after the first successful prompt and inject it into every mutating fetch.
+// Reads (GET) stay un-gated server-side so the dashboard always loads.
+const ADMIN_TOKEN_KEY = 'octave.adminToken';
+function getAdminToken() { try { return localStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { return ''; } }
+function setAdminToken(t) { try { t ? localStorage.setItem(ADMIN_TOKEN_KEY, t) : localStorage.removeItem(ADMIN_TOKEN_KEY); } catch {} }
+async function promptAdminToken(reason) {
+  const cur = getAdminToken();
+  const next = window.prompt(reason || 'Admin token (from VPS .env OCTAVE_ADMIN_TOKEN):', cur);
+  if (next === null) return null; // user cancelled
+  setAdminToken(next.trim());
+  return next.trim();
+}
+async function adminFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const tok = getAdminToken();
+  if (tok) headers['X-Octave-Admin-Token'] = tok;
+  let r = await fetch(url, { ...opts, headers });
+  if (r.status === 401) {
+    const next = await promptAdminToken('Admin token required (rejected). Paste OCTAVE_ADMIN_TOKEN:');
+    if (next === null) return r; // user cancelled — return the 401 so callers can react
+    headers['X-Octave-Admin-Token'] = next;
+    r = await fetch(url, { ...opts, headers });
+  }
+  return r;
+}
+
 // Strategy list is loaded live from /api/strategies (auto-discovered from
 // the registry). Populated once at startup before the first render.
 let STRATEGY_GROUPS = [];
@@ -514,7 +543,7 @@ async function fetchState() {
 }
 
 async function postConfig(payload) {
-  const r = await fetch('/api/config', {
+  const r = await adminFetch('/api/config', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
@@ -789,7 +818,7 @@ document.addEventListener('click', async (e) => {
   if (delBtn) {
     if (!confirm(`Delete strategy "${delBtn.dataset.deleteStrategy}"?`)) return;
     try {
-      const r = await fetch(`/api/user-strategies/${encodeURIComponent(delBtn.dataset.deleteStrategy)}`, { method: 'DELETE' });
+      const r = await adminFetch(`/api/user-strategies/${encodeURIComponent(delBtn.dataset.deleteStrategy)}`, { method: 'DELETE' });
       if (!r.ok) throw new Error(await r.text());
       toast('🗑 Deleted');
       delete document.getElementById('strategies').dataset.fingerprint; // force rerender
@@ -827,7 +856,7 @@ document.addEventListener('change', async (e) => {
   const fd = new FormData();
   for (const f of files) fd.append('files', f, f.name);
   try {
-    const r = await fetch('/api/user-strategies/upload', { method: 'POST', body: fd });
+    const r = await adminFetch('/api/user-strategies/upload', { method: 'POST', body: fd });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
     const ok = data.results.filter((x) => x.ok).length;
@@ -845,7 +874,7 @@ document.addEventListener('change', async (e) => {
 
 async function openLogs() {
   try {
-    const r = await fetch('/api/open-logs', { method: 'POST' });
+    const r = await adminFetch('/api/open-logs', { method: 'POST' });
     const data = await r.json().catch(() => ({}));
     if (data.ok) { toast('📂 Opening logs in Finder'); return; }
     // VPS path — server is Linux, no GUI. Show where the logs live.
@@ -917,7 +946,7 @@ async function saveStrategy() {
     const path = editingStrategyId
       ? `/api/user-strategies/${encodeURIComponent(editingStrategyId)}`
       : '/api/user-strategies';
-    const r = await fetch(path, {
+    const r = await adminFetch(path, {
       method, headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -948,7 +977,7 @@ async function runAutoHeal() {
   if (!confirm('Run auto-heal across every service?\n\nUnhealthy services will be restarted. Healthy ones are left alone.')) return;
   toast('🩹 Healing…');
   try {
-    const r = await fetch('/api/fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ component: 'all' }) });
+    const r = await adminFetch('/api/fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ component: 'all' }) });
     const data = await r.json();
     const lines = [];
     for (const [key, entry] of Object.entries(data.log || {})) {
@@ -962,7 +991,7 @@ async function runAutoHeal() {
 
 function confirmShutdown() {
   if (!confirm('Shut down Octave completely?\n\n• Signal engine\n• Telegram bot\n• Dashboard\n• Watchdog\n• Tunnel\n\nYou\'ll have to restart manually with systemctl on the VPS.')) return;
-  fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+  adminFetch('/api/shutdown', { method: 'POST' }).catch(() => {});
   toast('Shutdown requested…');
 }
 
@@ -1023,7 +1052,7 @@ async function restartService(key) {
   if (key === 'all' && !confirm('Restart all services? Local alerts will pause for ~5 seconds.')) return;
   toast(key === 'all' ? '🔄 Restarting all…' : `🔄 Restarting ${key}…`);
   try {
-    const r = await fetch('/api/restart', {
+    const r = await adminFetch('/api/restart', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ service: key }),
     });
