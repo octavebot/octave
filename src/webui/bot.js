@@ -1227,11 +1227,20 @@ async function cmdActiveSetups() {
   } catch {}
 
   const todayKey = nyDateKey(Date.now());
-  // Only count signals actually DELIVERED to Telegram (telegram:'sent') — a
-  // setup that triggered but was confidence-gated or muted was NOT sent to the
-  // user, so listing it under "Signals fired today" was misleading.
-  const fired = readAlerts({ limit: 200 })
-    .filter((a) => a.status === 'triggered' && a.telegram === 'sent' && nyDateKey(a.time) === todayKey);
+  // EVERY status:triggered event today, including ones that didn't reach
+  // Telegram (gated for low confidence, muted, news blackout). The user's
+  // dedup is day-scoped on setupId — the strategy WILL NOT re-trigger today
+  // regardless of why the alert was suppressed, so /setups must flag those
+  // rows or they read "READY" forever with no explanation.
+  // (The original bug: only telegram:'sent' was counted, so a confidence-
+  //  gated triggered setup left its precheck row reading READY all day with
+  //  no fire marker — the user saw "ready but never gave signal".)
+  const triggeredToday = readAlerts({ limit: 200 })
+    .filter((a) => a.status === 'triggered' && nyDateKey(a.time) === todayKey);
+  // Only the delivered subset goes under the "Fired today" Telegram-history
+  // section — that section is the actual alert stream, gated/muted setups
+  // should not appear there.
+  const fired = triggeredToday.filter((a) => a.telegram === 'sent');
 
   // Live precheck — what each strategy is watching RIGHT NOW. The signal
   // engine re-stamps this every tick (3s) so a stale read just means the
@@ -1240,17 +1249,28 @@ async function cmdActiveSetups() {
   const precheckFresh = precheckSnap && (Date.now() - (precheckSnap.at || 0)) <= 180_000;
   const precheckRows = precheckFresh ? (precheckSnap.rows || []) : [];
 
-  // A precheck row can read "READY" while no NEW signal arrives: the setup
-  // already triggered today (dedup is day-scoped → each setup fires once) or is
-  // already an open trade. Map (strategy|instrument|direction) → status so READY
-  // doesn't imply an imminent alert when it has in fact already fired.
+  // A precheck row can read "READY" while no NEW signal arrives because:
+  //  - the setup already triggered today (dedup is day-scoped, fires once)
+  //  - it's already an open trade
+  //  - it triggered but was confidence-gated, muted, or blacked-out
+  // Map (strategy|instrument|direction) → marker so READY isn't read as
+  // "an alert is coming" when the strategy has actually acted today.
   const takenKey = (strat, inst, dir) => `${strat}|${inst}|${dir}`;
+  // Short label per telegram disposition. Keeps the marker on one row.
+  const dispositionLabel = (tg, time) => {
+    const t = nyHHmm(time);
+    if (tg === 'sent') return `fired ${t}`;
+    if (tg === 'suppressed (muted)' || tg === 'muted') return `fired ${t} · muted`;
+    if (tg && tg.startsWith('gated')) return `gated ${t} · low conf`;
+    if (tg && tg.includes('blackout')) return `fired ${t} · news blackout`;
+    return `fired ${t}`;
+  };
   const taken = new Map();
-  for (const a of fired) {
+  for (const a of triggeredToday) {
     const parts = String(a.setupId || '').split('|');
     const inst = parts[0];
     const dir = parts.find((p) => p === 'LONG' || p === 'SHORT') || '';
-    taken.set(takenKey(a.strategy, inst, dir), `fired ${nyHHmm(a.time)}`);
+    taken.set(takenKey(a.strategy, inst, dir), dispositionLabel(a.telegram, a.time));
   }
   for (const s of open) taken.set(takenKey(s.strategy, s.instrument, s.direction), 'open trade');
 
@@ -1386,9 +1406,12 @@ async function cmdSetup(arg) {
     return send(`#${KEY_TO_NUM[key] || 'U'} *${tgEscape(key)}* · not running on any instrument right now. \`/strategies\` shows the enabled list.`);
   }
 
-  // A setup fires once per day (dedup is day-scoped), so a "READY" row whose
-  // setup already triggered today — or is already an open trade — will NOT send
-  // a fresh signal. Flag that so READY isn't read as "an alert is coming".
+  // A setup fires once per day (dedup is day-scoped). A "READY" row whose
+  // setup already triggered today — whether delivered, confidence-gated,
+  // muted, or news-blacked-out — will NOT re-fire. Flag every triggered event
+  // (regardless of telegram delivery) with a label that explains why no
+  // signal came (the original bug: only telegram:'sent' was counted, so a
+  // confidence-gated row read READY all day with no explanation).
   const takenKey = (inst, dir) => `${inst}|${dir}`;
   const taken = new Map();
   try {
@@ -1396,11 +1419,19 @@ async function cmdSetup(arg) {
     for (const s of fu.active()) if (s.strategy === key) taken.set(takenKey(s.instrument, s.direction), 'open trade');
   } catch {}
   const todayKey = nyDateKey(Date.now());
+  const dispositionLabel = (tg, time) => {
+    const t = nyHHmm(time);
+    if (tg === 'sent') return `fired ${t}`;
+    if (tg === 'suppressed (muted)' || tg === 'muted') return `fired ${t} · muted`;
+    if (tg && tg.startsWith('gated')) return `gated ${t} · low conf`;
+    if (tg && tg.includes('blackout')) return `fired ${t} · news blackout`;
+    return `fired ${t}`;
+  };
   for (const a of readAlerts({ limit: 200 })) {
-    if (a.strategy !== key || a.status !== 'triggered' || a.telegram !== 'sent' || nyDateKey(a.time) !== todayKey) continue;
+    if (a.strategy !== key || a.status !== 'triggered' || nyDateKey(a.time) !== todayKey) continue;
     const parts = String(a.setupId || '').split('|');
     const dir = parts.find((p) => p === 'LONG' || p === 'SHORT') || '';
-    if (!taken.has(takenKey(parts[0], dir))) taken.set(takenKey(parts[0], dir), `fired ${nyHHmm(a.time)}`);
+    if (!taken.has(takenKey(parts[0], dir))) taken.set(takenKey(parts[0], dir), dispositionLabel(a.telegram, a.time));
   }
 
   const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
@@ -1477,10 +1508,10 @@ async function cmdSetup(arg) {
   }
 
   // Explain why a READY row may not alert: a setup fires once per day, so once
-  // it has triggered (or become an open trade) it stays "READY" on the chart but
-  // won't re-signal until the next session.
+  // it has triggered (delivered OR gated OR muted) it stays "READY" on the
+  // chart but won't re-signal until the next session.
   if (rendered.some((r) => r.stage === 'READY' && taken.get(takenKey(r.instrument, r.direction)))) {
-    lines.push('', '_✅ = this setup already fired today. Each setup alerts once per day, so it won\'t re-signal until the next session even while it still reads READY._');
+    lines.push('', '_✅ = this setup already triggered today (whether delivered, confidence-gated, or muted). Each setup alerts once per day, so it won\'t re-signal until the next session even while it still reads READY._');
   }
   lines.push('', `_\`/playbook ${KEY_TO_NUM[key] || key}\` for the full ruleset · \`/setups\` for all strategies._`);
 
