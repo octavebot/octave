@@ -27,7 +27,6 @@ import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_confi
 import { fetchAllPanes, fetchBiasPanes } from './lib/cloud_data_supplement.js';
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
-import { enrichSetup } from './lib/trade_enrichment.js';
 import { loadRegistry } from './lib/strategy_registry.js';
 import { computeInstrumentBias, tallyStrategyVote, combineBias } from './lib/bias.js';
 
@@ -358,10 +357,6 @@ export async function detect() {
       r.lastClose = ctx.lastClose;
       r.barTime = ctx.barTime;
       if (!r.setupId.startsWith(`${instrument}|`)) r.setupId = `${instrument}|${r.setupId}`;
-      if (r.status === 'triggered') {
-        try { r.enrichment = enrichSetup(r, ctx); }
-        catch (err) { log.warn('enrichSetup threw', { setupId: r.setupId, err: err.message }); }
-      }
     }
     allResults.push(...results);
   }
