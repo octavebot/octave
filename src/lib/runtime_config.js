@@ -26,7 +26,10 @@ const DEFAULTS = Object.freeze({
   strategies: {},  // populated by registry on first run
   mute: { untilMs: 0, reason: null },
   alertChartImages: false,  // chart images disabled — text-only signal cards
-  aiEngine: { enabled: true, threshold: 0.55 },
+  // aiEngine.threshold is the legacy gate, kept as a fallback in loop.js
+  // (`getMode().gate ?? aiEngine.threshold ?? 0.55`). The per-mode gate
+  // (risk_manager MODES) is authoritative.
+  aiEngine: { threshold: 0.55 },
   mode: DEFAULT_MODE,       // 'passive' | 'aggressive' — risk/sizing/reward bundle (see MODES)
   lastUpdated: 0,
 });
@@ -43,10 +46,7 @@ export function load() {
     strategies: { ...(raw.strategies || {}) },
     mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
     alertChartImages: raw.alertChartImages === true,  // default off
-    aiEngine: {
-      enabled: raw.aiEngine?.enabled !== false,
-      threshold: Number(raw.aiEngine?.threshold) || 0.55,
-    },
+    aiEngine: { threshold: Number(raw.aiEngine?.threshold) || 0.55 },
     mode: (raw.mode === 'passive' || raw.mode === 'aggressive') ? raw.mode : DEFAULT_MODE,
     lastUpdated: raw.lastUpdated || 0,
   };

@@ -52,6 +52,7 @@ function fmtPrice(v) {
 }
 
 function tfLabel(tf) {
+  if (tf == null) return '15M'; // strategies emit `timeframe:'15'`; this is the safe default
   const map = { '1': '1M', '3': '3M', '5': '5M', '15': '15M', '30': '30M', '60': '1H', '240': '4H', '1D': '1D', 'D': '1D' };
   return map[String(tf)] || `${tf}M`;
 }

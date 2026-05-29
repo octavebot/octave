@@ -36,11 +36,8 @@ function logTrade(row) {
   } catch { /* never throw from paper logger */ }
 }
 
-// Risk per trade is now MODE-driven (see risk_manager MODES + runtime_config).
+// Risk per trade is MODE-driven (see risk_manager MODES + runtime_config).
 // getRiskPerTrade reports the active mode's budget so displays stay accurate.
-// setRiskPerTrade is retained as a no-op shim (legacy /risk callers) — risk is
-// changed by switching mode, not by an ad-hoc dollar override.
-export function setRiskPerTrade(_usd) { /* deprecated — use /mode */ }
 export function getRiskPerTrade() { return getMode().riskPerTrade; }
 
 /**
