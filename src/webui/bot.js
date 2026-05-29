@@ -1248,6 +1248,13 @@ async function cmdActiveSetups() {
   }
   for (const s of open) taken.set(takenKey(s.strategy, s.instrument, s.direction), 'open trade');
 
+  // Strategy|instrument that already fired or is open today (direction-agnostic).
+  // Used to keep the "Waiting" list clean: once a strategy has acted on an
+  // instrument it shows under Open / Fired today, not as still-dormant.
+  const takenSI = new Set();
+  for (const a of fired) takenSI.add(`${a.strategy}|${String(a.setupId || '').split('|')[0]}`);
+  for (const s of open) takenSI.add(`${s.strategy}|${s.instrument}`);
+
   const INST = { gold: 'GOLD', nasdaq: 'NASDAQ', sp: 'S&P' };
   const lines = [header('🎯', 'Setups')];
 
@@ -1265,35 +1272,74 @@ async function cmdActiveSetups() {
   }
 
   if (precheckRows.length) {
-    const ranked = precheckRows
-      .map((r) => {
-        const conds = r.conditions || [];
-        const gates = conds.filter((c) => c.kind === 'gate');
-        const triggers = conds.filter((c) => c.kind === 'trigger');
-        const gatesOk = gates.length > 0 && gates.every((c) => c.met);
-        const tMet = triggers.filter((c) => c.met).length;
-        const tTotal = triggers.length || 1;
-        return { ...r, gatesOk, tMet, tTotal, closeness: gatesOk ? tMet / tTotal : 0 };
-      })
-      .filter((r) => r.gatesOk)
-      .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
+    // Score every in-play row (strategy × instrument). gatesOk = all gates met
+    // (the setup's preconditions hold); closeness = how many trigger conditions
+    // are met. A row is "forming" only when its gates pass — otherwise it's
+    // "waiting" on a gate (out of time window, no Asian range, no trend, etc).
+    const scored = precheckRows.map((r) => {
+      const conds = r.conditions || [];
+      const gates = conds.filter((c) => c.kind === 'gate');
+      const triggers = conds.filter((c) => c.kind === 'trigger');
+      const gatesOk = gates.length > 0 && gates.every((c) => c.met);
+      const tMet = triggers.filter((c) => c.met).length;
+      const tTotal = triggers.length || 1;
+      return { ...r, gates, gatesOk, tMet, tTotal, closeness: gatesOk ? tMet / tTotal : 0 };
+    });
 
-    if (ranked.length) {
-      // Show every forming setup so the count in the header matches the rows
-      // listed below it (was capped at 6 while the header reported the full
-      // count — "Forming · 12" but only 6 rows).
-      lines.push('', `*Forming · ${ranked.length}*`);
-      for (const r of ranked) {
+    // FORMING — gates met, genuinely building toward a signal, not yet fired
+    // today (direction-aware: a strategy that fired LONG can still form a SHORT)
+    // and not already an open trade.
+    const forming = scored
+      .filter((r) => r.gatesOk && !taken.has(takenKey(r.strategy, r.instrument, r.direction)))
+      .sort((a, b) => b.closeness - a.closeness || a.strategy.localeCompare(b.strategy));
+    if (forming.length) {
+      lines.push('', `*Forming · ${forming.length}*`);
+      for (const r of forming) {
         const inst = INST[r.instrument] || r.instrument;
         const dir = r.direction === 'LONG' ? '🟢' : r.direction === 'SHORT' ? '🔴' : '⚪';
-        const already = taken.get(takenKey(r.strategy, r.instrument, r.direction));
-        const stage = already ? `✅ ${already}`
-          : r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
+        const stage = r.tMet === r.tTotal ? '🟢 READY' : r.tMet >= r.tTotal - 1 ? '🟠 NEAR' : '🟡 forming';
         const proj = r.projection
           ? ` · E${r.projection.entry.toFixed(2)} SL${r.projection.stop.toFixed(2)} TP${r.projection.t2.toFixed(2)} (1:${r.projection.rr2.toFixed(1)}R)`
           : '';
         lines.push(`${dir} *${tgEscape(r.strategy)}* ${inst} · ${stage}${proj}`);
       }
+    }
+
+    // WAITING — every other in-play strategy whose gate isn't satisfied yet, so
+    // the user sees ALL strategies that are live, not just the forming subset.
+    // Reason is derived from the first unmet gate (auto-updates if a strategy's
+    // gates change). Collapse to one line when a strategy is waiting on every
+    // instrument for the same reason (e.g. a time window blocks all at once);
+    // otherwise list per-instrument so partial states stay visible.
+    const shortReason = (gate) => {
+      if (!gate) return 'gate not met';
+      const label = String(gate.label || '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+      const val = gate.value != null ? String(gate.value) : '';
+      return val && val.length <= 24 ? `${label} · ${val}` : label;
+    };
+    const totalByStrat = new Map();
+    for (const r of scored) totalByStrat.set(r.strategy, (totalByStrat.get(r.strategy) || 0) + 1);
+    const byStrat = new Map();
+    for (const r of scored) {
+      if (r.gatesOk) continue;
+      if (takenSI.has(`${r.strategy}|${r.instrument}`)) continue;
+      const reason = shortReason(r.gates.find((c) => !c.met));
+      if (!byStrat.has(r.strategy)) byStrat.set(r.strategy, []);
+      byStrat.get(r.strategy).push({ inst: r.instrument, reason });
+    }
+    const waitingLines = [];
+    for (const [strat, items] of [...byStrat.entries()].sort((a, b) => (KEY_TO_NUM[a[0]] || 99) - (KEY_TO_NUM[b[0]] || 99))) {
+      const uniform = items.every((it) => it.reason === items[0].reason);
+      const waitingAll = items.length === (totalByStrat.get(strat) || items.length);
+      if (uniform && waitingAll) {
+        waitingLines.push(`*${tgEscape(strat)}* · ${items[0].reason}`);
+      } else {
+        for (const it of items) waitingLines.push(`*${tgEscape(strat)}* ${INST[it.inst] || it.inst} · ${it.reason}`);
+      }
+    }
+    if (waitingLines.length) {
+      lines.push('', `*Waiting · ${waitingLines.length}*`);
+      for (const l of waitingLines) lines.push(l);
     }
   } else if (precheckSnap && !precheckFresh) {
     lines.push('', '_engine catching up…_');
