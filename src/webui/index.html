@@ -652,8 +652,8 @@ function renderState(s) {
   setPx('nasdaq-price', 'nasdaq');
   setPx('sp-price', 'sp');
 
-  // Active setups: prefer the live follow-up tracker count (bot uses same source)
-  // and fall back to drawings.json for old systems that don't expose it.
+  // Active setups: live follow-up tracker count (same source the bot's /setups
+  // uses). tracked_setups is the legacy field name kept as a fallback.
   const activeCount = (typeof s.activity.active_setups === 'number'
     ? s.activity.active_setups
     : (s.activity.tracked_setups || 0));
