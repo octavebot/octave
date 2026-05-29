@@ -134,7 +134,6 @@ function renderTrade(t) {
   const instrument = String(t.instrument || '?').toUpperCase();
   const strategy = String(t.strategy || '?');
   const prog = tradeProgress(t);
-  const live = t.live;
   // Stage badge — keeps the panel in step with the Telegram follow-ups:
   // "TP1 ✓" once the runner is scaled out, "BE" once the stop is risk-free,
   // "PENDING" while the limit is still resting (not yet filled).
@@ -155,8 +154,7 @@ function renderTrade(t) {
       <div class="trade-head">
         <span class="trade-name">${strategy} · ${instrument}</span>
         <span>
-          ${stage}${live ? '<span class="trade-dir trade-live">LIVE</span> ' : ''}
-          <span class="trade-dir ${dir}">${direction || '—'}</span>
+          ${stage}<span class="trade-dir ${dir}">${direction || '—'}</span>
         </span>
       </div>
       <div class="level-grid">
@@ -179,7 +177,8 @@ function renderAccount(id, acc) {
   if (!acc) return '<div class="account"><div class="empty">No data for ' + id + '</div></div>';
   const balance = Number(acc.balance) || 50000;
   const dailyPnl = Number(acc.dailyPnl) || 0;
-  const mode = String(acc.mode || 'paper').toLowerCase();
+  // The dual live/paper mode was removed (see earlier deep-clean) — every
+  // account is paper now. Render the badge statically.
   const phase = String(acc.phase || 'eval');
   const enabled = !!acc.enabled;
   const profit = balance - 50000;
@@ -188,7 +187,7 @@ function renderAccount(id, acc) {
       <div class="account-head">
         <div class="account-name">${String(id).toUpperCase()}</div>
         <div class="account-status">
-          ${enabled ? '<span class="' + mode + '">' + mode.toUpperCase() + '</span>' : '<span>DISABLED</span>'}
+          ${enabled ? '<span class="paper">PAPER</span>' : '<span>DISABLED</span>'}
           · ${phase}
         </div>
       </div>

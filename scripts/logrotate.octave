@@ -37,3 +37,17 @@
     copytruncate
     su octave octave
 }
+
+# trade-journal.jsonl + paper-trades.jsonl — append-only, never truncated by
+# the app. Growth is small (~1.4 MB/year at current rates) but unbounded
+# without this. 25 MB ceiling keeps ~10 years of history at current rates.
+/home/octave/trading-alerts/src/state/trade-journal.jsonl
+/home/octave/trading-alerts/src/state/paper-trades.jsonl {
+    size 25M
+    rotate 6
+    missingok
+    notifempty
+    compress
+    copytruncate
+    su octave octave
+}
