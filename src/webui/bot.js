@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { beat as heartbeat, startHeartbeat, readAllBeats, isStale } from '../lib/heartbeat.js';
 import { sessionLabel } from '../lib/trade_log.js';
+import { withFileLock } from '../lib/safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -299,11 +300,16 @@ function writeJsonAtomic(path, obj) {
 function loadConfig() { return readJson(CONFIG_FILE, null); }
 
 async function updateConfig(updater) {
-  const cur = loadConfig() || {};
-  const next = updater(JSON.parse(JSON.stringify(cur)));
-  next.lastUpdated = Date.now();
-  writeJsonAtomic(CONFIG_FILE, next);
-  return next;
+  // Cross-process lock: bot + webui both write this file (Telegram commands
+  // here, dashboard POSTs in webui/server.js). Without the lock, concurrent
+  // load→merge→write sequences clobber each other's updates.
+  return withFileLock(CONFIG_FILE, async () => {
+    const cur = loadConfig() || {};
+    const next = updater(JSON.parse(JSON.stringify(cur)));
+    next.lastUpdated = Date.now();
+    writeJsonAtomic(CONFIG_FILE, next);
+    return next;
+  });
 }
 
 function nyDateKey(unixMs) {

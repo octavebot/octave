@@ -19,6 +19,7 @@ import { readFileSync, existsSync, writeFileSync, renameSync, mkdirSync, statSyn
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { withFileLock } from '../lib/safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -269,28 +270,31 @@ async function gatherState() {
 }
 
 async function saveConfig(updates) {
-  // VPS is authoritative. We just write the file atomically. No git push —
-  // that was racing with the bot's saveConfigAndPush writes, causing user
-  // toggles (notably AMN/TORI/WARRIOR) to flip back to disabled.
-  const current = loadConfig();
-  const next = { ...current };
-  if (updates.strategies && typeof updates.strategies === 'object') {
-    next.strategies = { ...current.strategies };
-    // Accept any registered built-in strategy id, plus any user strategy id.
-    const valid = registryIds();
-    try {
-      const us = await import('../lib/user_strategies.js');
-      for (const s of us.list()) valid.add(s.id);
-    } catch {}
-    for (const [k, v] of Object.entries(updates.strategies)) {
-      if (valid.has(k)) next.strategies[k] = !!v;
+  // VPS is authoritative. Cross-process lock around load→merge→write so a
+  // concurrent bot.updateConfig (Telegram /enable etc.) and dashboard POST
+  // don't clobber each other's strategies/mode/mute updates.
+  return withFileLock(CONFIG_FILE, async () => {
+    const current = loadConfig();
+    const next = { ...current };
+    if (updates.strategies && typeof updates.strategies === 'object') {
+      next.strategies = { ...current.strategies };
+      // Accept any registered built-in strategy id, plus any user strategy id.
+      const valid = registryIds();
+      try {
+        const us = await import('../lib/user_strategies.js');
+        for (const s of us.list()) valid.add(s.id);
+      } catch {}
+      for (const [k, v] of Object.entries(updates.strategies)) {
+        if (valid.has(k)) next.strategies[k] = !!v;
+      }
     }
-  }
-  if (updates.mute && typeof updates.mute === 'object') next.mute = updates.mute;
-  if (updates.mode === 'passive' || updates.mode === 'aggressive') next.mode = updates.mode;
-  next.lastUpdated = Date.now();
-  writeJsonAtomic(CONFIG_FILE, next);
-  return next;
+    if (updates.mute && typeof updates.mute === 'object') next.mute = updates.mute;
+    if (updates.mode === 'passive' || updates.mode === 'aggressive') next.mode = updates.mode;
+    if (typeof updates.alertChartImages === 'boolean') next.alertChartImages = updates.alertChartImages;
+    next.lastUpdated = Date.now();
+    writeJsonAtomic(CONFIG_FILE, next);
+    return next;
+  });
 }
 
 function sendJson(res, status, obj) {

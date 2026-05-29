@@ -16,6 +16,7 @@
 
 import {
   readFileSync, writeFileSync, existsSync, copyFileSync, appendFileSync, mkdirSync,
+  openSync, closeSync, unlinkSync, statSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,4 +87,56 @@ export function drainCorruptionEvents() {
   const fresh = lines.slice(offset).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   try { writeFileSync(OFFSET_FILE, String(lines.length)); } catch {}
   return fresh;
+}
+
+// ── Cross-process file lock for read-modify-write ────────────────────────
+// Background: runtime-config.json is written by BOTH the bot (Telegram
+// /enable, /mode, /mute → updateConfig in webui/bot.js) and the webui
+// (dashboard POSTs → saveConfig in webui/server.js). Each path does
+// load → merge → atomic-rename. With concurrent calls across processes,
+// the later writer's merge starts from the EARLIER writer's pre-write state,
+// so the earlier write is overwritten — a lost update on the same JSON
+// file. Atomic rename only prevents torn writes, not lost merges.
+//
+// withFileLock takes an exclusive lock via O_EXCL on a `.lock` sidecar so
+// the load-merge-write sequence becomes mutually exclusive. Stale locks
+// (>5s old OR PID not alive) are reclaimed. Caller does the I/O inside fn.
+const LOCK_STALE_MS = 5000;
+const LOCK_RETRY_MS = 50;
+const LOCK_MAX_RETRIES = 40; // ~2s ceiling — way longer than any merge takes
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function tryAcquire(lockPath) {
+  try {
+    const fd = openSync(lockPath, 'wx');
+    writeFileSync(lockPath, String(process.pid));
+    closeSync(fd);
+    return true;
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    return false;
+  }
+}
+function maybeReclaimStale(lockPath) {
+  try {
+    const st = statSync(lockPath);
+    const age = Date.now() - st.mtimeMs;
+    if (age > LOCK_STALE_MS) { unlinkSync(lockPath); return true; }
+    const pid = Number(readFileSync(lockPath, 'utf8').trim());
+    if (Number.isFinite(pid) && pid > 0 && !pidAlive(pid)) { unlinkSync(lockPath); return true; }
+  } catch { /* race with another reclaim — fine */ }
+  return false;
+}
+export async function withFileLock(path, fn) {
+  const lockPath = path + '.lock';
+  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+    if (tryAcquire(lockPath)) {
+      try { return await fn(); }
+      finally { try { unlinkSync(lockPath); } catch {} }
+    }
+    if (maybeReclaimStale(lockPath)) continue;
+    await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
+  }
+  throw new Error(`withFileLock: timed out acquiring ${lockPath}`);
 }
