@@ -373,6 +373,20 @@ export async function detect() {
         r.invalidReason = `news blackout: ${blackout.event?.title || 'high-impact event'} ±30m`;
       }
     }
+    // Mirror the blackout into the precheck rows so /setups + /setup show every
+    // strategy as BLOCKED during the window. Without this, a setup whose chart
+    // conditions are all met reads "READY" while the detector silently
+    // invalidates the actual triggered signal above — the user's "London sweep
+    // says READY but I never got a signal" report (a sweep that formed inside
+    // the FOMC-speaker ±30m blackout). One global gate prepended to every row,
+    // so gatesOk=false exactly where the signal would be suppressed.
+    const evTitle = blackout.event?.title || 'high-impact event';
+    for (const row of precheckRows) {
+      row.conditions = [
+        { kind: 'gate', label: 'No high-impact news (±30m)', met: false, value: `⛔ blackout: ${evTitle}` },
+        ...(row.conditions || []),
+      ];
+    }
   }
 
   // Persist the bias snapshot so /bias reads a fresh structural read instantly.
