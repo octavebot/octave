@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { beat as heartbeat, startHeartbeat, readAllBeats, isStale } from '../lib/heartbeat.js';
 import { sessionLabel } from '../lib/trade_log.js';
-import { withFileLock } from '../lib/safe_json.js';
+import { withFileLock, backupJson } from '../lib/safe_json.js';
 import { MODES } from '../lib/risk_manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -313,6 +313,11 @@ async function updateConfig(updater) {
     const next = updater(JSON.parse(JSON.stringify(cur)));
     next.lastUpdated = Date.now();
     writeJsonAtomic(CONFIG_FILE, next);
+    // Refresh the last-known-good .bak so corruption recovery doesn't roll the
+    // config back to a stale snapshot. This path bypasses runtime_config.save()
+    // (which does its own backup), so we must back up here too — otherwise the
+    // .bak only updated on the rare nightly save and drifted days stale.
+    backupJson(CONFIG_FILE);
     return next;
   });
 }

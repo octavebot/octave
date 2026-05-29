@@ -19,7 +19,7 @@ import { readFileSync, existsSync, writeFileSync, renameSync, mkdirSync, statSyn
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { withFileLock } from '../lib/safe_json.js';
+import { withFileLock, backupJson } from '../lib/safe_json.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -293,6 +293,9 @@ async function saveConfig(updates) {
     if (typeof updates.alertChartImages === 'boolean') next.alertChartImages = updates.alertChartImages;
     next.lastUpdated = Date.now();
     writeJsonAtomic(CONFIG_FILE, next);
+    // Keep the corruption-recovery .bak current — see the matching comment in
+    // bot.js updateConfig. This write path bypasses runtime_config.save().
+    backupJson(CONFIG_FILE);
     return next;
   });
 }

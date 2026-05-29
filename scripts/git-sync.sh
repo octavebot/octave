@@ -112,7 +112,15 @@ done
 # queued in PID1 regardless of this client.
 if echo "$CHANGED" | grep -qE '^src/strategies/'; then
   LOG "strategies changed — triggering octave-deploy-regen.service (90d stats + playbooks)"
-  sudo systemctl restart octave-deploy-regen.service >/dev/null 2>&1 &
+  # --no-block returns immediately after queueing the job (instead of waiting
+  # for the activation transaction to complete), so we don't need the
+  # backgrounded `&` that could be SIGKILLed when this oneshot's cgroup is
+  # torn down. Empirically the previous form failed silently on at least one
+  # deploy (commit d1233df at 2026-05-29T05:43Z: git-sync logged the trigger
+  # but journalctl shows the unit never activated).
+  if ! sudo systemctl --no-block restart octave-deploy-regen.service; then
+    LOG "ERROR: failed to queue octave-deploy-regen.service — check sudoers / unit status"
+  fi
 fi
 
 LOG "sync complete"
