@@ -30,9 +30,18 @@ const DEFAULTS = Object.freeze({
   // (`getMode().gate ?? aiEngine.threshold ?? 0.55`). The per-mode gate
   // (risk_manager MODES) is authoritative.
   aiEngine: { threshold: 0.55 },
-  mode: DEFAULT_MODE,       // 'passive' | 'aggressive' — risk/sizing/reward bundle (see MODES)
+  mode: DEFAULT_MODE,       // 'passive' | 'aggressive' | 'quality' — risk/sizing/reward bundle (see MODES)
+  // feed: which price source the engine is ALLOWED to evaluate/fire on.
+  //   'tv-only' — require the real-time TradingView bridge feed (silent if it
+  //               drops). The strict, execution-exact default.
+  //   'auto'    — also accept the Yahoo/OANDA fallback when TV is down, so the
+  //               bot keeps firing 24/5 (delayed/basis-shifted, but never frozen
+  //               — the staleness gate still applies in both modes).
+  feed: 'tv-only',
   lastUpdated: 0,
 });
+
+export const FEED_MODES = Object.freeze(['tv-only', 'auto']);
 
 let cache = null;
 
@@ -48,6 +57,7 @@ export function load() {
     alertChartImages: raw.alertChartImages === true,  // default off
     aiEngine: { threshold: Number(raw.aiEngine?.threshold) || 0.55 },
     mode: Object.prototype.hasOwnProperty.call(MODES, raw.mode) ? raw.mode : DEFAULT_MODE,
+    feed: FEED_MODES.includes(raw.feed) ? raw.feed : 'tv-only',
     lastUpdated: raw.lastUpdated || 0,
   };
 }
@@ -60,6 +70,15 @@ export function getMode() { return MODES[getModeName()] || MODES[DEFAULT_MODE]; 
 export function setMode(name) {
   if (!Object.prototype.hasOwnProperty.call(MODES, name)) return null;
   save({ ...get(), mode: name });
+  return name;
+}
+
+/** Active data-feed mode ('tv-only'|'auto'). */
+export function getFeedMode() { return get().feed || 'tv-only'; }
+/** Switch the data-feed mode; persists to disk. Returns the name, or null if invalid. */
+export function setFeedMode(name) {
+  if (!FEED_MODES.includes(name)) return null;
+  save({ ...get(), feed: name });
   return name;
 }
 

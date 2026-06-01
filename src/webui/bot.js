@@ -94,7 +94,7 @@ let ALLOWED_CHATS = new Set();
 const OWNER_ONLY = new Set([
   '/enable', '/disable', '/mute', '/unmute',
   '/restart', '/shutdown', '/fix', '/addstrategy', '/delstrategy',
-  '/backtest', '/risk', '/mode', '/cleanup-group',
+  '/backtest', '/risk', '/mode', '/feed', '/cleanup-group',
   '/in', '/out', '/be', '/note',
 ]);
 
@@ -1908,10 +1908,11 @@ async function cmdMode(arg) {
   const rc = await import('../lib/runtime_config.js');
   const { MODES } = await import('../lib/risk_manager.js');
   const want = (arg || '').toLowerCase().trim();
-  if (want === 'passive' || want === 'aggressive') {
+  if (Object.prototype.hasOwnProperty.call(MODES, want)) {
     rc.setMode(want);
     const m = rc.getMode();
-    return sendOwner(`✅ Mode → *${m.label}*\n$${m.riskPerTrade}/trade · up to ${m.maxContracts}c/instrument · daily stop $${m.dailyBreaker} · ${m.maxOpen} open · TP2≤${m.tp2MaxR}R\n_Takes effect on the next signal (engine refreshes config each tick)._`);
+    const trail = m.trail ? ` · runner trails ${m.trail.trailR}R` : '';
+    return sendOwner(`✅ Mode → *${m.label}*\n$${m.riskPerTrade}/trade · up to ${m.maxContracts}c/instrument · daily stop $${m.dailyBreaker} · ${m.maxOpen} open · TP2≤${m.tp2MaxR}R${trail}\n_Takes effect on the next signal (engine refreshes config each tick)._`);
   }
   const active = rc.getModeName();
   const fmt = (key) => {
@@ -1921,20 +1922,45 @@ async function cmdMode(arg) {
       `*${m.label}*${star}`,
       bullet(`$${m.riskPerTrade}/trade · up to ${m.maxContracts} micros/instrument`),
       bullet(`daily stop $${m.dailyBreaker} · max ${m.maxOpen} open positions`),
-      bullet(`TP1 ${m.tp1R}R def (≤${m.tp1MaxR}R) · TP2 ${m.tp2R}R def (≤${m.tp2MaxR}R) · BE at +1R`),
+      bullet(`TP1 ${m.tp1R}R def (≤${m.tp1MaxR}R) · TP2 ${m.tp2R}R def (≤${m.tp2MaxR}R) · BE at +1R${m.trail ? ` · runner trails ${m.trail.trailR}R (no fixed cap)` : ''}`),
     ].join('\n');
   };
+  const keys = Object.keys(MODES);
   return sendOwner([
     header('🎚', 'Risk mode'),
     '',
-    fmt('aggressive'),
-    '',
-    fmt('passive'),
+    keys.map(fmt).join('\n\n'),
     '',
     '_Tap to switch — applies on the next signal._',
+  ].join('\n'), { keyboard: [keys.map((k) => (
+    { text: (k === active ? `✅ ${MODES[k].label}` : MODES[k].label), callback_data: `set:mode:${k}` }
+  ))] });
+}
+
+// /feed            → show the active data-feed mode
+// /feed tv|auto    → switch which price source the engine may fire on
+async function cmdFeed(arg) {
+  const rc = await import('../lib/runtime_config.js');
+  let want = (arg || '').toLowerCase().trim();
+  if (want === 'tv') want = 'tv-only';
+  if (want === 'tv-only' || want === 'auto') rc.setFeedMode(want);
+  const active = rc.getFeedMode();
+  const desc = {
+    'tv-only': 'Only fire on the real-time *TradingView* bridge feed (from the other Mac). Execution-exact — but if the bridge drops, the bot goes *silent* until TV is back.',
+    'auto': 'Fire on *any* fresh feed — TradingView when up, else *Yahoo/OANDA* fallback. Keeps the bot running 24/5 when TV is down (slightly delayed + a small futures-vs-spot basis, but never frozen — the staleness gate still applies).',
+  };
+  const line = (k, label) => `${k === active ? '✅' : '▫️'} *${label}*\n${desc[k]}`;
+  return sendOwner([
+    header('📡', 'Data feed'),
+    '',
+    line('tv-only', 'TV-ONLY'),
+    '',
+    line('auto', 'AUTO (TV + fallback)'),
+    '',
+    `Active: *${active}* · _switch with_ \`/feed tv\` _or_ \`/feed auto\` · _applies next tick._`,
   ].join('\n'), { keyboard: [[
-    { text: (active === 'aggressive' ? '✅ AGGRESSIVE' : 'AGGRESSIVE'), callback_data: 'set:mode:aggressive' },
-    { text: (active === 'passive' ? '✅ PASSIVE' : 'PASSIVE'), callback_data: 'set:mode:passive' },
+    { text: (active === 'tv-only' ? '✅ TV-ONLY' : 'TV-ONLY'), callback_data: 'set:feed:tv-only' },
+    { text: (active === 'auto' ? '✅ AUTO' : 'AUTO'), callback_data: 'set:feed:auto' },
   ]] });
 }
 
@@ -2488,8 +2514,14 @@ export async function handleCallback(cq) {
       const [what, val] = arg.split(':');
       if (what === 'charts') await updateConfig((c) => { c.alertChartImages = (val === 'on'); return c; });
       else if (what === 'mode') {
-        if (val !== 'passive' && val !== 'aggressive') return ackCallback(cq.id, 'invalid mode');
+        const { MODES } = await import('../lib/risk_manager.js');
+        if (!Object.prototype.hasOwnProperty.call(MODES, val)) return ackCallback(cq.id, 'invalid mode');
         await updateConfig((c) => { c.mode = val; return c; });
+      }
+      else if (what === 'feed') {
+        const { FEED_MODES } = await import('../lib/runtime_config.js');
+        if (!FEED_MODES.includes(val)) return ackCallback(cq.id, 'invalid feed');
+        await updateConfig((c) => { c.feed = val; return c; });
       }
       else return ackCallback(cq.id, 'unknown setting');
       const v = buildSettingsView();
@@ -2611,7 +2643,7 @@ const COMMANDS = {
   '/backtest': cmdBacktest,
   '/in': cmdJournalIn, '/out': cmdJournalOut, '/be': cmdJournalBE,
   '/note': cmdJournalNote, '/journal': cmdJournal,
-  '/account': cmdAccount, '/risk': cmdRisk, '/mode': cmdMode, '/paper': cmdPaper,
+  '/account': cmdAccount, '/risk': cmdRisk, '/mode': cmdMode, '/feed': cmdFeed, '/paper': cmdPaper,
   '/dd': cmdDd, '/payout': cmdPayout,
   '/cleanup-group': cmdCleanupGroup, '/cleanupgroup': cmdCleanupGroup,
   '/restart': cmdRestart, '/shutdown': cmdShutdown,

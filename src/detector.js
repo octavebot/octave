@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nyParts } from './lib/time.js';
 import { log } from './logger.js';
-import { refresh as refreshConfig, isStrategyEnabled } from './lib/runtime_config.js';
+import { refresh as refreshConfig, isStrategyEnabled, getFeedMode } from './lib/runtime_config.js';
 import { fetchAllPanes, fetchBiasPanes } from './lib/cloud_data_supplement.js';
 import { checkBlackout, refreshForexFactory } from './lib/news.js';
 import { evaluateUserStrategies } from './lib/user_strategies.js';
@@ -93,15 +93,24 @@ function dataAgeSec(panesByTf, instrument) {
   return Infinity;
 }
 
-// TV-ONLY strategy detection (user directive): only evaluate/fire when this
-// instrument's 15m pane is sourced from the real-time TradingView bridge AND
-// fresh. If the bridge drops, fetchAllPanes falls back to Yahoo (source 'yahoo')
-// — we DO NOT trade on that delayed feed; the instrument goes silent until TV is
-// back. (Yahoo deep history under the TV tail is fine — it's old closed bars for
+// Feed gate (switchable via runtime-config `feed`, see runtime_config.js):
+//   'tv-only' — only evaluate/fire when this instrument's 15m pane is sourced
+//               from the real-time TradingView bridge AND fresh. If the bridge
+//               drops, fetchAllPanes falls back to Yahoo (source 'yahoo') and we
+//               DO NOT trade on that delayed feed; the instrument goes silent
+//               until TV is back. Execution-exact default.
+//   'auto'    — accept ANY source (TV preferred, else Yahoo/OANDA) so the bot
+//               keeps firing when TV is down. The staleness gate STILL applies
+//               in both modes, so we never trade on a frozen feed.
+// (Yahoo deep history under the TV tail is fine either way — old closed bars for
 // EMA/ATR, not the trigger bar.) Returns {ok, reason} for a throttled log.
 function liveFeedOk(panesByTf, instrument) {
   const src = panesByTf.get(`${instrument}|15`)?.source || '';
-  if (!src.startsWith('tradingview')) return { ok: false, reason: `not TV-sourced (${src || 'none'})` };
+  const tvOnly = getFeedMode() !== 'auto';
+  if (tvOnly && !src.startsWith('tradingview')) {
+    return { ok: false, reason: `not TV-sourced (${src || 'none'}) — feed=tv-only` };
+  }
+  if (!src) return { ok: false, reason: 'no data' };
   const age = dataAgeSec(panesByTf, instrument);
   if (age > MAX_DATA_AGE_SEC) return { ok: false, reason: `stale ${Math.round(age / 60)}min` };
   return { ok: true };
