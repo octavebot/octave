@@ -47,6 +47,11 @@ Classic trend-follow momentum. The 50-EMA defines the bias (price above → long
 
 export function evaluate(ctx) {
   const out = [];
+  // Skip gold: across a 90d Databento walk-forward, EMA-CROSS on gold is a
+  // net loser (41% win, −3.8R) — gold's whippy intraday tape chops the 9/21
+  // cross even with the separation gate. nasdaq/sp trend cleanly enough to
+  // keep. (Mirrors ASIAN-BREAKOUT's gold skip.)
+  if (ctx.instrument === 'gold') return out;
   const tf15 = ctx.pane('15');
   const tf60 = ctx.pane('60');
   if (!tf15?.bars || tf15.bars.length < 60 || !tf60?.bars || tf60.bars.length < 60) return out;
@@ -129,6 +134,7 @@ export function evaluate(ctx) {
 }
 
 export function precheck(ctx) {
+  if (ctx.instrument === 'gold') return null;   // EMA-CROSS skips gold (see evaluate)
   const tf15 = ctx.pane('15');
   const tf60 = ctx.pane('60');
   if (!tf15?.bars || tf15.bars.length < 60 || !tf60?.bars || tf60.bars.length < 60) return null;

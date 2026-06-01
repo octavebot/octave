@@ -18,7 +18,11 @@ export const meta = {
   concept: 'Retracement into the 0.62–0.79 OTE zone of the last impulse leg, in H1 trend',
   window: 'Any session hour',
   timeframes: ['15', '60'],
-  defaultEnabled: true,
+  // Disabled 2026-06-01: 60% win / PF1.61, FAIL-flagged and the noisiest
+  // strategy (2.6 trades/day) — dilutes the quality book below the 70% bar.
+  // Kept on disk (re-enable via /enable). It is the top gold-volume producer,
+  // so re-enable if you want more gold frequency at the cost of win rate.
+  defaultEnabled: false,
 };
 
 export const playbook = `# OTE Pullback (ICT)

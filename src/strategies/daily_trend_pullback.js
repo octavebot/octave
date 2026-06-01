@@ -17,7 +17,9 @@ export const meta = {
   concept: 'Daily trend + H1 20-EMA pullback + 15m rejection = 3R continuation',
   window: 'Asia / London · skips 07:00–14:00 ET (NY-open chop) + 16:00–19:00 ET (PM lull)',
   timeframes: ['15', '60', '1D'],
-  defaultEnabled: true,
+  // Disabled 2026-06-01: 53% win / PF1.72 over 90d — below the quality bar.
+  // Kept on disk (re-enable via /enable) but off the live book.
+  defaultEnabled: false,
 };
 
 // Pullback band tolerances. Widened 2026-05-28 (0.6→0.9 H1, 0.4→0.6 15m) after a

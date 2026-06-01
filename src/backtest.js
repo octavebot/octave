@@ -177,8 +177,14 @@ function buildCtxFromMaps(panesByTf, lastBarIdxByKey, instrument = 'gold') {
  * wins) — real fills depend on intra-bar tick sequence.
  */
 function simulateTrade(bars, trade, opts = {}) {
-  const maxBars = opts.maxBars ?? 200;
-  const partial = opts.partial === true;
+  // Trailing-runner config: after TP1 banks 50% + stop→BE, the runner leg
+  // ratchets a stop `trailR`×risk behind the favorable extreme (instead of
+  // closing at a fixed TP2) so a trend day can carry it well past 2R. Opt-in
+  // via opts.trail so the legacy fixed-TP path is unchanged when absent.
+  const trail = opts.trail || null;
+  // Trend runners need a longer leash than the 200-bar default.
+  const maxBars = opts.maxBars ?? (trail ? 600 : 200);
+  const partial = opts.partial === true || !!trail;
   const { direction, entry, stop, t1, t2, openIdx, risk } = trade;
 
   const long = direction === 'LONG';
@@ -193,7 +199,7 @@ function simulateTrade(bars, trade, opts = {}) {
     const b = bars[i];
     const sLHit = long ? b.low <= stop : b.high >= stop;
     if (sLHit) { phase1Result = { exit: stop, exitIdx: i, R: -1, reason: 'SL' }; break; }
-    if (t2 != null && (long ? b.high >= t2 : b.low <= t2)) {
+    if (!trail && t2 != null && (long ? b.high >= t2 : b.low <= t2)) {
       // TP2 hit before TP1 — direct gap to TP2. Full runner takes TP2 R.
       phase1Result = { exit: t2, exitIdx: i, R: tp2R, reason: 'TP2' };
       break;
@@ -208,6 +214,29 @@ function simulateTrade(bars, trade, opts = {}) {
   }
 
   if (phase1Result) return phase1Result;
+
+  // trail && tp1 hit → bank 50% at TP1, runner (50%) rides a trailing stop.
+  if (trail && tp1HitIdx != null) {
+    const trailR = trail.trailR ?? 1.0;       // trail this many R behind the peak
+    const trailDist = trailR * risk;
+    // The runner can't lose: its stop starts at BE (entry) and only ratchets
+    // up. Seed the peak at the TP1 bar's favorable extreme.
+    let peak = long ? bars[tp1HitIdx].high : bars[tp1HitIdx].low;
+    for (let i = tp1HitIdx + 1; i < Math.min(bars.length, openIdx + maxBars); i++) {
+      const b = bars[i];
+      peak = long ? Math.max(peak, b.high) : Math.min(peak, b.low);
+      const trailStop = long ? Math.max(entry, peak - trailDist) : Math.min(entry, peak + trailDist);
+      const stopHit = long ? b.low <= trailStop : b.high >= trailStop;
+      if (stopHit) {
+        const runnerR = sign * (trailStop - entry) / risk;
+        return { exit: trailStop, exitIdx: i, R: 0.5 * tp1R + 0.5 * runnerR, runnerR, reason: 'TP1+trail' };
+      }
+    }
+    const lastIdx = Math.min(bars.length - 1, openIdx + maxBars - 1);
+    const last = bars[lastIdx];
+    const runnerR = last ? sign * (last.close - entry) / risk : 0;
+    return { exit: last ? last.close : entry, exitIdx: lastIdx, R: 0.5 * tp1R + 0.5 * Math.max(0, runnerR), runnerR: Math.max(0, runnerR), reason: 'TP1+trail-time' };
+  }
 
   // partial && tp1 hit → simulate runner with stop at entry
   if (partial && tp1HitIdx != null) {
@@ -403,12 +432,12 @@ export async function runBacktest(opts = {}) {
               if (stopFirst) { st.limitsExpired++; resolved = true; break; }
               continue; // not filled on this bar — keep scanning
             }
-            const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: j }, { partial: opts.partial });
+            const outcome = simulateTrade(anchorPane.bars, { ...lim, openIdx: j }, { partial: opts.partial, trail: opts.trail });
             if (outcome) {
               st.trades.push({
                 ...lim, openIdx: j, openTime: bar.time,
                 exit: outcome.exit, exitIdx: outcome.exitIdx, exitReason: outcome.reason,
-                R: outcome.R, win: outcome.R > 0,
+                R: outcome.R, win: outcome.R > 0, runnerR: outcome.runnerR,
               });
             }
             resolved = true;

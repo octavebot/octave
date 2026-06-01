@@ -346,7 +346,8 @@ async function tick() {
           const tp1Banked = !!s.milestonesFired?.tp1;
           // Closing-leg points, BE-aware: an SL after +1R/TP1 exits at breakeven.
           let legPts;
-          if (m.milestone === 'tp2' || m.milestone === 'runner') legPts = ptsFrom(s.t2 ?? s.t1);
+          // Trailing runner closes at s.exitLevel (the trail stop); fixed TP2 at s.t2.
+          if (m.milestone === 'tp2' || m.milestone === 'runner') legPts = ptsFrom(s.exitLevel ?? s.t2 ?? s.t1);
           else if (m.milestone === 'sl') legPts = ptsFrom(s.wasBeStop ? entry : s.stop);
           else legPts = ptsFrom(exitPrice);   // expired
           // Net = TP1 half (if scaled) + the closing leg on the remaining half.

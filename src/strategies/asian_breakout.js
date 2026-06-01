@@ -18,7 +18,9 @@ export const meta = {
   concept: 'First 15m close beyond Asian session range with strong body',
   window: 'London + NY · 02:00-10:00 ET (skips 02 & 05)',
   timeframes: ['15'],
-  defaultEnabled: true,
+  // Disabled 2026-06-01: 49% win / +8.5R / PF1.17 over 90d — below the quality
+  // bar. Kept on disk (re-enable via /enable) but off the live book.
+  defaultEnabled: false,
 };
 
 export const playbook = `# Asian Range Breakout

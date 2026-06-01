@@ -47,18 +47,18 @@ export function load() {
     mute: { ...DEFAULTS.mute, ...(raw.mute || {}) },
     alertChartImages: raw.alertChartImages === true,  // default off
     aiEngine: { threshold: Number(raw.aiEngine?.threshold) || 0.55 },
-    mode: (raw.mode === 'passive' || raw.mode === 'aggressive') ? raw.mode : DEFAULT_MODE,
+    mode: Object.prototype.hasOwnProperty.call(MODES, raw.mode) ? raw.mode : DEFAULT_MODE,
     lastUpdated: raw.lastUpdated || 0,
   };
 }
 
-/** Active mode name ('passive'|'aggressive'). */
+/** Active mode name ('passive'|'aggressive'|'quality'). */
 export function getModeName() { return get().mode || DEFAULT_MODE; }
 /** Active mode's full param bundle (riskPerTrade, maxContracts, tp*, …). */
 export function getMode() { return MODES[getModeName()] || MODES[DEFAULT_MODE]; }
 /** Switch mode; persists to disk. Returns the new mode name, or null if invalid. */
 export function setMode(name) {
-  if (name !== 'passive' && name !== 'aggressive') return null;
+  if (!Object.prototype.hasOwnProperty.call(MODES, name)) return null;
   save({ ...get(), mode: name });
   return name;
 }

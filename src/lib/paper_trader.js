@@ -187,7 +187,9 @@ export function onMilestone(setup, milestone, exitPrice) {
       const remaining = open.tp1Done ? open.contracts / 2 : open.contracts;
       let exitPts;
       if (milestone === 'tp2' || milestone === 'runner') {
-        exitPts = pts(setup.t2 ?? setup.t1);
+        // Trailing runner exits at setup.exitLevel (the trail stop); the fixed
+        // TP2 path has no exitLevel and settles at t2.
+        exitPts = pts(setup.exitLevel ?? setup.t2 ?? setup.t1);
       } else if (milestone === 'sl') {
         // Effective stop: breakeven if +1R/TP1 was reached (the stop we moved),
         // else the original structural stop. → 0 P&L on a breakeven stop-out.

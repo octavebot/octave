@@ -214,6 +214,12 @@ export function buildTriggered({
     finalT2 = entry + sign * Math.min(sweepMaxR(m.tp2MaxR, _sw.t2R), t1r + 0.5) * risk;
   }
   stop = widenedStop;
+  // Trailing-runner profile (mode-driven): after TP1 banks 50% + stop→BE, the
+  // runner leg ratchets a stop trailR×risk behind the favorable extreme instead
+  // of closing at a fixed TP2 — so a trend day can carry it past 2R. When the
+  // mode has no `trail`, the legacy fixed-TP2 close applies (entryPlan.trail
+  // absent → follow_up uses the old t2/runner path).
+  const trail = m.trail ? { trailR: m.trail.trailR ?? 2 } : null;
   return {
     strategy,
     setupId,
@@ -225,7 +231,7 @@ export function buildTriggered({
     timeframe,
     details: {},
     invalidationLevel: stop,
-    entryPlan: { entry, stop, t1: finalT1, t2: finalT2, runner: finalT2, risk },
+    entryPlan: { entry, stop, t1: finalT1, t2: finalT2, runner: finalT2, risk, trail },
   };
 }
 

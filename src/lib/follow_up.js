@@ -102,6 +102,7 @@ export function register(r) {
     t1: ep.t1 ?? null,
     t2: ep.t2 ?? null,
     runner: ep.runner ?? null,
+    trail: ep.trail ?? null,   // { trailR } → runner trails after TP1 instead of fixed TP2 close
     risk,
     phase: 'pending',      // pending → live → (closed)
     placedAt: Date.now(),
@@ -211,10 +212,14 @@ export function step(priceOrPriceMap) {
     // which is the "not using proper risk management" bug.
     const beActive = !!s.milestonesFired.be || !!s.milestonesFired.tp1;
     const slLevel = beActive ? s.entry : s.stop;
+    // When trailing is active (s.trail set AND TP1 banked), the trailing block
+    // below owns the stop — skip the fixed SL/BE-stop check so a tag of the BE
+    // level books as a 'runner' scratch via the trail, not a separate 'sl'.
+    const trailing = !!s.trail && !!s.milestonesFired.tp1;
 
     // SL hit closes the trade entirely. Checked before TPs so an ambiguous bar
     // that tagged both the stop and a target resolves to the stop (conservative).
-    if (advReached(slLevel)) {
+    if (!trailing && advReached(slLevel)) {
       if (!s.milestonesFired.sl) {
         s.milestonesFired.sl = true;
         s.closedAt = now;
@@ -242,8 +247,37 @@ export function step(priceOrPriceMap) {
       events.push({ setup: { ...s }, milestone: 'tp1' });
       dirty = true;
     }
-    // TP2 — also closes the trade
-    if (!s.milestonesFired.tp2 && s.t2 != null && favReached(s.t2)) {
+
+    // ── Trailing runner ─────────────────────────────────────────────────────
+    // Once TP1 has banked 50% (stop at BE), the runner leg ratchets a stop
+    // trailR×risk behind the favorable extreme. It can only move up; it never
+    // drops below entry, so the runner can't turn the trade red. Closes as a
+    // 'runner' win when the trail is tagged. Supersedes the fixed TP2/runner
+    // blocks below (those run only when s.trail is absent).
+    if (s.trail && s.milestonesFired.tp1 && !s.milestonesFired.runner) {
+      const favExtreme = long ? hi : lo;
+      s.runnerPeak = s.runnerPeak == null
+        ? favExtreme
+        : (long ? Math.max(s.runnerPeak, favExtreme) : Math.min(s.runnerPeak, favExtreme));
+      const trailDist = (s.trail.trailR ?? 2) * s.risk;
+      const trailStop = long
+        ? Math.max(s.entry, s.runnerPeak - trailDist)
+        : Math.min(s.entry, s.runnerPeak + trailDist);
+      s.trailStop = trailStop;
+      if (advReached(trailStop)) {
+        s.milestonesFired.runner = true;
+        s.closedAt = now;
+        s.closedReason = 'runner';
+        s.exitLevel = trailStop;             // where the runner leg actually closed
+        s.wasBeStop = trailStop === s.entry; // BE scratch on the runner half
+        events.push({ setup: { ...s }, milestone: 'runner' });
+        dirty = true;
+      }
+      continue;   // trailing owns the lifecycle once TP1 is banked
+    }
+
+    // TP2 — also closes the trade (fixed-target path; only when NOT trailing)
+    if (!s.trail && !s.milestonesFired.tp2 && s.t2 != null && favReached(s.t2)) {
       s.milestonesFired.tp2 = true;
       events.push({ setup: { ...s }, milestone: 'tp2' });
       // If no runner defined, this is the natural close
@@ -253,8 +287,8 @@ export function step(priceOrPriceMap) {
       }
       dirty = true;
     }
-    // Runner
-    if (!s.milestonesFired.runner && s.runner != null && s.runner !== s.t2 && favReached(s.runner)) {
+    // Runner (fixed level; trailing path handles its own runner close above)
+    if (!s.trail && !s.milestonesFired.runner && s.runner != null && s.runner !== s.t2 && favReached(s.runner)) {
       s.milestonesFired.runner = true;
       s.closedAt = now;
       s.closedReason = 'runner';

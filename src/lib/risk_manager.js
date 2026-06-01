@@ -89,8 +89,22 @@ export const MODES = Object.freeze({
     label: 'AGGRESSIVE', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -500,
     maxOpen: 3, asianCapUsd: 200, tp1R: 1.2, tp2R: 1.8, tp1MaxR: 2.5, tp2MaxR: 4.0, gate: 0.45,
   }),
+  // QUALITY — the high-win-core + trailing-runner profile (2026-06-01). Banks
+  // 50% at TP1 (~1R) to keep the win rate high, moves the stop to BE, then the
+  // runner leg trails 2R behind the favorable extreme (no fixed TP2 cap) so a
+  // trend day can carry it well past 2R. Validated on a 90d Databento
+  // walk-forward over the kept high-win strategies (NY-FVG/VWAP-REJ/
+  // LONDON-SWEEP + EMA-CROSS on nasdaq/sp): ~70-80% win, ~2.9 trades/day,
+  // trailR=2.0 maximized profit while still catching the occasional 7.5R+
+  // runner. $200 risk/trade; realized size is risk-driven (an ATR-sized stop
+  // → ~2-5 micros on gold), capped at 10 micros/instrument.
+  quality: Object.freeze({
+    label: 'QUALITY', riskPerTrade: 200, maxContracts: 10, dailyBreaker: -400,
+    maxOpen: 3, asianCapUsd: 200, tp1R: 1.0, tp2R: 2.0, tp1MaxR: 1.5, tp2MaxR: 2.5, gate: 0.68,
+    trail: { trailR: 2.0 },
+  }),
 });
-export const DEFAULT_MODE = 'aggressive';
+export const DEFAULT_MODE = 'quality';
 
 /**
  * Compute position size for a signal at a target dollar risk.
