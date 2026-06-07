@@ -3,11 +3,11 @@
  * every pane any enabled strategy might need.
  *
  * Layered sources:
- *   1. TradingView bridge — real-time CME feed from the always-on Mac (the
- *      authoritative live source for the micros). Fall back to:
- *   2. Yahoo Finance — free, delayed, caps 15m intraday at 60-71 days.
- *      Sufficient as a fallback when the bridge drops.
- *   3. OANDA — directional/bias only (24/5 spot via OANDA_API_TOKEN).
+ *   1. OANDA — the FREE real-time 24/5 feed. Spot CFDs shifted up by the
+ *      futures-vs-spot basis → synthetic-futures bars for the micros (the
+ *      authoritative live source). Falls back to:
+ *   2. Yahoo Finance — free, delayed, caps 15m intraday at 60-71 days. Provides
+ *      deep history + a fallback when OANDA is unavailable.
  *
  * Cached in memory for ~15s so the 3s detector loop doesn't hammer the API.
  * Tunable via OCTAVE_DATA_TTL_MS env var.
@@ -16,7 +16,6 @@
 import { fetchAll as fetchYahoo } from '../cloud/yahoo.js';
 import { fetchAll as fetchOanda, fetchBars as fetchOandaBars, isConfigured as oandaConfigured } from '../cloud/oanda.js';
 import { fetchAllForBacktest as fetchDatabentoBacktest, isConfigured as databentoConfigured } from '../cloud/databento.js';
-import { fetchAll as fetchTradingview, fetchBars as fetchTvBars, isConfigured as tvConfigured } from '../cloud/tradingview.js';
 import { beat as heartbeat } from './heartbeat.js';
 
 // 15s = close to real-time. 8 panes × 4 fetches/min = ~1920 req/hr,
@@ -82,55 +81,6 @@ export async function fetchAllPanes() {
       // Tag the panes so downstream code can tell where bars came from
       for (const [, p] of panes) p.source = p.source || 'yahoo';
 
-      // TradingView bridge — real-time CME tape via the user's Mac. When the
-      // bridge is alive (DATA_SOURCE=tradingview and at least one pane fresh
-      // in the last 60s), TV panes OVERRIDE the Yahoo ones for the micros so
-      // live signals fire on un-delayed data. Yahoo keeps serving silver/dxy
-      // and any micro pane TV didn't supply, which is also what catches a Mac
-      // outage automatically: stale TV pane → null → falls back to Yahoo.
-      if (tvConfigured()) {
-        try {
-          // Ask TV for every micro the bridge might be pushing. Bridge with
-          // only 2 tabs (gold+nasdaq) silently returns null for sp → falls back
-          // to Yahoo. Bridge with 3 tabs (gold+nasdaq+sp) serves all three
-          // with real-time CME bars — the engine prefers TV whenever available.
-          // Both modes are correct; this just uses TV's sp when it's there.
-          const tvRequests = NEEDED_REQUESTS.filter(([asset]) => asset === 'gold' || asset === 'nasdaq' || asset === 'sp');
-          const tv = await fetchTradingview(tvRequests).catch(() => new Map());
-          for (const [key, p] of tv) {
-            if (p?.bars?.length) panes.set(key, p);
-          }
-          // Rebuild the micros' 60m + 1D from the live TV 15m. Yahoo's frozen
-          // micro-futures HTF bars carry a RECENT timestamp with a STALE price,
-          // so the generic time-based synth below can't tell they're stale and
-          // won't replace them — leaving the H1/D1 trend filters reading
-          // Friday's close while the 15m is live. Here we keep Yahoo's DEEP
-          // history (needed for the daily 20-EMA etc.) and splice the live TV
-          // tail on top: deep[time < tvTail[0]] + aggregate(TV 15m).
-          // sp is included opportunistically — if TV doesn't have it the inner
-          // `tv15?.source !== 'tradingview'` guard makes this a no-op for sp.
-          for (const inst of ['gold', 'nasdaq', 'sp']) {
-            const tv15 = panes.get(`${inst}|15`);
-            if (tv15?.source !== 'tradingview' || !tv15.bars?.length) continue;
-            for (const { tf, bucketSec, daily } of [{ tf: '60', bucketSec: 3600 }, { tf: '1D', daily: true }]) {
-              const tail = daily ? aggregateToDaily(tv15.bars, -Infinity)
-                                 : aggregateToBucket(tv15.bars, bucketSec, -Infinity, 900);
-              if (!tail.length) continue;
-              const deep = panes.get(`${inst}|${tf}`);
-              const cutoff = tail[0].time;
-              const history = (deep?.bars || []).filter((b) => b.time < cutoff);
-              panes.set(`${inst}|${tf}`, {
-                symbol: tv15.symbol, resolution: tf,
-                bars: history.concat(tail), source: 'tradingview+htf',
-                barCount: history.length + tail.length,
-              });
-            }
-          }
-        } catch (err) {
-          console.error('[cloud-data] tradingview overlay failed:', err?.message || err);
-        }
-      }
-
       // OANDA real-time override — the FREE 24/5 feed. OANDA's gold/index CFDs
       // are spot, sitting a futures-vs-spot basis below the contract. We measure
       // that basis (median over overlapping 15m closes vs Yahoo's futures) and
@@ -146,8 +96,6 @@ export async function fetchAllPanes() {
           const oReqs = NEEDED_REQUESTS.filter(([a, tf]) => micros.includes(a) && (tf === '5' || tf === '15'));
           const oPanes = await fetchOanda(oReqs, { targetDays: OANDA_LIVE_DAYS }).catch(() => new Map());
           for (const inst of micros) {
-            // Don't clobber the exact real-time TV print if the bridge is alive.
-            if ((panes.get(`${inst}|15`)?.source || '').startsWith('tradingview')) continue;
             const spot15 = oPanes.get(`${inst}|15`);
             if (!spot15?.bars?.length) continue;
             // Basis from Yahoo futures (pre-override) ∩ OANDA spot on matching 15m bars.
@@ -193,13 +141,10 @@ export async function fetchAllPanes() {
       const sources = {};
       for (const [, p] of panes) sources[p.source || 'yahoo'] = (sources[p.source || 'yahoo'] || 0) + 1;
       // Headline label = the feed driving LIVE SIGNALS, i.e. the traded micros'
-      // 15m execution pane — not a raw pane-count vote (which the yahoo-only
-      // 1m/1D/silver/dxy context panes would always win). If the micros' 15m is
-      // TradingView, the bot is on real-time; that's what the user cares about.
-      const execSrc = (panes.get('gold|15')?.source || '').startsWith('tradingview')
-        ? 'tradingview'
-        : (Object.entries(sources).sort((a, b) => b[1] - a[1])[0]?.[0] || 'yahoo');
-      const dominantSource = execSrc;
+      // 15m execution pane (oanda+basis when the live feed is up, else yahoo) —
+      // not a raw pane-count vote (which the yahoo-only context panes would win).
+      const dominantSource = panes.get('gold|15')?.source
+        || (Object.entries(sources).sort((a, b) => b[1] - a[1])[0]?.[0] || 'yahoo');
       heartbeat('market-data', {
         pane_count: panes.size,
         source: dominantSource,
@@ -268,33 +213,6 @@ export async function fetchBiasPanes() {
         }
       }
 
-      // TradingView bridge overlay — the EXACT real-time futures tape. Bias's
-      // 15m factors (trend/momentum/VWAP) + the displayed price now come off
-      // the live futures print instead of OANDA spot. Two cases:
-      //   (a) TV last bar is fresh (<1h) → use TV (with as few as 50 bars —
-      //       vol-regime gracefully degrades to 'unknown' below the 114
-      //       window, but the directional factors stay accurate).
-      //   (b) TV stale on this instrument (e.g. user's Mac chart frozen) →
-      //       skip the override, keep OANDA so bias stays directional.
-      // 60m/1D stay OANDA — slow, direction-only (basis cancels), and TV's
-      // window isn't deep enough.
-      if (tvConfigured()) {
-        try {
-          // Request all 3; if the bridge only carries 2 tabs, sp silently
-          // returns null and bias for sp stays on OANDA. With 3 tabs the
-          // engine picks up the extra real-time pane for free.
-          const tv = await fetchTradingview([['gold', '15'], ['nasdaq', '15'], ['sp', '15']]).catch(() => new Map());
-          const nowSec = Date.now() / 1000;
-          for (const [key, p] of tv) {
-            const lastBar = p?.bars?.[p.bars.length - 1];
-            const fresh = lastBar && (nowSec - lastBar.time) <= 3600; // last bar within 1h
-            const enough = p?.bars?.length >= 50;
-            if (fresh && enough) out.set(key, p);
-          }
-        } catch (err) {
-          console.error('[bias] tradingview overlay failed:', err?.message || err);
-        }
-      }
 
       if (out.size === 0) return null;
       biasCache = { panes: out, fetchedAt: Date.now() };
@@ -383,9 +301,8 @@ async function fetchYahooQuote(yh) {
  * @returns {Promise<Map<string, {
  *   sym, label, price, change, changePct, source, estimated, basis,
  *   stale, ageMs, asOfMs }>>}
- *   - source 'tradingview'  → exact real-time futures print from the Mac bridge
+ *   - source 'oanda+basis'  → estimated future = OANDA spot + basis (real-time 24/5)
  *   - source 'yahoo'        → live futures print (exact, but ~15min delayed feed)
- *   - source 'oanda+basis'  → estimated future = OANDA spot + basis (market closed)
  *   - source 'yahoo-stale'  → OANDA unavailable, last futures print (flagged stale)
  */
 export async function getLiveFuturesQuotes() {
@@ -394,104 +311,6 @@ export async function getLiveFuturesQuotes() {
   }
   const now = Date.now();
   const out = new Map();
-
-  // TV-fresh FAST PATH: when the Mac bridge is up it provides the EXACT live
-  // futures price, so we skip the (slow, sometimes 5-7s-each) Yahoo + OANDA
-  // network fetches entirely — those are only needed to ESTIMATE the price via
-  // basis when TV/Yahoo are stale. This is what keeps /price and /session fast
-  // vs the ~20s cold call that hit Yahoo+OANDA for all instruments.
-  //
-  // The bridge MAY or may not carry sp (depends on whether the always-on Mac
-  // has the MES1! tab open). Fast path requires gold+nasdaq from TV; sp comes
-  // from TV when available, else from a single Yahoo fast-call before return.
-  // If gold or nasdaq are missing from TV (rare — bridge restarting), fall
-  // through to the slow per-instrument cascade.
-  const CORE_INSTS = QUOTE_INSTRUMENTS.filter((i) => i.key !== 'sp');
-  const SP_INST = QUOTE_INSTRUMENTS.find((i) => i.key === 'sp');
-  if (tvConfigured()) {
-    let allFresh = true;
-    for (const inst of CORE_INSTS) {
-      let tvBars = null, tvLast = null;
-      try {
-        const p = await fetchTvBars(inst.key, '5');
-        if (p?.bars?.length) { tvBars = p.bars; tvLast = p.bars[p.bars.length - 1]; }
-      } catch { /* no-op */ }
-      if (!tvLast) { allFresh = false; break; }
-      // Prior-session close for the change% — derived from the TV bars (no
-      // network): the close of the last bar before the current CME session
-      // start (futures roll 22:00 UTC). Falls back to a remembered Yahoo
-      // prevClose, then the window's first bar.
-      const SESSION_UTC_HOUR = 22;
-      const d = new Date(now);
-      let sessStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), SESSION_UTC_HOUR) / 1000;
-      if (now / 1000 < sessStart) sessStart -= 86400;
-      let priorClose = null;
-      for (let i = tvBars.length - 1; i >= 0; i--) {
-        if (tvBars[i].time < sessStart) { priorClose = tvBars[i].close; break; }
-      }
-      const ref = priorClose ?? lastPrevClose[inst.key] ?? tvBars[0]?.close ?? null;
-      const change = ref != null ? tvLast.close - ref : null;
-      out.set(inst.key, {
-        sym: inst.sym, label: inst.label, price: tvLast.close,
-        change, changePct: (change != null && ref) ? (change / ref) * 100 : null,
-        source: 'tradingview', estimated: false, basis: null,
-        stale: false, ageMs: now - tvLast.time * 1000, asOfMs: tvLast.time * 1000,
-      });
-    }
-    if (allFresh && out.size === CORE_INSTS.length) {
-      // Core (gold+nasdaq) is fresh from TV. Now sp: prefer TV (if the bridge
-      // also pushes MES1!), else one Yahoo call. Either way, the consumer gets
-      // all three without paying the full Yahoo+OANDA round-trip for cores.
-      if (SP_INST) {
-        let spFromTv = null;
-        try {
-          const p = await fetchTvBars('sp', '5');
-          if (p?.bars?.length) spFromTv = { bars: p.bars, last: p.bars[p.bars.length - 1] };
-        } catch { /* no sp from TV — fall through to Yahoo */ }
-        if (spFromTv) {
-          const SESSION_UTC_HOUR = 22;
-          const d = new Date(now);
-          let sessStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), SESSION_UTC_HOUR) / 1000;
-          if (now / 1000 < sessStart) sessStart -= 86400;
-          let priorClose = null;
-          for (let i = spFromTv.bars.length - 1; i >= 0; i--) {
-            if (spFromTv.bars[i].time < sessStart) { priorClose = spFromTv.bars[i].close; break; }
-          }
-          const ref = priorClose ?? lastPrevClose.sp ?? spFromTv.bars[0]?.close ?? null;
-          const change = ref != null ? spFromTv.last.close - ref : null;
-          out.set('sp', {
-            sym: SP_INST.sym, label: SP_INST.label, price: spFromTv.last.close,
-            change, changePct: (change != null && ref) ? (change / ref) * 100 : null,
-            source: 'tradingview', estimated: false, basis: null,
-            stale: false, ageMs: now - spFromTv.last.time * 1000, asOfMs: spFromTv.last.time * 1000,
-          });
-        } else {
-          try {
-            const { meta, bars } = await fetchYahooQuote(SP_INST.yh);
-            const last = bars?.length ? bars[bars.length - 1] : null;
-            const yPrice = meta?.regularMarketPrice ?? last?.close ?? null;
-            const yTimeMs = last ? last.time * 1000 : null;
-            const yFresh = yTimeMs != null && (now - yTimeMs) < FUTURES_FRESH_MS;
-            const ref = meta?.chartPreviousClose ?? lastPrevClose.sp ?? null;
-            if (ref != null) lastPrevClose.sp = ref;
-            if (yPrice != null) {
-              out.set('sp', {
-                sym: SP_INST.sym, label: SP_INST.label, price: yPrice,
-                change: ref != null ? yPrice - ref : null,
-                changePct: (ref != null && ref) ? ((yPrice - ref) / ref) * 100 : null,
-                source: yFresh ? 'yahoo' : 'yahoo-stale',
-                estimated: false, basis: null,
-                stale: !yFresh, ageMs: yTimeMs != null ? now - yTimeMs : null, asOfMs: yTimeMs,
-              });
-            }
-          } catch { /* sp absent — caller tolerates partial */ }
-        }
-      }
-      quoteCache = { at: Date.now(), map: out };
-      return new Map(out);
-    }
-    out.clear(); // partial TV — fall through to the full Yahoo/OANDA path below
-  }
 
   const biasPanes = await fetchBiasPanes().catch(() => null);
 
@@ -526,38 +345,15 @@ export async function getLiveFuturesQuotes() {
     if (basis != null) lastBasis[inst.key] = basis;
     else if (lastBasis[inst.key] != null) basis = lastBasis[inst.key];
 
-    // TradingView bridge — the EXACT real-time futures print (same contract the
-    // user trades, no spot-vs-futures basis to estimate). When the bridge is
-    // live this is strictly better than both Yahoo (15-min delayed) and the
-    // OANDA-spot-plus-basis estimate, so it wins outright.
-    let tvLast = null;
-    if (tvConfigured()) {
-      try {
-        const tvPane = await fetchTvBars(inst.key, '5');
-        if (tvPane?.bars?.length) tvLast = tvPane.bars[tvPane.bars.length - 1];
-      } catch { /* fall through to yahoo/oanda */ }
-    }
-
     // Freshness from the last real BAR, not meta.regularMarketTime (see note above).
     const yBarTimeMs = yBars.length ? yBars[yBars.length - 1].time * 1000 : null;
     const yFresh = yBarTimeMs != null && (now - yBarTimeMs) < FUTURES_FRESH_MS;
     const prevClose = yMeta?.chartPreviousClose ?? null;
-    if (prevClose != null) lastPrevClose[inst.key] = prevClose; // remembered for the TV fast path
+    if (prevClose != null) lastPrevClose[inst.key] = prevClose; // remembered for the change% reference
     const yLivePrice = yMeta?.regularMarketPrice ?? (yBars.length ? yBars[yBars.length - 1].close : null);
 
     let entry = null;
-    if (tvLast != null) {
-      // prevClose for the % change: prefer Yahoo's chartPreviousClose (prior
-      // session settle) so /price's "change" reads the same as the user's
-      // platform; fall back to the first TV bar in the window.
-      const ref = prevClose ?? yBars[0]?.close ?? tvLast.open;
-      entry = {
-        price: tvLast.close,
-        change: ref != null ? tvLast.close - ref : null,
-        source: 'tradingview', estimated: false, basis: null,
-        stale: false, ageMs: now - tvLast.time * 1000, asOfMs: tvLast.time * 1000,
-      };
-    } else if (yFresh && yLivePrice != null) {
+    if (yFresh && yLivePrice != null) {
       entry = {
         price: yLivePrice,
         change: prevClose != null ? yLivePrice - prevClose : null,

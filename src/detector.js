@@ -94,25 +94,25 @@ function dataAgeSec(panesByTf, instrument) {
 }
 
 // Feed gate (switchable via runtime-config `feed`, see runtime_config.js):
-//   'tv-only' — only evaluate/fire when this instrument's 15m pane is sourced
-//               from the real-time TradingView bridge AND fresh. If the bridge
-//               drops, fetchAllPanes falls back to Yahoo (source 'yahoo') and we
-//               DO NOT trade on that delayed feed; the instrument goes silent
-//               until TV is back. Execution-exact default.
-//   'auto'    — accept ANY source (TV preferred, else Yahoo/OANDA) so the bot
-//               keeps firing when TV is down. The staleness gate STILL applies
-//               in both modes, so we never trade on a frozen feed.
-// (Yahoo deep history under the TV tail is fine either way — old closed bars for
-// EMA/ATR, not the trigger bar.) Returns {ok, reason} for a throttled log.
+//   'realtime' — only evaluate/fire when this instrument's 15m pane is sourced
+//                from the real-time OANDA feed (spot shifted to synthetic futures
+//                by the basis) AND fresh. If OANDA drops, fetchAllPanes falls back
+//                to Yahoo (source 'yahoo') and we DO NOT trade on that delayed
+//                feed; the instrument goes silent. Execution-exact default.
+//   'auto'     — accept ANY source (OANDA preferred, else Yahoo) so the bot keeps
+//                firing when OANDA is down. The staleness gate STILL applies in
+//                both modes, so we never trade on a frozen feed.
+// (Yahoo deep history under the OANDA tail is fine either way — old closed bars
+// for EMA/ATR, not the trigger bar.) Returns {ok, reason} for a throttled log.
 function liveFeedOk(panesByTf, instrument) {
   const src = panesByTf.get(`${instrument}|15`)?.source || '';
-  const tvOnly = getFeedMode() !== 'auto';
-  // Real-time sources: the TV bridge (exact futures print) OR OANDA (free 24/5
-  // CFD shifted to synthetic futures by the basis). Delayed Yahoo is NOT accepted
-  // in tv-only mode, so we never trade on a 15-min-delayed feed.
-  const realtime = src.startsWith('tradingview') || src.startsWith('oanda');
-  if (tvOnly && !realtime) {
-    return { ok: false, reason: `not real-time (${src || 'none'}) — feed=tv-only` };
+  const realtimeOnly = getFeedMode() !== 'auto';
+  // Real-time source: OANDA (free 24/5 CFD shifted to synthetic futures by the
+  // basis). Delayed Yahoo is NOT accepted in realtime mode, so we never trade on
+  // a 15-min-delayed feed. ('tradingview' kept for back-compat — harmless.)
+  const realtime = src.startsWith('oanda') || src.startsWith('tradingview');
+  if (realtimeOnly && !realtime) {
+    return { ok: false, reason: `not real-time (${src || 'none'}) — feed=realtime` };
   }
   if (!src) return { ok: false, reason: 'no data' };
   const age = dataAgeSec(panesByTf, instrument);

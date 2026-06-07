@@ -147,8 +147,7 @@ async function gatherState() {
     cloudAlive = cloudAgeMs < 60 * 1000; // engine ticks every 3s; 60s = generous
   }
   // Data-source truth for the dashboard's "feed" indicator: which feed produced
-  // the live panes (tradingview when the Mac bridge is up, else yahoo) + the
-  // bridge freshness so the user can see at a glance whether real-time is on.
+  // the live panes (oanda+basis when the live feed is up, else yahoo).
   const dataSource = marketHb?.source || 'yahoo';
   const dataSources = marketHb?.sources || null;
 
@@ -160,15 +159,7 @@ async function gatherState() {
   // ~max(individual), which on a typical call is the quotes fetch (~15ms).
   // Module imports inside each helper are ESM-cached after the first call,
   // so the per-request cost is essentially the helper's actual work.
-  const [bridge, svc, mac, lastAlert, activeSetups, userStrategies, instrumentPrices] = await Promise.all([
-    // tv_ingest bridge status (in-memory disk read)
-    (async () => {
-      try {
-        const { status } = await import('../lib/tv_ingest.js');
-        const s = status();
-        return { connected: s.anyFresh, panes: s.paneCount };
-      } catch { return null; }
-    })(),
+  const [svc, mac, lastAlert, activeSetups, userStrategies, instrumentPrices] = await Promise.all([
     // service PID + uptime — sequential by necessity (ps needs the pid from pgrep)
     (async () => {
       const pidR = await exec('pgrep', ['-f', 'trading-alerts/src/index.js']);
@@ -253,7 +244,7 @@ async function gatherState() {
   return {
     config,
     cloud: { alive: cloudAlive, ageMs: cloudAgeMs, raw: { ...(cloud || {}), instrumentPrices } },
-    data_feed: { source: dataSource, sources: dataSources, bridge },
+    data_feed: { source: dataSource, sources: dataSources },
     service: { pid: servicePid, uptime: serviceUptime },
     trading_view: { pid: tvPid, cdp_open: cdpOpen },
     caffeinate: { active: caffActive },
@@ -319,28 +310,6 @@ async function readBody(req) {
   });
 }
 
-// Raw-text body reader for endpoints that need to verify HMAC over the exact
-// bytes the client sent (any JSON re-stringify would change spacing and break
-// the signature). Caps at 2MB — the tv-bridge push is ~5-50KB, anything beyond
-// is malformed or hostile.
-const RAW_BODY_CAP_BYTES = 2 * 1024 * 1024;
-async function readRawBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let total = 0;
-    req.on('data', (c) => {
-      total += c.length;
-      if (total > RAW_BODY_CAP_BYTES) {
-        req.destroy();
-        return reject(new Error('body too large'));
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
-
 // 50MB cap so a stray upload can't exhaust memory. PDFs are typically <5MB,
 // images <10MB, short videos <30MB. Videos > cap will be rejected.
 const UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
@@ -382,8 +351,7 @@ function isAllowedHost(host) {
 
 // Admin-token guard for state-mutating endpoints. Port 7345 is reachable via
 // the public Cloudflare tunnel, so any POST that changes config / executes a
-// shutdown / uploads a strategy / etc. needs auth. The ingest endpoint stays
-// HMAC-signed (its own scheme). Set OCTAVE_ADMIN_TOKEN in the VPS .env and
+// shutdown / uploads a strategy / etc. needs auth. Set OCTAVE_ADMIN_TOKEN in the VPS .env and
 // pass it as the X-Octave-Admin-Token header (or ?admin_token= for ad-hoc curl).
 // If the env var is unset, the guard NO-OPS — backward-compat for local dev or
 // purely-private deployments where the dashboard is not exposed.
@@ -399,8 +367,7 @@ function adminAuthOk(req, url) {
   for (let i = 0; i < supplied.length; i++) diff |= supplied.charCodeAt(i) ^ ADMIN_TOKEN.charCodeAt(i);
   return diff === 0;
 }
-// POST routes that mutate runtime state. /api/ingest-bars is excluded because
-// it already has stronger HMAC auth.
+// POST routes that mutate runtime state — all require the admin token.
 const ADMIN_ROUTES = new Set([
   '/api/config',
   '/api/restart',
@@ -521,31 +488,6 @@ const server = createServer(async (req, res) => {
       if (!body) return sendJson(res, 400, { error: 'bad json' });
       const next = await saveConfig(body);
       return sendJson(res, 200, { config: next });
-    }
-
-    // POST /api/ingest-bars  — receives a HMAC-signed bar push from the
-    // always-on Mac running scripts/tv-bridge.js. Replaces the in-memory
-    // pane cache that cloud/tradingview.js reads. See lib/tv_ingest.js for
-    // auth + cache shape.
-    if (req.method === 'POST' && url.pathname === '/api/ingest-bars') {
-      let raw;
-      try { raw = await readRawBody(req); }
-      catch (err) { return sendJson(res, 413, { error: err.message }); }
-      const { verifyPush, ingest } = await import('../lib/tv_ingest.js');
-      const verdict = verifyPush(raw, req.headers['x-bridge-timestamp'], req.headers['x-bridge-auth']);
-      if (!verdict.ok) return sendJson(res, verdict.status, { error: verdict.error });
-      let payload;
-      try { payload = JSON.parse(raw); }
-      catch { return sendJson(res, 400, { error: 'bad json' }); }
-      const result = ingest(payload);
-      return sendJson(res, 200, { ok: true, accepted: result.accepted, keys: result.keys });
-    }
-
-    // GET /api/ingest-bars/status  — unauthenticated cache snapshot so the
-    // dashboard and `/diagnose` can see whether the bridge is alive.
-    if (req.method === 'GET' && url.pathname === '/api/ingest-bars/status') {
-      const { status } = await import('../lib/tv_ingest.js');
-      return sendJson(res, 200, status());
     }
 
     // ─── Strategy file upload → AI extraction ───

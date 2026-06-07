@@ -32,16 +32,23 @@ const DEFAULTS = Object.freeze({
   aiEngine: { threshold: 0.55 },
   mode: DEFAULT_MODE,       // 'passive' | 'aggressive' | 'quality' — risk/sizing/reward bundle (see MODES)
   // feed: which price source the engine is ALLOWED to evaluate/fire on.
-  //   'tv-only' — require the real-time TradingView bridge feed (silent if it
-  //               drops). The strict, execution-exact default.
-  //   'auto'    — also accept the Yahoo/OANDA fallback when TV is down, so the
-  //               bot keeps firing 24/5 (delayed/basis-shifted, but never frozen
-  //               — the staleness gate still applies in both modes).
-  feed: 'tv-only',
+  //   'realtime' — only fire on a real-time source: OANDA (basis-shifted to
+  //                synthetic futures). Delayed Yahoo is rejected. Default.
+  //   'auto'     — also accept the Yahoo fallback, so the bot keeps firing even
+  //                when OANDA is down (delayed, but never frozen — the staleness
+  //                gate still applies in both modes).
+  feed: 'realtime',
   lastUpdated: 0,
 });
 
-export const FEED_MODES = Object.freeze(['tv-only', 'auto']);
+export const FEED_MODES = Object.freeze(['realtime', 'auto']);
+
+// Map any persisted/legacy value to a valid mode. The old 'tv-only' (retired TV
+// bridge) becomes 'realtime' — same strict "real-time source only" semantics.
+function normalizeFeed(v) {
+  if (v === 'tv-only' || v === 'tv') return 'realtime';
+  return FEED_MODES.includes(v) ? v : 'realtime';
+}
 
 let cache = null;
 
@@ -57,7 +64,7 @@ export function load() {
     alertChartImages: raw.alertChartImages === true,  // default off
     aiEngine: { threshold: Number(raw.aiEngine?.threshold) || 0.55 },
     mode: Object.prototype.hasOwnProperty.call(MODES, raw.mode) ? raw.mode : DEFAULT_MODE,
-    feed: FEED_MODES.includes(raw.feed) ? raw.feed : 'tv-only',
+    feed: normalizeFeed(raw.feed),
     lastUpdated: raw.lastUpdated || 0,
   };
 }
@@ -73,13 +80,14 @@ export function setMode(name) {
   return name;
 }
 
-/** Active data-feed mode ('tv-only'|'auto'). */
-export function getFeedMode() { return get().feed || 'tv-only'; }
+/** Active data-feed mode ('realtime'|'auto'). */
+export function getFeedMode() { return normalizeFeed(get().feed); }
 /** Switch the data-feed mode; persists to disk. Returns the name, or null if invalid. */
 export function setFeedMode(name) {
-  if (!FEED_MODES.includes(name)) return null;
-  save({ ...get(), feed: name });
-  return name;
+  const norm = normalizeFeed(name);
+  if (name !== 'tv' && name !== 'tv-only' && !FEED_MODES.includes(name)) return null;
+  save({ ...get(), feed: norm });
+  return norm;
 }
 
 /** Cached load. Call refresh() to re-read from disk. */

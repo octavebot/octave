@@ -568,7 +568,7 @@ async function cmdSession() {
       const tag = g.source === 'oanda+basis' ? ' _(est.)_' : g.stale ? ' _(stale)_' : '';
       goldLine = `Gold: $${g.price.toFixed(2)}${tag}`;
     }
-    // No else-fallback: the TV bridge + Yahoo/OANDA cascade in getLiveFuturesQuotes
+    // No else-fallback: the Yahoo/OANDA cascade in getLiveFuturesQuotes
     // is the source of truth. If it returns nothing, /session just omits the gold
     // line rather than serve a stale value from a dead heartbeat file.
   } catch { /* leave goldLine blank */ }
@@ -595,13 +595,11 @@ async function cmdPrice() {
   };
   // Tight one-line-per-instrument layout. Header carries the source; rows
   // carry price + signed change only. Anything stale/estimated gets a 🕒.
-  const srcSeen = new Set();
   let anyStale = false, anyEst = false;
   const rows = [];
   for (const key of ORDER) {
     const q = quotes.get(key);
     if (!q) { const f = FALLBACK[key]; rows.push(`⚪ *${f.label.replace('Micro ', '')}* — _no data_`); continue; }
-    srcSeen.add(q.source);
     if (q.stale) anyStale = true;
     if (q.source === 'oanda+basis') anyEst = true;
     const dot = q.stale ? '🕒' : (q.change == null ? '⚪' : q.change >= 0 ? '🟢' : '🔴');
@@ -612,8 +610,7 @@ async function cmdPrice() {
     rows.push(`${dot} *${label}*  $${q.price.toFixed(2)}${chg}`);
   }
   const srcLabel = quotes.size === 0 ? 'no feed'
-    : srcSeen.has('tradingview') ? 'TradingView · live'
-    : anyEst ? 'OANDA + basis (CME closed)'
+    : anyEst ? 'OANDA → futures · live'
     : anyStale ? '⚠️ stale'
     : 'Yahoo · delayed';
   await send([`💰 *Live prices · ${srcLabel}*`, '', ...rows].join('\n'));
@@ -1139,18 +1136,18 @@ async function cmdBias() {
     return send('🧭 Bias data not ready — the signal engine is still warming up. Try again in a moment.');
   }
 
-  // Overlay the LIVE TV-bridge futures price into the bias 'price' field for
-  // display. The bias DIRECTION still comes from OANDA (basis cancels for
-  // direction, and OANDA carries the deeper history needed for the vol-regime
-  // factor), but the DISPLAYED price should match the contract the user
-  // trades — otherwise /bias looks 'stuck on 4570' while futures are at 4574.
+  // Overlay the LIVE basis-adjusted futures price (OANDA spot + basis) into the
+  // bias 'price' field for display. The bias DIRECTION still comes from OANDA
+  // spot (basis cancels for direction), but the DISPLAYED price should match the
+  // contract the user trades — otherwise /bias looks 'stuck on 4570' while
+  // futures are at 4574.
   try {
     const { getLiveFuturesQuotes } = await import('../lib/cloud_data_supplement.js');
     const quotes = await getLiveFuturesQuotes();
     for (const [key, q] of quotes) {
-      if (snap.bias[key] && q?.source === 'tradingview' && Number.isFinite(q.price)) {
+      if (snap.bias[key] && q?.source === 'oanda+basis' && !q.stale && Number.isFinite(q.price)) {
         snap.bias[key].price = q.price;
-        snap.bias[key].priceSource = 'tradingview';
+        snap.bias[key].priceSource = 'oanda+basis';
       }
     }
   } catch { /* keep OANDA-priced bias if the live quote fails */ }
@@ -1937,29 +1934,28 @@ async function cmdMode(arg) {
   ))] });
 }
 
-// /feed            → show the active data-feed mode
-// /feed tv|auto    → switch which price source the engine may fire on
+// /feed                 → show the active data-feed mode
+// /feed realtime|auto   → switch which price source the engine may fire on
 async function cmdFeed(arg) {
   const rc = await import('../lib/runtime_config.js');
-  let want = (arg || '').toLowerCase().trim();
-  if (want === 'tv') want = 'tv-only';
-  if (want === 'tv-only' || want === 'auto') rc.setFeedMode(want);
+  const want = (arg || '').toLowerCase().trim();
+  if (want) rc.setFeedMode(want); // setFeedMode normalizes legacy 'tv'/'tv-only' → 'realtime'
   const active = rc.getFeedMode();
   const desc = {
-    'tv-only': 'Only fire on the real-time *TradingView* bridge feed (from the other Mac). Execution-exact — but if the bridge drops, the bot goes *silent* until TV is back.',
-    'auto': 'Fire on *any* fresh feed — TradingView when up, else *Yahoo/OANDA* fallback. Keeps the bot running 24/5 when TV is down (slightly delayed + a small futures-vs-spot basis, but never frozen — the staleness gate still applies).',
+    'realtime': 'Only fire on the *real-time OANDA* feed (spot shifted to synthetic futures by the basis). Delayed Yahoo is rejected, so the bot stays *silent* rather than trade a stale feed. Default.',
+    'auto': 'Fire on *any* fresh feed — OANDA when up, else the *Yahoo* fallback. Keeps the bot running when OANDA is down (slightly delayed, but never frozen — the staleness gate still applies).',
   };
   const line = (k, label) => `${k === active ? '✅' : '▫️'} *${label}*\n${desc[k]}`;
   return sendOwner([
     header('📡', 'Data feed'),
     '',
-    line('tv-only', 'TV-ONLY'),
+    line('realtime', 'REAL-TIME (OANDA)'),
     '',
-    line('auto', 'AUTO (TV + fallback)'),
+    line('auto', 'AUTO (OANDA + Yahoo fallback)'),
     '',
-    `Active: *${active}* · _switch with_ \`/feed tv\` _or_ \`/feed auto\` · _applies next tick._`,
+    `Active: *${active}* · _switch with_ \`/feed realtime\` _or_ \`/feed auto\` · _applies next tick._`,
   ].join('\n'), { keyboard: [[
-    { text: (active === 'tv-only' ? '✅ TV-ONLY' : 'TV-ONLY'), callback_data: 'set:feed:tv-only' },
+    { text: (active === 'realtime' ? '✅ REAL-TIME' : 'REAL-TIME'), callback_data: 'set:feed:realtime' },
     { text: (active === 'auto' ? '✅ AUTO' : 'AUTO'), callback_data: 'set:feed:auto' },
   ]] });
 }
@@ -2096,10 +2092,8 @@ async function cmdShutdown(arg) {
       spawn('systemctl', ['stop', u], { detached: true, stdio: 'ignore' }).unref();
     }
     spawn('systemctl', ['stop', 'octave-telegram'], { detached: true, stdio: 'ignore' }).unref();
-    return;
   }
-  // Mac dev path — kept for local debugging only.
-  spawn('/Users/jqvier/Desktop/Octave.app/Contents/MacOS/octave', ['shutdown'], { detached: true, stdio: 'ignore' }).unref();
+  // (VPS-only: no Mac/local shutdown path.)
 }
 
 async function cmdVersion() {
@@ -2123,8 +2117,6 @@ async function cmdDashboard() {
       header('🌐', 'Dashboard'),
       '',
       'No public HTTPS URL configured yet.',
-      '',
-      'Local Mac: open http://127.0.0.1:7345/',
       '',
       'For public access:',
       bullet('Deploy to VPS (`docs/VPS-DEPLOY.md`)'),
@@ -2520,8 +2512,9 @@ export async function handleCallback(cq) {
       }
       else if (what === 'feed') {
         const { FEED_MODES } = await import('../lib/runtime_config.js');
-        if (!FEED_MODES.includes(val)) return ackCallback(cq.id, 'invalid feed');
-        await updateConfig((c) => { c.feed = val; return c; });
+        const norm = (val === 'tv' || val === 'tv-only') ? 'realtime' : val; // legacy alias
+        if (!FEED_MODES.includes(norm)) return ackCallback(cq.id, 'invalid feed');
+        await updateConfig((c) => { c.feed = norm; return c; });
       }
       else return ackCallback(cq.id, 'unknown setting');
       const v = buildSettingsView();
