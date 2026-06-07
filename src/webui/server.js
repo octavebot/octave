@@ -410,7 +410,59 @@ const ADMIN_ROUTES = new Set([
   '/api/shutdown',
   '/api/launch-tv',
   '/api/open-logs',
+  '/api/apex/command',
 ]);
+
+// ─── Apex TV→Rithmic bridge proxy ───────────────────────────────────────────
+// The bridge (separate FastAPI service, ~/apex-bridge) routes TradingView
+// strategy alerts onto the Apex account via NinjaTrader. The dashboard reads
+// its /health here so all order flow is visible in one place. The bridge may
+// run on a different machine (where NinjaTrader lives) — set APEX_BRIDGE_URL to
+// a reachable address (e.g. a Cloudflare tunnel) and APEX_BRIDGE_SECRET to the
+// bridge's BRIDGE_WEBHOOK_SECRET (used only to authorize reset/flatten).
+const APEX_BRIDGE_URL = (process.env.APEX_BRIDGE_URL || '').replace(/\/$/, '');
+const APEX_BRIDGE_SECRET = process.env.APEX_BRIDGE_SECRET || '';
+let _apexCache = { at: 0, data: null }; // short cache so a slow bridge never hangs the dashboard
+
+async function fetchApexHealth() {
+  if (!APEX_BRIDGE_URL) return { online: false, configured: false };
+  // Serve a <3s-old cached snapshot to avoid hammering the bridge on every poll.
+  if (Date.now() - _apexCache.at < 3000 && _apexCache.data) return _apexCache.data;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    const r = await fetch(`${APEX_BRIDGE_URL}/health`, { signal: ctrl.signal, cache: 'no-store' });
+    const health = await r.json();
+    const data = { online: true, configured: true, ...health };
+    _apexCache = { at: Date.now(), data };
+    return data;
+  } catch (err) {
+    return { online: false, configured: true, error: err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function apexCommand(action) {
+  if (!APEX_BRIDGE_URL) return { ok: false, error: 'APEX_BRIDGE_URL not set' };
+  const path = action === 'flatten_all' ? '/flatten_all' : '/reset';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch(`${APEX_BRIDGE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: APEX_BRIDGE_SECRET }),
+      signal: ctrl.signal,
+    });
+    _apexCache = { at: 0, data: null }; // invalidate so the next poll is fresh
+    return await r.json();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const server = createServer(async (req, res) => {
   try {
@@ -505,6 +557,24 @@ const server = createServer(async (req, res) => {
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
       }
+    }
+
+    // ─── Apex bridge ────────────────────────────────────────────────────
+    // GET /api/apex  → bridge /health (adapter, kill-switch, positions, config,
+    //   recent order flow). Read-only; safe to poll. Never throws to the client.
+    if (req.method === 'GET' && url.pathname === '/api/apex') {
+      const data = await fetchApexHealth();
+      return sendJson(res, 200, data);
+    }
+    // POST /api/apex/command {action:'reset'|'flatten_all'}  → admin-gated.
+    if (req.method === 'POST' && url.pathname === '/api/apex/command') {
+      const body = await readBody(req).catch(() => null);
+      const action = body && body.action;
+      if (action !== 'reset' && action !== 'flatten_all') {
+        return sendJson(res, 400, { error: 'action must be reset or flatten_all' });
+      }
+      const result = await apexCommand(action);
+      return sendJson(res, 200, result);
     }
 
     // GET /positions  → HTML trade panel (auto-refreshing every 3s).
