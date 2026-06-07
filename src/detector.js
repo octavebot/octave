@@ -355,7 +355,7 @@ export async function detect() {
     const feed = liveFeedOk(panesByTf, instrument);
     if (!feed.ok) {
       log.throttled(`feed-${instrument}`, 300000, () =>
-        log.warn('skipping strategy eval — not real-time TV data', { instrument, reason: feed.reason }));
+        log.warn('skipping strategy eval — feed not real-time', { instrument, reason: feed.reason }));
       continue;
     }
     const ctx = buildInstrumentCtx(instrument, panesByTf);
