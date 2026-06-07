@@ -107,8 +107,12 @@ function dataAgeSec(panesByTf, instrument) {
 function liveFeedOk(panesByTf, instrument) {
   const src = panesByTf.get(`${instrument}|15`)?.source || '';
   const tvOnly = getFeedMode() !== 'auto';
-  if (tvOnly && !src.startsWith('tradingview')) {
-    return { ok: false, reason: `not TV-sourced (${src || 'none'}) — feed=tv-only` };
+  // Real-time sources: the TV bridge (exact futures print) OR OANDA (free 24/5
+  // CFD shifted to synthetic futures by the basis). Delayed Yahoo is NOT accepted
+  // in tv-only mode, so we never trade on a 15-min-delayed feed.
+  const realtime = src.startsWith('tradingview') || src.startsWith('oanda');
+  if (tvOnly && !realtime) {
+    return { ok: false, reason: `not real-time (${src || 'none'}) — feed=tv-only` };
   }
   if (!src) return { ok: false, reason: 'no data' };
   const age = dataAgeSec(panesByTf, instrument);

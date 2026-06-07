@@ -24,6 +24,11 @@ import { beat as heartbeat } from './heartbeat.js';
 // seeing 429s, bump back to 30-60s via OCTAVE_DATA_TTL_MS env var.
 const TTL_MS = parseInt(process.env.OCTAVE_DATA_TTL_MS || '', 10) || 15 * 1000;
 
+// How much OANDA history the live override pulls for the micros' 5m/15m panes.
+// 10d is ample for 15m EMA/ATR and fits a single OANDA page (no pagination →
+// fewer calls). 60m/1D are synthesized from these + Yahoo's deep futures history.
+const OANDA_LIVE_DAYS = 10;
+
 // Three primary instruments at the execution + HTF timeframes the strategies
 // need; silver / dxy are cross-asset add-ons (SMT divergence, macro bias).
 const NEEDED_REQUESTS = [
@@ -125,6 +130,54 @@ export async function fetchAllPanes() {
           console.error('[cloud-data] tradingview overlay failed:', err?.message || err);
         }
       }
+
+      // OANDA real-time override — the FREE 24/5 feed. OANDA's gold/index CFDs
+      // are spot, sitting a futures-vs-spot basis below the contract. We measure
+      // that basis (median over overlapping 15m closes vs Yahoo's futures) and
+      // ADD it to every OANDA bar, yielding SYNTHETIC FUTURES bars. Strategies
+      // then detect on — and produce entry/stop/target levels in — futures terms,
+      // so an entry reads what the MNQ/MES/MGC contract would show, not the CFD.
+      // Only overrides the micros' 5m/15m (60m/1D are synthesized from these
+      // below). On any failure the pane stays Yahoo and the real-time gate keeps
+      // that instrument silent — never trades on a guessed/absent basis.
+      if (oandaConfigured()) {
+        try {
+          const micros = ['gold', 'nasdaq', 'sp'];
+          const oReqs = NEEDED_REQUESTS.filter(([a, tf]) => micros.includes(a) && (tf === '5' || tf === '15'));
+          const oPanes = await fetchOanda(oReqs, { targetDays: OANDA_LIVE_DAYS }).catch(() => new Map());
+          for (const inst of micros) {
+            // Don't clobber the exact real-time TV print if the bridge is alive.
+            if ((panes.get(`${inst}|15`)?.source || '').startsWith('tradingview')) continue;
+            const spot15 = oPanes.get(`${inst}|15`);
+            if (!spot15?.bars?.length) continue;
+            // Basis from Yahoo futures (pre-override) ∩ OANDA spot on matching 15m bars.
+            let basis = measureBasis(panes.get(`${inst}|15`)?.bars, spot15.bars);
+            if (basis == null) basis = lastBasis[inst];   // reuse last good if no overlap this tick
+            if (basis == null) continue;                  // can't convert → leave on Yahoo (gated)
+            // Sanity: reject an absurd basis (bad overlap) — cap at 2% of price.
+            const ref = spot15.bars[spot15.bars.length - 1].close;
+            if (Math.abs(basis) > Math.abs(ref) * 0.02) continue;
+            lastBasis[inst] = basis;
+            for (const tf of ['5', '15']) {
+              const op = oPanes.get(`${inst}|${tf}`);
+              if (!op?.bars?.length) continue;
+              const shifted = op.bars.map((b) => ({
+                time: b.time,
+                open: b.open + basis, high: b.high + basis,
+                low: b.low + basis, close: b.close + basis,
+                volume: b.volume,
+              }));
+              panes.set(`${inst}|${tf}`, {
+                symbol: op.symbol, resolution: tf, bars: shifted,
+                source: 'oanda+basis', barCount: shifted.length, basis,
+              });
+            }
+          }
+        } catch (err) {
+          console.error('[cloud-data] oanda override failed:', err?.message || err);
+        }
+      }
+
       // Synthesize stale higher-TF bars from the freshest lower-TF source.
       // Yahoo's micro-futures feed lags 15m/60m/1D into the Sunday Asian open
       // (sometimes by 50+ hours). 1m/5m stay fresh — aggregate those into the
@@ -290,6 +343,19 @@ function median(nums) {
   const s = [...nums].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// Futures-vs-spot basis = median(futClose − spotClose) over the last ~20
+// overlapping 15m bars. Null if no overlap (caller reuses lastBasis).
+function measureBasis(futBars, spotBars) {
+  if (!futBars?.length || !spotBars?.length) return null;
+  const spotByTime = new Map(spotBars.map((b) => [b.time, b.close]));
+  const diffs = [];
+  for (const b of futBars.slice(-20)) {
+    const s = spotByTime.get(b.time);
+    if (s != null) diffs.push(b.close - s);
+  }
+  return diffs.length ? median(diffs) : null;
 }
 
 async function fetchYahooQuote(yh) {
