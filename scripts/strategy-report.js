@@ -20,10 +20,7 @@ const MAX_TRADES_PER_DAY = 4.0;
 (async () => {
   const reg = await loadRegistry();
   const ids = reg.map((s) => s.id);
-  console.log(`\nBacktesting ${ids.length} strategies over ${days} days…\n`);
 
-  // step:3 samples the 5m anchor every 15m — strategies fire on 15m+ panes,
-  // so this loses no signal while running 3× faster.
   // confMin: 0 — report measures RAW strategy edge over every setup it produces.
   // Live runtime gates via the Holy AI engine + aiEngine.threshold, not this
   // pre-filter. Filtering on confidence here would be circular: confidence is
@@ -32,15 +29,33 @@ const MAX_TRADES_PER_DAY = 4.0;
   // CONF_MIN env simulates the live confidence gate (aiEngine.threshold) so we
   // can measure book winrate/profit at different gate levels. Default 0 = raw.
   const confMin = Number(process.env.CONF_MIN) || 0;
-  const res = await runBacktest({ days, strategies: ids, confMin, step: 3 });
-  if (res.error) {
-    console.error('Backtest error:', res.error);
-    process.exit(1);
+
+  // Step depends on the anchor timeframe:
+  //   - 15m+ strategies are signal-identical at step:3 (samples the 5m anchor
+  //     every 15m → 3× faster, loses no signal).
+  //   - 5m-anchored strategies (the ORB family: Pure Hunt / Safe Flow / Akimbo)
+  //     MUST be walked at step:1 — a coarser step skips the exact breakout/
+  //     crossover bar, so the entry never registers and they under-count to ~0.
+  // Run the two groups separately and merge their stats.
+  const fineIds = reg.filter((s) => (s.timeframes || []).includes('5')).map((s) => s.id);
+  const coarseIds = reg.filter((s) => !(s.timeframes || []).includes('5')).map((s) => s.id);
+  console.log(`\nBacktesting ${ids.length} strategies over ${days} days (fine=${fineIds.length}@step1 · coarse=${coarseIds.length}@step3)…\n`);
+
+  const stats = {};
+  if (coarseIds.length) {
+    const r = await runBacktest({ days, strategies: coarseIds, confMin, step: 3 });
+    if (r.error) { console.error('Backtest error (coarse):', r.error); process.exit(1); }
+    Object.assign(stats, r.stats);
+  }
+  if (fineIds.length) {
+    const r = await runBacktest({ days, strategies: fineIds, confMin, step: 1 });
+    if (r.error) { console.error('Backtest error (fine):', r.error); process.exit(1); }
+    Object.assign(stats, r.stats);
   }
 
   const rows = [];
   for (const id of ids) {
-    const s = res.stats[id];
+    const s = stats[id];
     if (!s) { rows.push({ id, trades: 0, status: 'NO-DATA' }); continue; }
     const tradesPerDay = s.tradeCount / days;
     const winRate = s.winRate;
@@ -85,5 +100,22 @@ const MAX_TRADES_PER_DAY = 4.0;
   const fs = await import('node:fs');
   const statsOut = { generatedAt: Date.now(), days, rows };
   fs.writeFileSync(new URL('../src/state/backtest-stats.json', import.meta.url), JSON.stringify(statsOut, null, 2));
+
+  // Also refresh the confidence-model win-rate cache so a freshly-added
+  // strategy's signals are scored on its REAL backtested win rate (not the 0.62
+  // fallback, which can leave a high-win strategy stuck below the mode gate).
+  // Only publish strategies with a meaningful sample (≥20 trades), matching
+  // run-backtest-child's threshold.
+  try {
+    const cacheUrl = new URL('../src/state/backtest-cache.json', import.meta.url);
+    let cache = {};
+    try { cache = JSON.parse(fs.readFileSync(cacheUrl, 'utf8')); } catch { /* no cache yet */ }
+    const winRates = { ...(cache.winRates || {}) };
+    for (const r of rows) {
+      if (r.trades >= 20 && typeof r.winRate === 'number') winRates[r.id] = Math.round(r.winRate * 1000) / 1000;
+    }
+    fs.writeFileSync(cacheUrl, JSON.stringify({ ...cache, winRates, statsGeneratedAt: Date.now(), statsDays: days }, null, 2));
+  } catch (e) { console.error('winRate cache update failed:', e.message); }
+
   console.log('JSON:' + JSON.stringify(rows));
 })().catch((e) => { console.error('FATAL:', e.message, e.stack); process.exit(1); });
