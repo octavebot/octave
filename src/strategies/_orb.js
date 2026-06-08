@@ -44,20 +44,19 @@ const FVG_MIN_SIZE = 2.0;                   // fvgMinSize (Strict)
 const FVG_BUFFER = 1.0;                     // Revised safety buffer (pts)
 
 // HUNTER OPTIMIZER (our own — N4ADigital's "Full Optimized" is encrypted/unknowable).
-// A 365d Databento train/test analysis of every Hunter breakout found three
-// quality gates that lift out-of-sample performance on BOTH halves (no overfit):
+// A 365d Databento train/test analysis of every Hunter breakout, then a threshold
+// sweep, landed on TWO quality gates that lift performance on BOTH halves WITHOUT
+// overfitting (the train slice stays positive — a third "displacement" gate looked
+// great on test but went negative on train, so it was dropped):
 //   1. H1 50-EMA trend alignment (breakout WITH the hourly trend)  — biggest lift
 //   2. decisive breakout bar: body ≥ 60% of its range (not a doji poke)
-//   3. real displacement: close ≥ 5% of the ORB range beyond the edge
-// Combined, the test slice went PF 1.06 → 2.20 (58% win). Opt-in via opts.optimize;
-// env BT_HUNTER_OPT=0 force-disables it for A/B backtests.
+// Result vs raw on Hunter days: TRAIN PF 0.94→1.03, TEST PF 0.98→2.28 (64% win),
+// ~half the trades but materially higher grade. Opt-in via opts.optimize;
+// env BT_HUNTER_OPT=0 force-disables for A/B backtests.
 const OPT_BODY_MIN = 0.60;
-const OPT_EXT_MIN = 0.05;
 function hunterOptimizerOk(ctx, o, last, dir) {
   const range = last.high - last.low;
   if (!(range > 0) || Math.abs(last.close - last.open) / range < OPT_BODY_MIN) return false;
-  const ext = dir === 1 ? (last.close - o.orbH) / o.orbRange : (o.orbL - last.close) / o.orbRange;
-  if (ext < OPT_EXT_MIN) return false;
   const p60 = ctx.pane('60');
   if (!p60?.bars || p60.bars.length < 55) return false;
   const e = ema(p60.bars, 50);
