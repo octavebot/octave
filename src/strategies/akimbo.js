@@ -21,7 +21,7 @@ export const meta = {
   name: 'Akimbo · ORB Dual-Leg',
   concept: 'Opening-range engine: Hunter breakout Mon/Wed/Fri, Conservative retest Tue/Thu',
   window: 'NY open · 09:45 ET · Mon–Fri (style by day)',
-  timeframes: ['5'],
+  timeframes: ['5', '60'],
   instruments: ['nasdaq'],
   defaultEnabled: true,
 };
@@ -44,7 +44,7 @@ export function evaluate(ctx) {
   const wd = weekdayOf(ctx);
   let sigs = [];
   if (HUNTER_DAYS.includes(wd)) {
-    sigs = hunterSignal(ctx, meta.id, { winStart: HUNT_START, winEnd: HUNT_END });
+    sigs = hunterSignal(ctx, meta.id, { winStart: HUNT_START, winEnd: HUNT_END, optimize: true });
     for (const r of sigs) r.confirmations = ['Opening range 09:30–09:45', 'Hunter day (M/W/F)', 'Close beyond range'];
   } else if (CONS_DAYS.includes(wd)) {
     sigs = conservativeSignal(ctx, meta.id, { winStart: CONS_START, winEnd: CONS_END });

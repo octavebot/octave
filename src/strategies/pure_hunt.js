@@ -18,7 +18,7 @@ export const meta = {
   name: 'Pure Hunt · ORB Breakout',
   concept: 'Aggressive opening-range breakout (Hunter) on the first 5m close beyond the range',
   window: 'NY open · 09:45–11:00 ET · Mon/Wed/Thu/Fri',
-  timeframes: ['5'],
+  timeframes: ['5', '60'],
   instruments: ['nasdaq'],
   defaultEnabled: true,
 };
@@ -48,7 +48,7 @@ export function evaluate(ctx) {
   if (ctx.instrument !== 'nasdaq') return [];
   const np = ctx.dateKey ? weekdayOf(ctx) : null;
   if (np && !DAYS.includes(np)) return [];
-  const sigs = hunterSignal(ctx, meta.id, { winStart: WIN_START, winEnd: WIN_END });
+  const sigs = hunterSignal(ctx, meta.id, { winStart: WIN_START, winEnd: WIN_END, optimize: true });
   for (const r of sigs) r.confirmations = ['Opening range 09:30–09:45', 'Decisive 5m close beyond range', 'Hunter momentum entry'];
   return sigs;
 }
