@@ -39,10 +39,24 @@ function rpad(s, n) { return String(s).padStart(n); }
 (async () => {
   const reg = await loadRegistry();
   const ids = onlyId ? [onlyId] : reg.map((s) => s.id);
+  // 5m-anchored strategies (ORB family) must walk at step:1 — step:3 skips the
+  // breakout bar and under-counts them to ~0. 15m+ are identical at step:3.
+  const tfOf = (id) => (reg.find((s) => s.id === id)?.timeframes) || [];
+  const fineIds = ids.filter((id) => tfOf(id).includes('5'));
+  const coarseIds = ids.filter((id) => !tfOf(id).includes('5'));
 
-  console.log(`\nRunning backtest (${DAYS} days)…`);
-  const res = await runBacktest({ days: DAYS, strategies: ids, confMin: 0, step: 3 });
-  const w = res.window;
+  console.log(`\nRunning backtest (${DAYS} days · fine=${fineIds.length}@step1 · coarse=${coarseIds.length}@step3)…`);
+  const stats = {};
+  let w = null;
+  if (coarseIds.length) {
+    const r = await runBacktest({ days: DAYS, strategies: coarseIds, confMin: 0, step: 3 });
+    Object.assign(stats, r.stats); w = w || r.window;
+  }
+  if (fineIds.length) {
+    const r = await runBacktest({ days: DAYS, strategies: fineIds, confMin: 0, step: 1 });
+    Object.assign(stats, r.stats); w = w || r.window;
+  }
+  const res = { stats, window: w };
   const totalDays = (w.toUnix - w.fromUnix) / 86400;
   // Split at the 2/3 point — first 2y train, last 1y test
   const splitUnix = w.fromUnix + (w.toUnix - w.fromUnix) * (2 / 3);

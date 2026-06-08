@@ -44,6 +44,20 @@ const FVG_BUFFER = 1.0;                     // Revised safety buffer (pts)
 
 const c01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
+// N4ADigital ORB management is FIXED-target: 50% partial at the trigger R, the
+// rest to a fixed T2 — explicitly NOT trailed ("Don't add Break-Even, Trail
+// Stop... they hurt this configuration" — N4A.ORB v27.4 cookbook). The Octave
+// QUALITY mode otherwise forces a trailing runner on every signal, which a
+// 185d Databento walk confirms HURTS the breakout legs (Pure Hunt +12R→+3R,
+// Akimbo +12R→+3R, max-DD 4.7R→11.5R). So every ORB signal opts OUT of the mode
+// trail and keeps the validated fixed 0.7R/50% + 2R (Hunter) / SD1.0 (Cons) /
+// 1R/50% + 2R (FVG) profile that follow_up's non-trailing path applies.
+function orbTriggered(args) {
+  const r = buildTriggered(args);
+  if (r?.entryPlan) r.entryPlan.trail = null;
+  return r;
+}
+
 /**
  * Build today's opening range from the 5m pane.
  * `post` is the chronological list of post-ORB 5m bars (open ≥ 09:45).
@@ -107,7 +121,7 @@ export function hunterSignal(ctx, metaId, opts) {
   const out = [];
   if (isCrossUp(o.post, i, o.orbH)) {
     const entry = last.close, stop = o.orbL;
-    if (entry - stop > 0) out.push(buildTriggered({
+    if (entry - stop > 0) out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'LONG', 'orb-hunter'),
       direction: 'LONG', timeframe: '5',
       confidence: qualityConfidence(metaId, [c01((entry - o.orbH) / o.a5), c01(o.orbRange / (2 * o.a5))]),
@@ -117,7 +131,7 @@ export function hunterSignal(ctx, metaId, opts) {
     }));
   } else if (isCrossDn(o.post, i, o.orbL)) {
     const entry = last.close, stop = o.orbH;
-    if (stop - entry > 0) out.push(buildTriggered({
+    if (stop - entry > 0) out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'SHORT', 'orb-hunter'),
       direction: 'SHORT', timeframe: '5',
       confidence: qualityConfidence(metaId, [c01((o.orbL - entry) / o.a5), c01(o.orbRange / (2 * o.a5))]),
@@ -149,7 +163,7 @@ export function conservativeSignal(ctx, metaId, opts) {
   }
   if (armedLong && last.low <= o.orbH && last.close > o.orbL) {
     const entry = o.orbH, stop = o.orbL;       // SD1.0 = orbH + orbRange (100% exit)
-    out.push(buildTriggered({
+    out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'LONG', 'orb-cons'),
       direction: 'LONG', timeframe: '5',
       confidence: qualityConfidence(metaId, [0.5, c01(o.orbRange / (2 * o.a5))]),
@@ -159,7 +173,7 @@ export function conservativeSignal(ctx, metaId, opts) {
     }));
   } else if (armedShort && last.high >= o.orbL && last.close < o.orbH) {
     const entry = o.orbL, stop = o.orbH;
-    out.push(buildTriggered({
+    out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'SHORT', 'orb-cons'),
       direction: 'SHORT', timeframe: '5',
       confidence: qualityConfidence(metaId, [0.5, c01(o.orbRange / (2 * o.a5))]),
@@ -202,7 +216,7 @@ export function fvgSignal(ctx, metaId, opts) {
   const out = [];
   if (pick.side === 'bullish' && last.low <= pick.top && last.low >= pick.bottom - FVG_BUFFER) {
     const entry = pick.top, stop = pick.bottom - FVG_BUFFER;
-    if (entry - stop > 0) out.push(buildTriggered({
+    if (entry - stop > 0) out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'LONG', `orb-fvg-${pick.time}`),
       direction: 'LONG', timeframe: '5',
       confidence: qualityConfidence(metaId, [c01((pick.top - pick.bottom) / o.a5), 0.55]),
@@ -212,7 +226,7 @@ export function fvgSignal(ctx, metaId, opts) {
     }));
   } else if (pick.side === 'bearish' && last.high >= pick.bottom && last.high <= pick.top + FVG_BUFFER) {
     const entry = pick.bottom, stop = pick.top + FVG_BUFFER;
-    if (stop - entry > 0) out.push(buildTriggered({
+    if (stop - entry > 0) out.push(orbTriggered({
       strategy: metaId, setupId: dayScopedId(metaId, ctx.dateKey, 'SHORT', `orb-fvg-${pick.time}`),
       direction: 'SHORT', timeframe: '5',
       confidence: qualityConfidence(metaId, [c01((pick.top - pick.bottom) / o.a5), 0.55]),
