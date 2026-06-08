@@ -96,7 +96,16 @@ export async function fetchAllPanes() {
           const oReqs = NEEDED_REQUESTS.filter(([a, tf]) => micros.includes(a) && (tf === '5' || tf === '15'));
           const oPanes = await fetchOanda(oReqs, { targetDays: OANDA_LIVE_DAYS }).catch(() => new Map());
           for (const inst of micros) {
-            const spot15 = oPanes.get(`${inst}|15`);
+            // Current OANDA spot for this inst+tf, falling back to the last-good
+            // pane on a transient miss (so a real-time execution pane never
+            // silently reverts to delayed Yahoo). Caches every fresh success.
+            const spotFor = (tf) => {
+              const k = `${inst}|${tf}`;
+              const cur = oPanes.get(k);
+              if (cur?.bars?.length) { lastOandaSpot[k] = cur; return cur; }
+              return lastOandaSpot[k] || null;
+            };
+            const spot15 = spotFor('15');
             if (!spot15?.bars?.length) continue;
             // Basis from Yahoo futures (pre-override) ∩ OANDA spot on matching 15m bars.
             let basis = measureBasis(panes.get(`${inst}|15`)?.bars, spot15.bars);
@@ -107,7 +116,7 @@ export async function fetchAllPanes() {
             if (Math.abs(basis) > Math.abs(ref) * 0.02) continue;
             lastBasis[inst] = basis;
             for (const tf of ['5', '15']) {
-              const op = oPanes.get(`${inst}|${tf}`);
+              const op = spotFor(tf);
               if (!op?.bars?.length) continue;
               const shifted = op.bars.map((b) => ({
                 time: b.time,
@@ -248,6 +257,12 @@ const FUTURES_FRESH_MS = 25 * 60 * 1000;
 // Last good basis per instrument — reused if a transient Yahoo failure means we
 // can't measure it this call, so the estimate stays accurate instead of blanking.
 const lastBasis = {};
+// Last good OANDA spot pane per `${inst}|${tf}` — reused if a transient OANDA
+// miss would otherwise drop a real-time execution pane (5m/15m) back to delayed
+// Yahoo. A pane one cycle old is still real-time-SOURCED and fresh; the staleness
+// gate catches it if OANDA stays down. Critical for the 5m-anchored ORB
+// strategies, whose trigger bar must not flap onto the ~15-min-delayed feed.
+const lastOandaSpot = {};
 // Last known prior-session close per instrument (from Yahoo's chartPreviousClose
 // when we last fetched it on the stale path). Lets the TV-fresh fast path report
 // an accurate "change since prior settle" without a Yahoo round-trip.
